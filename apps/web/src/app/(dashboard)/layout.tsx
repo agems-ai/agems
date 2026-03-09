@@ -25,6 +25,7 @@ import {
   ChevronsUpDown,
   Plus,
   Check,
+  BookOpen,
 } from 'lucide-react';
 
 const navItems = [
@@ -41,6 +42,7 @@ const navItems = [
   { href: '/skills', label: 'Skills', icon: Sparkles },
   { href: '/n8n', label: 'N8N', icon: Workflow },
   { href: '/security', label: 'Audit', icon: ShieldCheck },
+  { href: '/docs', label: 'Docs', icon: BookOpen },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
