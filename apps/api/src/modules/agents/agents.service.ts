@@ -149,6 +149,13 @@ export class AgentsService {
     return agent;
   }
 
+  async unarchive(id: string, userId: string, orgId?: string) {
+    await this.findOne(id, orgId);
+    const agent = await this.prisma.agent.update({ where: { id }, data: { status: 'PAUSED' } });
+    this.events.emit('agent.status-changed', { id, status: 'PAUSED' });
+    return agent;
+  }
+
   async getMetrics(id: string) {
     return this.prisma.agentMetric.findMany({ where: { agentId: id }, orderBy: { periodEnd: 'desc' }, take: 100 });
   }

@@ -104,7 +104,19 @@ export default function AgentsPage() {
                 >
                   <MessageSquare size={14} strokeWidth={1.5} />
                 </button>
-                {agent.status !== 'ARCHIVED' && (
+                {agent.status === 'ARCHIVED' ? (
+                  <button
+                    onClick={async (e) => {
+                      e.preventDefault(); e.stopPropagation();
+                      await api.unarchiveAgent(agent.id);
+                      loadAgents();
+                    }}
+                    className="px-2 py-0.5 text-xs bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 transition-colors"
+                    title="Restore"
+                  >
+                    Restore
+                  </button>
+                ) : (
                   <button
                     onClick={async (e) => {
                       e.preventDefault(); e.stopPropagation();

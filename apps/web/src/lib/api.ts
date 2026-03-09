@@ -600,6 +600,10 @@ class ApiClient {
     return this.fetch<any>(`/agents/${agentId}`, { method: 'DELETE' });
   }
 
+  unarchiveAgent(agentId: string) {
+    return this.fetch<any>(`/agents/${agentId}/unarchive`, { method: 'POST' });
+  }
+
   getAgentMetrics(agentId: string) {
     return this.fetch<any>(`/agents/${agentId}/metrics`);
   }

@@ -52,6 +52,12 @@ export class AgentsController {
     return this.agentsService.archive(id, req.user.id, req.user.orgId);
   }
 
+  @Post(':id/unarchive')
+  @Roles('ADMIN')
+  unarchive(@Param('id') id: string, @Request() req: { user: RequestUser }) {
+    return this.agentsService.unarchive(id, req.user.id, req.user.orgId);
+  }
+
   @Get(':id/metrics')
   getMetrics(@Param('id') id: string) {
     return this.agentsService.getMetrics(id);

@@ -245,6 +245,13 @@ export default function AgentDetailPage() {
     setArchiving(false);
   };
 
+  const handleUnarchive = async () => {
+    try {
+      const updated = await api.unarchiveAgent(agent.id);
+      setAgent(updated);
+    } catch { /* noop */ }
+  };
+
   const handleDelegate = async () => {
     setDelegating(true);
     try {
@@ -344,13 +351,23 @@ export default function AgentDetailPage() {
                   <Send size={16} strokeWidth={1.5} />
                 </button>
               )}
-              <button
-                onClick={() => setShowArchiveConfirm(true)}
-                className="p-2 rounded-lg hover:bg-red-500/10 text-[var(--muted)] hover:text-red-400 transition-colors"
-                title="Archive Agent"
-              >
-                <Archive size={16} strokeWidth={1.5} />
-              </button>
+              {agent.status === 'ARCHIVED' ? (
+                <button
+                  onClick={handleUnarchive}
+                  className="px-3 py-1 text-xs bg-green-500/20 text-green-400 rounded-lg hover:bg-green-500/30 transition-colors"
+                  title="Restore Agent"
+                >
+                  Restore
+                </button>
+              ) : (
+                <button
+                  onClick={() => setShowArchiveConfirm(true)}
+                  className="p-2 rounded-lg hover:bg-red-500/10 text-[var(--muted)] hover:text-red-400 transition-colors"
+                  title="Archive Agent"
+                >
+                  <Archive size={16} strokeWidth={1.5} />
+                </button>
+              )}
               <button
                 onClick={openEdit}
                 className="px-3 py-1 text-xs bg-[var(--accent)]/20 text-[var(--accent)] rounded-lg hover:bg-[var(--accent)]/30 transition-colors"
