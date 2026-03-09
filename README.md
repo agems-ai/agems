@@ -35,42 +35,55 @@ AGEMS is an open-source platform for creating, managing, and orchestrating AI ag
 
 ### Prerequisites
 
-- Node.js >= 20
-- PostgreSQL 16+ (with pgvector extension)
-- Redis 7+
-- pnpm 10+
+- [Node.js](https://nodejs.org/) >= 20
+- [pnpm](https://pnpm.io/) >= 10
+- [Docker](https://www.docker.com/) (for PostgreSQL and Redis)
 
-### Installation
+### Option 1: Local Development (recommended)
+
+This runs PostgreSQL and Redis in Docker, and the app locally for hot-reload.
 
 ```bash
-# Clone the repository
+# 1. Clone and install
 git clone https://github.com/agems-ai/agems.git
 cd agems
-
-# Install dependencies
 pnpm install
 
-# Configure environment
+# 2. Configure environment
 cp .env.example .env
-# Edit .env with your database URL and API keys
+# Edit .env — add at least one AI provider API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_AI_API_KEY)
 
-# Set up database
+# 3. Start PostgreSQL and Redis
+docker compose up -d postgres redis
+
+# 4. Set up database
 pnpm db:generate
 pnpm db:push
 
-# Start development servers
+# 5. Start development servers
 pnpm dev
 ```
 
-The API will be available at `http://localhost:3001` and the web interface at `http://localhost:3000`.
+Open http://localhost:3000 — register a new account and start building agents.
 
-### Docker
+> **Note:** `pnpm db:generate` creates the Prisma client. You only need to run it once (or after changing the schema).
+
+### Option 2: Full Docker
+
+Runs everything in containers — no Node.js required on the host.
 
 ```bash
+git clone https://github.com/agems-ai/agems.git
+cd agems
+cp .env.example .env
+# Edit .env — add at least one AI provider API key
+
 docker compose up -d
 ```
 
-This starts PostgreSQL, Redis, the API server, and the web frontend.
+This starts PostgreSQL, Redis, the API server (port 3001), and the web frontend (port 3000).
+
+Open http://localhost:3000 to get started.
 
 ## Architecture
 
@@ -119,11 +132,13 @@ See [CLAUDE.md](./CLAUDE.md) for detailed architecture documentation, convention
 | `DATABASE_URL` | PostgreSQL connection string | Yes |
 | `REDIS_URL` | Redis connection string | Yes |
 | `JWT_SECRET` | Secret for JWT signing | Yes |
-| `ANTHROPIC_API_KEY` | Anthropic API key | No |
-| `OPENAI_API_KEY` | OpenAI API key | No |
-| `GOOGLE_AI_API_KEY` | Google AI API key | No |
+| `ANTHROPIC_API_KEY` | Anthropic API key | At least one* |
+| `OPENAI_API_KEY` | OpenAI API key | At least one* |
+| `GOOGLE_AI_API_KEY` | Google AI API key | At least one* |
 | `API_PORT` | API server port (default: 3001) | No |
 | `WEB_PORT` | Web server port (default: 3000) | No |
+
+\* At least one AI provider API key is required for agents to work.
 
 ## Contributing
 
