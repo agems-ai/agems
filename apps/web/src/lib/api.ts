@@ -57,10 +57,10 @@ class ApiClient {
   }
 
   // Auth
-  register(email: string, password: string, name: string, orgName?: string, inviteCode?: string) {
+  register(email: string, password: string, name: string, orgName?: string) {
     return this.fetch<{ user: any; org: any; token: string }>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ email, password, name, orgName, inviteCode }),
+      body: JSON.stringify({ email, password, name, orgName }),
     });
   }
 

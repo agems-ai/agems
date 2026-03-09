@@ -10,7 +10,7 @@ export default function LoginPage() {
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [form, setForm] = useState({ email: '', password: '', name: '', orgName: '', inviteCode: '' });
+  const [form, setForm] = useState({ email: '', password: '', name: '', orgName: '' });
 
   // Org picker state
   const [orgPicker, setOrgPicker] = useState(false);
@@ -23,7 +23,7 @@ export default function LoginPage() {
     try {
       let res: any;
       if (mode === 'register') {
-        res = await api.register(form.email, form.password, form.name, form.orgName || undefined, form.inviteCode || undefined);
+        res = await api.register(form.email, form.password, form.name, form.orgName || undefined);
       } else {
         res = await api.login(form.email, form.password);
       }
@@ -156,17 +156,6 @@ export default function LoginPage() {
                     onChange={e => setForm(f => ({ ...f, orgName: e.target.value }))}
                     className="w-full px-3 py-2 bg-[var(--background)] border border-[var(--border)] rounded-lg text-white text-sm outline-none focus:border-[var(--accent)]"
                     placeholder="Company name (optional)"
-                  />
-                </div>
-                <div>
-                  <label className="text-sm text-[var(--muted)] block mb-1">Invite Code</label>
-                  <input
-                    type="text"
-                    value={form.inviteCode}
-                    onChange={e => setForm(f => ({ ...f, inviteCode: e.target.value }))}
-                    required
-                    className="w-full px-3 py-2 bg-[var(--background)] border border-[var(--border)] rounded-lg text-white text-sm outline-none focus:border-[var(--accent)]"
-                    placeholder="Enter invite code"
                   />
                 </div>
               </>
