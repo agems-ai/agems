@@ -10,6 +10,13 @@ const CLONE_ENTITIES = [
   { key: 'tools', label: 'Tools', desc: 'API integrations & tools' },
   { key: 'skills', label: 'Skills', desc: 'Agent skills & prompts' },
   { key: 'agents', label: 'Agents', desc: 'AI agents with tool/skill assignments' },
+  { key: 'channels', label: 'Channels', desc: 'Direct & group channels with participants' },
+  { key: 'messages', label: 'Messages', desc: 'Channel message history' },
+  { key: 'tasks', label: 'Tasks', desc: 'Tasks with comments & subtasks' },
+  { key: 'meetings', label: 'Meetings', desc: 'Meetings with entries & decisions' },
+  { key: 'approvals', label: 'Approvals', desc: 'Approval policies per agent' },
+  { key: 'files', label: 'Files', desc: 'Uploaded files & folder structure' },
+  { key: 'executions', label: 'Agent History', desc: 'Agent execution logs' },
   { key: 'employees', label: 'Employees', desc: 'Team members' },
   { key: 'company', label: 'Company Structure', desc: 'Org chart & positions' },
 ];

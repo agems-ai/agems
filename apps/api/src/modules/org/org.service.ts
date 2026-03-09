@@ -225,6 +225,241 @@ export class OrgService {
       this.logger.log(`Cloned ${members.length} members`);
     }
 
+    // Clone channels (with participants)
+    if (entities.includes('channels')) {
+      const channels = await this.prisma.channel.findMany({
+        where: { orgId: fromOrgId },
+        include: { participants: true },
+      });
+      for (const ch of channels) {
+        const newChannel = await this.prisma.channel.create({
+          data: {
+            orgId: toOrgId, name: ch.name, type: ch.type,
+            metadata: ch.metadata as any,
+          },
+        });
+        idMap.set(ch.id, newChannel.id);
+        for (const p of ch.participants) {
+          const mappedId = p.participantType === 'AGENT' ? (idMap.get(p.participantId) || p.participantId) : p.participantId;
+          await this.prisma.channelParticipant.create({
+            data: {
+              channelId: newChannel.id,
+              participantType: p.participantType,
+              participantId: mappedId,
+              role: p.role,
+            },
+          });
+        }
+      }
+      this.logger.log(`Cloned ${channels.length} channels`);
+    }
+
+    // Clone messages
+    if (entities.includes('messages')) {
+      const channels = await this.prisma.channel.findMany({ where: { orgId: fromOrgId }, select: { id: true } });
+      let msgCount = 0;
+      for (const ch of channels) {
+        const newChannelId = idMap.get(ch.id);
+        if (!newChannelId) continue;
+        const messages = await this.prisma.message.findMany({
+          where: { channelId: ch.id },
+          orderBy: { createdAt: 'asc' },
+        });
+        for (const m of messages) {
+          const senderId = m.senderType === 'AGENT' ? (idMap.get(m.senderId) || m.senderId) : m.senderId;
+          await this.prisma.message.create({
+            data: {
+              channelId: newChannelId, senderType: m.senderType, senderId,
+              content: m.content, contentType: m.contentType,
+              metadata: m.metadata as any, createdAt: m.createdAt,
+            },
+          });
+          msgCount++;
+        }
+      }
+      this.logger.log(`Cloned ${msgCount} messages`);
+    }
+
+    // Clone tasks (with comments, preserving parent-child)
+    if (entities.includes('tasks')) {
+      const tasks = await this.prisma.task.findMany({
+        where: { orgId: fromOrgId },
+        include: { comments: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      // First pass: create all tasks without parents
+      for (const t of tasks) {
+        const assigneeId = t.assigneeType === 'AGENT' ? (idMap.get(t.assigneeId) || t.assigneeId) : t.assigneeId;
+        const creatorId = t.creatorType === 'AGENT' ? (idMap.get(t.creatorId) || t.creatorId) : t.creatorId;
+        const newTask = await this.prisma.task.create({
+          data: {
+            orgId: toOrgId, title: t.title, description: t.description,
+            status: t.status, priority: t.priority, type: t.type,
+            cronExpression: t.cronExpression,
+            creatorType: t.creatorType, creatorId,
+            assigneeType: t.assigneeType, assigneeId,
+            result: t.result as any, deadline: t.deadline,
+            completedAt: t.completedAt, metadata: t.metadata as any,
+          },
+        });
+        idMap.set(t.id, newTask.id);
+        // Clone comments
+        for (const c of t.comments) {
+          const authorId = c.authorType === 'AGENT' ? (idMap.get(c.authorId) || c.authorId) : c.authorId;
+          await this.prisma.taskComment.create({
+            data: {
+              taskId: newTask.id, authorType: c.authorType, authorId,
+              content: c.content, metadata: c.metadata as any,
+            },
+          });
+        }
+      }
+      // Second pass: set parent tasks
+      for (const t of tasks) {
+        if (t.parentTaskId && idMap.has(t.parentTaskId)) {
+          await this.prisma.task.update({
+            where: { id: idMap.get(t.id)! },
+            data: { parentTaskId: idMap.get(t.parentTaskId) },
+          });
+        }
+      }
+      this.logger.log(`Cloned ${tasks.length} tasks`);
+    }
+
+    // Clone meetings (with participants, entries, decisions, task links)
+    if (entities.includes('meetings')) {
+      const meetings = await this.prisma.meeting.findMany({
+        where: { orgId: fromOrgId },
+        include: { participants: true, entries: true, decisions: true, tasks: true },
+      });
+      for (const m of meetings) {
+        const creatorId = m.creatorType === 'AGENT' ? (idMap.get(m.creatorId) || m.creatorId) : m.creatorId;
+        const newMeeting = await this.prisma.meeting.create({
+          data: {
+            orgId: toOrgId, title: m.title, agenda: m.agenda,
+            status: m.status, scheduledAt: m.scheduledAt,
+            startedAt: m.startedAt, endedAt: m.endedAt,
+            creatorType: m.creatorType, creatorId,
+            summary: m.summary,
+          },
+        });
+        for (const p of m.participants) {
+          const pid = p.participantType === 'AGENT' ? (idMap.get(p.participantId) || p.participantId) : p.participantId;
+          await this.prisma.meetingParticipant.create({
+            data: { meetingId: newMeeting.id, participantType: p.participantType, participantId: pid, role: p.role },
+          });
+        }
+        for (const e of m.entries) {
+          const speakerId = e.speakerType === 'AGENT' ? (idMap.get(e.speakerId) || e.speakerId) : e.speakerId;
+          await this.prisma.meetingEntry.create({
+            data: { meetingId: newMeeting.id, speakerType: e.speakerType, speakerId, content: e.content, entryType: e.entryType, order: e.order },
+          });
+        }
+        for (const d of m.decisions) {
+          await this.prisma.meetingDecision.create({
+            data: { meetingId: newMeeting.id, description: d.description, votesFor: d.votesFor, votesAgainst: d.votesAgainst, votesAbstain: d.votesAbstain, result: d.result },
+          });
+        }
+        for (const mt of m.tasks) {
+          const newTaskId = idMap.get(mt.taskId);
+          if (newTaskId) {
+            await this.prisma.meetingTask.create({ data: { meetingId: newMeeting.id, taskId: newTaskId } });
+          }
+        }
+      }
+      this.logger.log(`Cloned ${meetings.length} meetings`);
+    }
+
+    // Clone approval policies
+    if (entities.includes('approvals')) {
+      const policies = await this.prisma.approvalPolicy.findMany({
+        where: { agent: { orgId: fromOrgId } },
+      });
+      for (const p of policies) {
+        const newAgentId = idMap.get(p.agentId);
+        if (!newAgentId) continue;
+        await this.prisma.approvalPolicy.create({
+          data: {
+            agentId: newAgentId, preset: p.preset,
+            readMode: p.readMode, writeMode: p.writeMode, deleteMode: p.deleteMode,
+            executeMode: p.executeMode, sendMode: p.sendMode, adminMode: p.adminMode,
+            toolOverrides: p.toolOverrides as any,
+            approverType: p.approverType, approverId: p.approverId,
+            autoApproveAfterMin: p.autoApproveAfterMin,
+            autoApproveLowRisk: p.autoApproveLowRisk,
+            costThresholdUsd: p.costThresholdUsd,
+          },
+        });
+      }
+      this.logger.log(`Cloned ${policies.length} approval policies`);
+    }
+
+    // Clone files & folders
+    if (entities.includes('files')) {
+      const folders = await this.prisma.folder.findMany({ where: { orgId: fromOrgId } });
+      // First pass: create without parents
+      for (const f of folders) {
+        const newFolder = await this.prisma.folder.create({
+          data: { orgId: toOrgId, name: f.name, isSystem: f.isSystem },
+        });
+        idMap.set(f.id, newFolder.id);
+      }
+      // Second pass: set parents
+      for (const f of folders) {
+        if (f.parentId && idMap.has(f.parentId)) {
+          await this.prisma.folder.update({
+            where: { id: idMap.get(f.id)! },
+            data: { parentId: idMap.get(f.parentId) },
+          });
+        }
+      }
+      // Clone file records (metadata only — actual files are shared)
+      const files = await this.prisma.fileRecord.findMany({ where: { orgId: fromOrgId } });
+      for (const f of files) {
+        await this.prisma.fileRecord.create({
+          data: {
+            orgId: toOrgId,
+            folderId: f.folderId ? idMap.get(f.folderId) : null,
+            filename: `${Date.now().toString(36)}-${f.originalName.replace(/[^a-zA-Z0-9.-]/g, '_')}`,
+            originalName: f.originalName, mimetype: f.mimetype,
+            size: f.size, url: f.url,
+            uploadedBy: f.uploadedBy,
+            uploaderId: f.uploadedBy === 'AGENT' ? (idMap.get(f.uploaderId || '') || f.uploaderId) : f.uploaderId,
+            metadata: f.metadata as any,
+          },
+        });
+      }
+      this.logger.log(`Cloned ${folders.length} folders, ${files.length} files`);
+    }
+
+    // Clone agent executions
+    if (entities.includes('executions')) {
+      const agents = await this.prisma.agent.findMany({ where: { orgId: fromOrgId }, select: { id: true } });
+      let execCount = 0;
+      for (const a of agents) {
+        const newAgentId = idMap.get(a.id);
+        if (!newAgentId) continue;
+        const executions = await this.prisma.agentExecution.findMany({
+          where: { agentId: a.id },
+          orderBy: { startedAt: 'asc' },
+        });
+        for (const e of executions) {
+          await this.prisma.agentExecution.create({
+            data: {
+              agentId: newAgentId, status: e.status,
+              triggerType: e.triggerType, triggerId: e.triggerId,
+              input: e.input as any, output: e.output as any,
+              toolCalls: e.toolCalls as any,
+              tokensUsed: e.tokensUsed, costUsd: e.costUsd,
+              error: e.error, startedAt: e.startedAt, endedAt: e.endedAt,
+            },
+          });
+          execCount++;
+        }
+      }
+      this.logger.log(`Cloned ${execCount} agent executions`);
+    }
+
     // Clone org positions
     if (entities.includes('company')) {
       const positions = await this.prisma.orgPosition.findMany({ where: { orgId: fromOrgId } });
