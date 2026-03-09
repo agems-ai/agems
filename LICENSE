@@ -1,0 +1,38 @@
+Sustainable Use License
+Version 1.0
+
+Copyright (c) 2025 AGEMS
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to use,
+copy, modify, merge, and distribute the Software, subject to the following
+conditions:
+
+1. The above copyright notice and this permission notice shall be included in
+   all copies or substantial portions of the Software.
+
+2. You may use the Software for any purpose, including commercial use, EXCEPT
+   for offering the Software, or any derivative work of the Software, as a
+   managed service (SaaS) to third parties without prior written permission
+   from the copyright holder.
+
+   A "managed service" means providing the Software's functionality to third
+   parties as a hosted or cloud-based service, where the service substitutes
+   for the need for third parties to install and operate the Software
+   themselves.
+
+3. You MAY:
+   - Self-host and use the Software for your own business operations
+   - Modify the Software for your own use
+   - Distribute copies of the Software
+   - Use the Software as part of a larger product, provided that the Software
+     is not the primary value of such product
+   - Contribute improvements back to the project
+
+4. The Software is provided "AS IS", without warranty of any kind, express or
+   implied, including but not limited to the warranties of merchantability,
+   fitness for a particular purpose, and noninfringement. In no event shall
+   the authors or copyright holders be liable for any claim, damages, or other
+   liability, whether in an action of contract, tort, or otherwise, arising
+   from, out of, or in connection with the Software or the use or other
+   dealings in the Software.

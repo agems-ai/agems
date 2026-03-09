@@ -1,0 +1,165 @@
+import { Controller, Get, Patch, Post, Delete, Body, Param, UseInterceptors, UploadedFile, Request } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { writeFileSync, mkdirSync } from 'fs';
+import { extname, join } from 'path';
+import { SettingsService } from './settings.service';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { RequestUser } from '../../common/types';
+
+@Controller('settings')
+export class SettingsController {
+  constructor(private settingsService: SettingsService, private events: EventEmitter2) {}
+
+  @Get()
+  getAll(@Request() req: { user: RequestUser }) {
+    return this.settingsService.getAll(req.user.orgId);
+  }
+
+  @Patch()
+  @Roles('MANAGER')
+  setBulk(@Body() body: Record<string, string>, @Request() req: { user: RequestUser }) {
+    return this.settingsService.setBulk(body, req.user.orgId);
+  }
+
+  @Get('llm-keys')
+  getLlmKeys(@Request() req: { user: RequestUser }) {
+    return this.settingsService.getLlmKeys(req.user.orgId);
+  }
+
+  @Post('llm-keys')
+  @Roles('ADMIN')
+  setLlmKeys(@Body() body: Record<string, string>, @Request() req: { user: RequestUser }) {
+    return this.settingsService.setLlmKeys(body, req.user.orgId);
+  }
+
+  @Get('users')
+  getUsers(@Request() req: { user: RequestUser }) {
+    return this.settingsService.getUsers(req.user.orgId);
+  }
+
+  @Post('users')
+  @Roles('ADMIN')
+  createUser(@Body() body: { email: string; password: string; name: string; role?: string }, @Request() req: { user: RequestUser }) {
+    return this.settingsService.createUser(body, req.user.orgId);
+  }
+
+  @Patch('users/:id')
+  updateUser(@Param('id') id: string, @Body() body: { name?: string; email?: string; role?: string; password?: string }) {
+    return this.settingsService.updateUser(id, body);
+  }
+
+  @Post('users/:id/avatar')
+  @UseInterceptors(FileInterceptor('avatar', {
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (_req: any, file: any, cb: any) => {
+      if (/^image\/(jpeg|png|gif|webp)$/.test(file.mimetype)) cb(null, true);
+      else cb(new Error('Only image files allowed'), false);
+    },
+  }))
+  async uploadAvatar(@Param('id') id: string, @UploadedFile() file: any) {
+    const ext = extname(file.originalname).toLowerCase() || '.png';
+    const filename = `${id}${ext}`;
+    const dir = join(process.cwd(), 'apps/web/public/avatars/users');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, filename), file.buffer);
+    const avatarUrl = `/avatars/users/${filename}`;
+    return this.settingsService.updateUser(id, { avatarUrl });
+  }
+
+  @Delete('users/:id')
+  @Roles('ADMIN')
+  deleteUser(@Param('id') id: string) {
+    return this.settingsService.deleteUser(id);
+  }
+
+  @Get('company')
+  getCompanyProfile(@Request() req: { user: RequestUser }) {
+    return this.settingsService.getCompanyProfile(req.user.orgId);
+  }
+
+  @Post('company')
+  @Roles('MANAGER')
+  setCompanyProfile(@Body() body: Record<string, string>, @Request() req: { user: RequestUser }) {
+    return this.settingsService.setCompanyProfile(body, req.user.orgId);
+  }
+
+  @Get('task-agents')
+  async getTaskAgentsConfig(@Request() req: { user: RequestUser }) {
+    const enabled = await this.settingsService.get('task_agents_enabled', req.user.orgId);
+    const interval = await this.settingsService.get('task_scheduler_interval', req.user.orgId);
+    const reviewInterval = await this.settingsService.get('task_review_interval', req.user.orgId);
+    const reviewBudget = await this.settingsService.get('task_review_daily_budget_usd', req.user.orgId);
+    const autonomyLevel = await this.settingsService.getAutonomyLevel(req.user.orgId);
+    return {
+      enabled: enabled !== 'false',
+      interval: interval ? parseInt(interval) : 60,
+      reviewInterval: reviewInterval ? parseInt(reviewInterval) : 300,
+      reviewBudget: reviewBudget ? parseFloat(reviewBudget) : 1.0,
+      autonomyLevel,
+    };
+  }
+
+  @Post('task-agents')
+  async setTaskAgentsConfig(@Body() body: { enabled?: boolean; interval?: number; reviewInterval?: number; reviewBudget?: number; autonomyLevel?: number }, @Request() req: { user: RequestUser }) {
+    if (body.enabled !== undefined) {
+      await this.settingsService.set('task_agents_enabled', String(body.enabled), req.user.orgId);
+    }
+    if (body.interval !== undefined && body.interval >= 10) {
+      await this.settingsService.set('task_scheduler_interval', String(body.interval), req.user.orgId);
+      this.events.emit('setting.task_scheduler_interval');
+    }
+    if (body.reviewInterval !== undefined && body.reviewInterval >= 30) {
+      await this.settingsService.set('task_review_interval', String(body.reviewInterval), req.user.orgId);
+    }
+    if (body.reviewBudget !== undefined && body.reviewBudget >= 0) {
+      await this.settingsService.set('task_review_daily_budget_usd', String(body.reviewBudget), req.user.orgId);
+    }
+    if (body.autonomyLevel !== undefined && body.autonomyLevel >= 1 && body.autonomyLevel <= 5) {
+      await this.settingsService.set('autonomy_level', String(Math.round(body.autonomyLevel)), req.user.orgId);
+    }
+    const enabled = await this.settingsService.get('task_agents_enabled', req.user.orgId);
+    const interval = await this.settingsService.get('task_scheduler_interval', req.user.orgId);
+    const reviewInterval = await this.settingsService.get('task_review_interval', req.user.orgId);
+    const reviewBudget = await this.settingsService.get('task_review_daily_budget_usd', req.user.orgId);
+    const autonomyLevel = await this.settingsService.getAutonomyLevel(req.user.orgId);
+    return {
+      enabled: enabled !== 'false',
+      interval: interval ? parseInt(interval) : 60,
+      reviewInterval: reviewInterval ? parseInt(reviewInterval) : 300,
+      reviewBudget: reviewBudget ? parseFloat(reviewBudget) : 1.0,
+      autonomyLevel,
+    };
+  }
+
+  @Get('n8n')
+  getN8nConfig(@Request() req: { user: RequestUser }) {
+    return this.settingsService.getN8nConfig(req.user.orgId);
+  }
+
+  @Post('n8n')
+  @Roles('ADMIN')
+  setN8nConfig(@Body() body: { url: string; key?: string }, @Request() req: { user: RequestUser }) {
+    return this.settingsService.setN8nConfig(body.url, body.key, req.user.orgId);
+  }
+
+  // ── System Prompts ──
+
+  @Get('system-prompts')
+  getSystemPrompts(@Request() req: { user: RequestUser }) {
+    return this.settingsService.getSystemPrompts(req.user.orgId);
+  }
+
+  @Post('system-prompts')
+  @Roles('ADMIN')
+  setSystemPrompts(@Body() body: Record<string, string>, @Request() req: { user: RequestUser }) {
+    return this.settingsService.setSystemPrompts(body, req.user.orgId);
+  }
+
+  @Post('system-prompts/reset')
+  @Roles('ADMIN')
+  resetSystemPrompt(@Body() body: { key: string }, @Request() req: { user: RequestUser }) {
+    return this.settingsService.resetSystemPromptToDefault(body.key, req.user.orgId);
+  }
+
+}

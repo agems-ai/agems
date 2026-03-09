@@ -1,0 +1,52 @@
+{
+  "name": "@agems/api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "nest build",
+    "dev": "nest start --watch",
+    "start": "node dist/main.js",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@agems/ai": "workspace:*",
+    "@agems/db": "workspace:*",
+    "@agems/shared": "workspace:*",
+    "@nestjs/bullmq": "^11.0.0",
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/event-emitter": "^3.0.0",
+    "@nestjs/jwt": "^11.0.0",
+    "@nestjs/passport": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "@nestjs/platform-socket.io": "^11.0.0",
+    "@nestjs/websockets": "^11.0.0",
+    "bcrypt": "^5.1.0",
+    "bullmq": "^5.0.0",
+    "class-transformer": "^0.5.0",
+    "class-validator": "^0.14.0",
+    "dotenv": "^17.3.1",
+    "grammy": "^1.41.1",
+    "mysql2": "^3.18.2",
+    "passport": "^0.7.0",
+    "passport-jwt": "^4.0.1",
+    "passport-local": "^1.0.0",
+    "reflect-metadata": "^0.2.0",
+    "rxjs": "^7.8.0",
+    "socket.io": "^4.8.3",
+    "ssh2": "^1.17.0",
+    "stripe": "^20.4.1",
+    "telegram": "^2.26.22",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.0",
+    "@types/bcrypt": "^5.0.0",
+    "@types/express": "^5.0.0",
+    "@types/passport-jwt": "^4.0.0",
+    "@types/ssh2": "^1.15.5",
+    "ts-loader": "^9.5.4",
+    "typescript": "^5.7.0",
+    "webpack-node-externals": "^3.0.0"
+  }
+}

@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.next/
+.turbo/
+*.log
+.env
+.env.local
+.env.*.local
+.DS_Store
+coverage/
+apps/web/public/uploads/
+apps/web/public/avatars/users/
+*.pyc
+tsconfig.tsbuildinfo

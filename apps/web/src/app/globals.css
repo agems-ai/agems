@@ -1,0 +1,36 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+:root {
+  --background: #0a0a0f;
+  --foreground: #ffffff;
+  --card: #12121a;
+  --card-hover: #1a1a25;
+  --border: #2a2a3a;
+  --accent: #6c5ce7;
+  --accent-hover: #7c6cf7;
+  --success: #00cec9;
+  --warning: #fdcb6e;
+  --danger: #e84393;
+  --muted: #8585a8;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+select,
+select option {
+  background: var(--card);
+  color: var(--foreground);
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

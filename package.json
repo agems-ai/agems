@@ -1,0 +1,24 @@
+{
+  "name": "agems",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AGEMS — Agent Management System. Operating system for AI-native businesses.",
+  "license": "SEE LICENSE IN LICENSE",
+  "pnpm": {
+    "onlyBuiltDependencies": ["bcrypt", "prisma", "@prisma/client", "@prisma/engines", "@nestjs/core", "sharp", "msgpackr-extract"]
+  },
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "test": "turbo test",
+    "db:generate": "pnpm --filter @agems/db generate",
+    "db:push": "pnpm --filter @agems/db push",
+    "db:migrate": "pnpm --filter @agems/db migrate",
+    "db:studio": "pnpm --filter @agems/db studio"
+  },
+  "packageManager": "pnpm@10.30.3",
+  "engines": {
+    "node": ">=20"
+  }
+}

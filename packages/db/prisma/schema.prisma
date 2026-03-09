@@ -1,0 +1,902 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════════════════
+// ORGANIZATIONS (MULTI-TENANT)
+// ═══════════════════════════════════════════════════
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  plan      OrgPlan  @default(FREE)
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  members    OrgMember[]
+  agents     Agent[]
+  tools      Tool[]
+  skills     Skill[]
+  channels   Channel[]
+  tasks      Task[]
+  meetings   Meeting[]
+  positions  OrgPosition[]
+  settings   Setting[]
+  auditLogs  AuditLog[]
+
+  @@map("organizations")
+}
+
+model OrgMember {
+  id        String        @id @default(uuid())
+  orgId     String        @map("org_id")
+  org       Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  userId    String        @map("user_id")
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      UserRole      @default(MEMBER)
+  joinedAt  DateTime      @default(now()) @map("joined_at")
+
+  @@unique([orgId, userId])
+  @@map("org_members")
+}
+
+enum OrgPlan {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+// ═══════════════════════════════════════════════════
+// USERS & AUTH
+// ═══════════════════════════════════════════════════
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  name         String
+  role         UserRole @default(MEMBER)
+  avatarUrl    String?  @map("avatar_url")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  ownedAgents   Agent[]       @relation("AgentOwner")
+  positions     OrgPosition[]
+  memberships   OrgMember[]
+
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  MEMBER
+  VIEWER
+}
+
+// ═══════════════════════════════════════════════════
+// MODULE 1: AGENT REGISTRY
+// ═══════════════════════════════════════════════════
+
+model Agent {
+  id     String      @id @default(uuid())
+  orgId  String      @map("org_id")
+  org    Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  name   String
+  slug   String      @unique
+  avatar String?
+  type   AgentType   @default(AUTONOMOUS)
+  status AgentStatus @default(DRAFT)
+
+  // LLM Configuration (Brain)
+  llmProvider LLMProvider @map("llm_provider")
+  llmModel    String      @map("llm_model")
+  llmConfig   Json        @default("{}") @map("llm_config")
+
+  // Mission & Values
+  systemPrompt String  @map("system_prompt") @db.Text
+  mission      String? @db.Text
+  values       Json?
+
+  // Runtime Configuration (Eden-like execution)
+  runtimeConfig Json @default("{}") @map("runtime_config")
+
+  // Telegram Integration (each agent can have its own bot/account)
+  telegramConfig Json? @map("telegram_config") // { botToken?, apiId?, apiHash?, sessionString? }
+
+  // Ownership & Hierarchy
+  ownerId          String  @map("owner_id")
+  owner            User    @relation("AgentOwner", fields: [ownerId], references: [id])
+  parentAgentId    String? @map("parent_agent_id")
+  parentAgent      Agent?  @relation("AgentHierarchy", fields: [parentAgentId], references: [id])
+  childAgents      Agent[] @relation("AgentHierarchy")
+  createdByAgentId String? @map("created_by_agent_id")
+
+  // Version control
+  version  Int   @default(1)
+  metadata Json?
+
+  // Relations
+  skills           AgentSkill[]
+  tools            AgentTool[]
+  responsibilities Responsibility[]
+  metrics          AgentMetric[]
+  memory           AgentMemory[]
+  accessRules      AccessRule[]
+  positions        OrgPosition[]
+  executions       AgentExecution[]
+  telegramChats    TelegramChat[]
+  approvalPolicy   ApprovalPolicy?
+  approvalRequests ApprovalRequest[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("agents")
+}
+
+enum AgentType {
+  AUTONOMOUS
+  ASSISTANT
+  META
+  REACTIVE
+}
+
+enum AgentStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ERROR
+  ARCHIVED
+}
+
+enum LLMProvider {
+  ANTHROPIC
+  OPENAI
+  GOOGLE
+  DEEPSEEK
+  MISTRAL
+  OLLAMA
+  CUSTOM
+}
+
+// ═══════════════════════════════════════════════════
+// MODULE 1: SKILLS & TOOLS
+// ═══════════════════════════════════════════════════
+
+model Skill {
+  id           String    @id @default(uuid())
+  orgId        String?   @map("org_id")
+  org          Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  name         String
+  slug         String    @unique
+  description  String
+  content      String    @default("")
+  version      String
+  type         SkillType
+  entryPoint   String    @map("entry_point")
+  configSchema Json?     @map("config_schema")
+  agents       AgentSkill[]
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@map("skills")
+}
+
+enum SkillType {
+  BUILTIN
+  PLUGIN
+  CUSTOM
+}
+
+model AgentSkill {
+  id      String  @id @default(uuid())
+  agentId String  @map("agent_id")
+  agent   Agent   @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  skillId String  @map("skill_id")
+  skill   Skill   @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  config  Json?
+  enabled Boolean @default(true)
+
+  @@unique([agentId, skillId])
+  @@map("agent_skills")
+}
+
+model Tool {
+  id         String    @id @default(uuid())
+  orgId      String    @map("org_id")
+  org        Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  name       String
+  type       ToolType
+  config     Json
+  authType   AuthType? @map("auth_type")
+  authConfig Json?     @map("auth_config")
+  agents     AgentTool[]
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@map("tools")
+}
+
+enum ToolType {
+  MCP_SERVER
+  REST_API
+  GRAPHQL
+  DATABASE
+  WEBHOOK
+  WEBSOCKET
+  GRPC
+  S3_STORAGE
+  N8N
+  DIGITALOCEAN
+  SSH
+}
+
+enum AuthType {
+  NONE
+  API_KEY
+  BEARER_TOKEN
+  BASIC
+  OAUTH2
+  CUSTOM
+}
+
+model AgentTool {
+  id          String  @id @default(uuid())
+  agentId     String  @map("agent_id")
+  agent       Agent   @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  toolId      String  @map("tool_id")
+  tool        Tool    @relation(fields: [toolId], references: [id], onDelete: Cascade)
+  permissions  Json             @default("{\"read\": true, \"write\": false, \"execute\": true}")
+  approvalMode ToolApprovalMode @default(FREE) @map("approval_mode")
+  enabled      Boolean          @default(true)
+
+  @@unique([agentId, toolId])
+  @@map("agent_tools")
+}
+
+// ═══════════════════════════════════════════════════
+// MODULE 1: RESPONSIBILITIES & METRICS
+// ═══════════════════════════════════════════════════
+
+model Responsibility {
+  id          String   @id @default(uuid())
+  agentId     String   @map("agent_id")
+  agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  title       String
+  description String?  @db.Text
+  kpiMetrics  Json?    @map("kpi_metrics")
+  priority    Priority @default(MEDIUM)
+
+  @@map("responsibilities")
+}
+
+model AgentMetric {
+  id          String     @id @default(uuid())
+  agentId     String     @map("agent_id")
+  agent       Agent      @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  metricType  MetricType @map("metric_type")
+  value       Float
+  periodStart DateTime   @map("period_start")
+  periodEnd   DateTime   @map("period_end")
+  metadata    Json?
+
+  @@index([agentId, metricType])
+  @@map("agent_metrics")
+}
+
+enum MetricType {
+  COST
+  LATENCY
+  QUALITY
+  ERROR_RATE
+  TASKS_DONE
+  TOKENS_USED
+}
+
+// ═══════════════════════════════════════════════════
+// MODULE 1: MEMORY
+// ═══════════════════════════════════════════════════
+
+model AgentMemory {
+  id        String     @id @default(uuid())
+  agentId   String     @map("agent_id")
+  agent     Agent      @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  type      MemoryType
+  content   String     @db.Text
+  metadata  Json?
+  expiresAt DateTime?  @map("expires_at")
+  createdAt DateTime   @default(now()) @map("created_at")
+
+  @@index([agentId, type])
+  @@map("agent_memory")
+}
+
+enum MemoryType {
+  CONTEXT
+  CONVERSATION
+  FILE
+  KNOWLEDGE
+}
+
+// ═══════════════════════════════════════════════════
+// ORG STRUCTURE
+// ═══════════════════════════════════════════════════
+
+model OrgPosition {
+  id         String       @id @default(uuid())
+  orgId      String       @map("org_id")
+  org        Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  title      String
+  department String?
+  parentId   String?      @map("parent_id")
+  parent     OrgPosition? @relation("OrgTree", fields: [parentId], references: [id])
+  children   OrgPosition[] @relation("OrgTree")
+  holderType HolderType   @map("holder_type")
+  agentId    String?      @map("agent_id")
+  agent      Agent?       @relation(fields: [agentId], references: [id])
+  userId     String?      @map("user_id")
+  user       User?        @relation(fields: [userId], references: [id])
+  createdAt  DateTime     @default(now()) @map("created_at")
+
+  @@map("org_positions")
+}
+
+enum HolderType {
+  AGENT
+  HUMAN
+  HYBRID
+}
+
+// ═══════════════════════════════════════════════════
+// MODULE 3: COMMUNICATION
+// ═══════════════════════════════════════════════════
+
+model Channel {
+  id           String               @id @default(uuid())
+  orgId        String               @map("org_id")
+  org          Organization         @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  name         String?
+  type         ChannelType
+  participants ChannelParticipant[]
+  messages     Message[]
+  telegramChat TelegramChat?
+  metadata     Json?
+  createdAt    DateTime             @default(now()) @map("created_at")
+
+  @@map("channels")
+}
+
+enum ChannelType {
+  DIRECT
+  GROUP
+  BROADCAST
+  SYSTEM
+}
+
+model ChannelParticipant {
+  id              String          @id @default(uuid())
+  channelId       String          @map("channel_id")
+  channel         Channel         @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  participantType ActorType       @map("participant_type")
+  participantId   String          @map("participant_id")
+  role            ParticipantRole @default(MEMBER)
+  joinedAt        DateTime        @default(now()) @map("joined_at")
+
+  @@unique([channelId, participantType, participantId])
+  @@map("channel_participants")
+}
+
+model Message {
+  id          String             @id @default(uuid())
+  channelId   String             @map("channel_id")
+  channel     Channel            @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  senderType  ActorType          @map("sender_type")
+  senderId    String             @map("sender_id")
+  content     String             @db.Text
+  contentType MessageContentType @default(TEXT) @map("content_type")
+  metadata    Json?
+  createdAt   DateTime           @default(now()) @map("created_at")
+
+  @@index([channelId, createdAt])
+  @@map("messages")
+}
+
+enum ActorType {
+  AGENT
+  HUMAN
+  SYSTEM
+}
+
+enum MessageContentType {
+  TEXT
+  JSON
+  FILE
+  ACTION
+}
+
+enum ParticipantRole {
+  ADMIN
+  MEMBER
+  OBSERVER
+}
+
+// ═══════════════════════════════════════════════════
+// MODULE 4: TASKS
+// ═══════════════════════════════════════════════════
+
+model Task {
+  id             String     @id @default(uuid())
+  orgId          String     @map("org_id")
+  org            Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  title          String
+  description    String?    @db.Text
+  status         TaskStatus @default(PENDING)
+  priority       Priority   @default(MEDIUM)
+  type           TaskType   @default(ONE_TIME)
+  cronExpression String?    @map("cron_expression")
+
+  creatorType  ActorType @map("creator_type")
+  creatorId    String    @map("creator_id")
+  assigneeType ActorType @map("assignee_type")
+  assigneeId   String    @map("assignee_id")
+
+  parentTaskId String? @map("parent_task_id")
+  parentTask   Task?   @relation("TaskTree", fields: [parentTaskId], references: [id])
+  subtasks     Task[]  @relation("TaskTree")
+
+  result      Json?
+  deadline    DateTime?
+  completedAt DateTime?    @map("completed_at")
+  meetingTasks MeetingTask[]
+  comments    TaskComment[]
+  metadata    Json?
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  @@index([assigneeType, assigneeId, status])
+  @@index([creatorType, creatorId])
+  @@map("tasks")
+}
+
+model TaskComment {
+  id        String    @id @default(uuid())
+  taskId    String    @map("task_id")
+  task      Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorType ActorType @map("author_type")
+  authorId  String    @map("author_id")
+  content   String    @db.Text
+  metadata  Json?
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([taskId])
+  @@map("task_comments")
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  IN_REVIEW          // Executor finished, waiting for QA/reviewer
+  IN_TESTING         // Reviewer is checking the work
+  VERIFIED           // Reviewer approved, waiting for creator sign-off
+  COMPLETED
+  FAILED
+  BLOCKED
+  CANCELLED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum TaskType {
+  ONE_TIME
+  RECURRING
+  CONTINUOUS
+}
+
+// ═══════════════════════════════════════════════════
+// MODULE 5: MEETINGS
+// ═══════════════════════════════════════════════════
+
+model Meeting {
+  id          String        @id @default(uuid())
+  orgId       String        @map("org_id")
+  org         Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  title       String
+  agenda      String?       @db.Text
+  status      MeetingStatus @default(SCHEDULED)
+  scheduledAt DateTime?     @map("scheduled_at")
+  startedAt   DateTime?     @map("started_at")
+  endedAt     DateTime?     @map("ended_at")
+
+  creatorType ActorType @map("creator_type")
+  creatorId   String    @map("creator_id")
+
+  participants MeetingParticipant[]
+  entries      MeetingEntry[]
+  decisions    MeetingDecision[]
+  tasks        MeetingTask[]
+  summary      String?              @db.Text
+  createdAt    DateTime             @default(now()) @map("created_at")
+
+  @@map("meetings")
+}
+
+enum MeetingStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model MeetingParticipant {
+  id              String      @id @default(uuid())
+  meetingId       String      @map("meeting_id")
+  meeting         Meeting     @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  participantType ActorType   @map("participant_type")
+  participantId   String      @map("participant_id")
+  role            MeetingRole @default(MEMBER)
+
+  @@unique([meetingId, participantType, participantId])
+  @@map("meeting_participants")
+}
+
+enum MeetingRole {
+  CHAIR
+  MEMBER
+  OBSERVER
+}
+
+model MeetingEntry {
+  id          String    @id @default(uuid())
+  meetingId   String    @map("meeting_id")
+  meeting     Meeting   @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  speakerType ActorType @map("speaker_type")
+  speakerId   String    @map("speaker_id")
+  content     String    @db.Text
+  entryType   EntryType @default(SPEECH) @map("entry_type")
+  order       Int
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([meetingId, order])
+  @@map("meeting_entries")
+}
+
+enum EntryType {
+  SPEECH
+  VOTE_START
+  VOTE_RESULT
+  DECISION
+  TASK_ASSIGN
+  SYSTEM
+}
+
+model MeetingDecision {
+  id           String     @id @default(uuid())
+  meetingId    String     @map("meeting_id")
+  meeting      Meeting    @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  description  String     @db.Text
+  votesFor     Int        @default(0) @map("votes_for")
+  votesAgainst Int        @default(0) @map("votes_against")
+  votesAbstain Int        @default(0) @map("votes_abstain")
+  result       VoteResult
+
+  @@map("meeting_decisions")
+}
+
+enum VoteResult {
+  APPROVED
+  REJECTED
+  TABLED
+}
+
+model MeetingTask {
+  id        String  @id @default(uuid())
+  meetingId String  @map("meeting_id")
+  meeting   Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  taskId    String  @map("task_id")
+  task      Task    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, taskId])
+  @@map("meeting_tasks")
+}
+
+// ═══════════════════════════════════════════════════
+// AGENT RUNTIME: EXECUTION LOG
+// ═══════════════════════════════════════════════════
+
+model AgentExecution {
+  id          String          @id @default(uuid())
+  agentId     String          @map("agent_id")
+  agent       Agent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  status      ExecutionStatus @default(RUNNING)
+  triggerType TriggerType     @map("trigger_type")
+  triggerId   String?         @map("trigger_id") // taskId, messageId, etc.
+  input       Json?
+  output      Json?
+  toolCalls   Json?           @map("tool_calls") // Array of { tool, input, output }
+  tokensUsed  Int?            @map("tokens_used")
+  costUsd     Float?          @map("cost_usd")
+  error       String?
+  startedAt   DateTime        @default(now()) @map("started_at")
+  endedAt     DateTime?       @map("ended_at")
+
+  @@index([agentId, status])
+  @@index([startedAt])
+  @@map("agent_executions")
+}
+
+enum ExecutionStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+  WAITING_HITL // Waiting for human-in-the-loop approval
+}
+
+enum TriggerType {
+  TASK        // Assigned task
+  MESSAGE     // Incoming message
+  SCHEDULE    // Cron trigger
+  EVENT       // System event
+  MANUAL      // User-initiated
+  MEETING     // Meeting participation
+  TELEGRAM    // Telegram bot message
+  APPROVAL    // Resume after approval granted
+}
+
+// ═══════════════════════════════════════════════════
+// SECURITY: AUDIT & ACCESS
+// ═══════════════════════════════════════════════════
+
+model AuditLog {
+  id           String      @id @default(uuid())
+  orgId        String?     @map("org_id")
+  org          Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  actorType    ActorType   @map("actor_type")
+  actorId      String      @map("actor_id")
+  action       AuditAction
+  resourceType String      @map("resource_type")
+  resourceId   String      @map("resource_id")
+  details      Json?
+  ipAddress    String?     @map("ip_address")
+  createdAt    DateTime    @default(now()) @map("created_at")
+
+  @@index([actorType, actorId])
+  @@index([resourceType, resourceId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+enum AuditAction {
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  EXECUTE
+  COMMUNICATE
+  LOGIN
+  GRANT_ACCESS
+  REVOKE_ACCESS
+  APPROVE
+  REJECT
+}
+
+model AccessRule {
+  id              String     @id @default(uuid())
+  agentId         String     @map("agent_id")
+  agent           Agent      @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  resourceType    String     @map("resource_type")
+  resourceId      String?    @map("resource_id")
+  permissionLevel Permission @map("permission_level")
+  grantedByType   ActorType  @map("granted_by_type")
+  grantedById     String     @map("granted_by_id")
+  expiresAt       DateTime?  @map("expires_at")
+  createdAt       DateTime   @default(now()) @map("created_at")
+
+  @@index([agentId, resourceType])
+  @@map("access_rules")
+}
+
+enum Permission {
+  READ
+  WRITE
+  EXECUTE
+  ADMIN
+}
+
+// ═══════════════════════════════════════════════════
+// TELEGRAM INTEGRATION
+// ═══════════════════════════════════════════════════
+
+model TelegramChat {
+  id             String   @id @default(uuid())
+  agentId        String   @map("agent_id")
+  agent          Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  telegramChatId BigInt   @map("telegram_chat_id")
+  channelId      String   @unique @map("channel_id")
+  channel        Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  username       String?
+  firstName      String?  @map("first_name")
+  lastName       String?  @map("last_name")
+  isApproved     Boolean  @default(true) @map("is_approved")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@unique([agentId, telegramChatId])
+  @@map("telegram_chats")
+}
+
+// ═══════════════════════════════════════════════════
+// APPROVALS
+// ═══════════════════════════════════════════════════
+
+enum ApprovalPreset {
+  FULL_CONTROL
+  SUPERVISED
+  GUIDED
+  AUTOPILOT
+}
+
+enum ToolApprovalMode {
+  FREE
+  REQUIRES_APPROVAL
+  BLOCKED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+  AUTO_APPROVED
+}
+
+enum ApprovalCategory {
+  READ
+  WRITE
+  DELETE
+  EXECUTE
+  SEND
+  ADMIN
+}
+
+model ApprovalPolicy {
+  id      String         @id @default(uuid())
+  agentId String         @unique @map("agent_id")
+  agent   Agent          @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  preset  ApprovalPreset @default(SUPERVISED)
+
+  // Per-category overrides (null = inherit from preset)
+  readMode    ToolApprovalMode? @map("read_mode")
+  writeMode   ToolApprovalMode? @map("write_mode")
+  deleteMode  ToolApprovalMode? @map("delete_mode")
+  executeMode ToolApprovalMode? @map("execute_mode")
+  sendMode    ToolApprovalMode? @map("send_mode")
+  adminMode   ToolApprovalMode? @map("admin_mode")
+
+  // Per-tool overrides: { "db_execute_guru": "BLOCKED" }
+  toolOverrides Json? @map("tool_overrides")
+
+  // Default approver
+  approverType ActorType? @map("approver_type")
+  approverId   String?    @map("approver_id")
+
+  // Auto-approve rules
+  autoApproveAfterMin Int?    @map("auto_approve_after_min")
+  autoApproveLowRisk  Boolean @default(false) @map("auto_approve_low_risk")
+  costThresholdUsd    Float?  @map("cost_threshold_usd")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("approval_policies")
+}
+
+model ApprovalRequest {
+  id          String            @id @default(uuid())
+  agentId     String            @map("agent_id")
+  agent       Agent             @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  executionId String?           @map("execution_id")
+
+  // What needs approval
+  toolName    String            @map("tool_name")
+  toolInput   Json              @map("tool_input")
+  category    ApprovalCategory
+  riskLevel   Priority          @default(MEDIUM) @map("risk_level")
+  description String            @db.Text
+
+  // Who should approve this
+  requestedFromType ActorType? @map("requested_from_type")
+  requestedFromId   String?    @map("requested_from_id")
+
+  // Context
+  channelId String? @map("channel_id")
+  taskId    String? @map("task_id")
+
+  // Resolution
+  status          ApprovalStatus @default(PENDING)
+  resolvedByType  ActorType?     @map("resolved_by_type")
+  resolvedById    String?        @map("resolved_by_id")
+  resolvedAt      DateTime?      @map("resolved_at")
+  rejectionReason String?        @map("rejection_reason") @db.Text
+
+  // Chat message where approval card was posted
+  messageId String? @map("message_id")
+
+  expiresAt DateTime? @map("expires_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([agentId, status])
+  @@index([status, createdAt])
+  @@index([channelId])
+  @@index([requestedFromType, requestedFromId])
+  @@map("approval_requests")
+}
+
+// ═══════════════════════════════════════════════════
+// FILE MANAGEMENT
+// ═══════════════════════════════════════════════════
+
+model Folder {
+  id        String   @id @default(uuid())
+  orgId     String   @map("org_id")
+  name      String
+  parentId  String?  @map("parent_id")
+  parent    Folder?  @relation("FolderTree", fields: [parentId], references: [id])
+  children  Folder[] @relation("FolderTree")
+  isSystem  Boolean  @default(false) @map("is_system")
+  files     FileRecord[]
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([orgId, parentId, name])
+  @@map("folders")
+}
+
+model FileRecord {
+  id           String   @id @default(uuid())
+  orgId        String   @map("org_id")
+  folderId     String?  @map("folder_id")
+  folder       Folder?  @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  filename     String   @unique
+  originalName String   @map("original_name")
+  mimetype     String
+  size         Int
+  url          String
+  uploadedBy   ActorType @default(SYSTEM) @map("uploaded_by")
+  uploaderId   String?   @map("uploader_id")
+  messageId    String?   @map("message_id")
+  metadata     Json?
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@index([orgId, folderId])
+  @@index([filename])
+  @@map("file_records")
+}
+
+// ═══════════════════════════════════════════════════
+// SETTINGS (Key-Value Store)
+// ═══════════════════════════════════════════════════
+
+model Setting {
+  id        String        @id @default(uuid())
+  orgId     String?       @map("org_id")
+  org       Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  key       String
+  value     String        @db.Text
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  @@unique([orgId, key])
+  @@map("settings")
+}

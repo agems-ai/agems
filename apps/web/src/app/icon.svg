@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6c5ce7"/>
+      <stop offset="100%" style="stop-color:#a855f7"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#e2e8f0"/>
+      <stop offset="100%" style="stop-color:#cbd5e1"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+
+  <!-- Antenna -->
+  <line x1="256" y1="68" x2="256" y2="108" stroke="#e2e8f0" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="256" cy="58" r="16" fill="#facc15"/>
+
+  <!-- Robot head = letter A shape -->
+  <!-- The A is formed by the robot head outline -->
+  <path d="M256 108 L148 380 L180 380 L204 312 L308 312 L332 380 L364 380 Z"
+        fill="url(#body)" stroke="#94a3b8" stroke-width="4"/>
+
+  <!-- A crossbar = visor/eye area -->
+  <rect x="194" y="248" width="124" height="48" rx="8" fill="#1e293b"/>
+
+  <!-- Eyes (glowing) -->
+  <circle cx="228" cy="272" r="14" fill="#6c5ce7">
+    <animate attributeName="opacity" values="1;0.5;1" dur="3s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="284" cy="272" r="14" fill="#6c5ce7">
+    <animate attributeName="opacity" values="1;0.5;1" dur="3s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- Eye shine -->
+  <circle cx="222" cy="266" r="5" fill="white" opacity="0.7"/>
+  <circle cx="278" cy="266" r="5" fill="white" opacity="0.7"/>
+
+  <!-- Mouth/speaker grille -->
+  <rect x="228" y="336" width="56" height="6" rx="3" fill="#64748b"/>
+  <rect x="234" y="350" width="44" height="6" rx="3" fill="#64748b"/>
+  <rect x="240" y="364" width="32" height="6" rx="3" fill="#64748b"/>
+
+  <!-- Ear bolts -->
+  <circle cx="152" cy="260" r="14" fill="#94a3b8" stroke="#64748b" stroke-width="3"/>
+  <circle cx="360" cy="260" r="14" fill="#94a3b8" stroke="#64748b" stroke-width="3"/>
+  <circle cx="152" cy="260" r="5" fill="#64748b"/>
+  <circle cx="360" cy="260" r="5" fill="#64748b"/>
+
+  <!-- Small circuit lines on head -->
+  <line x1="196" y1="180" x2="220" y2="180" stroke="#94a3b8" stroke-width="3" stroke-linecap="round" opacity="0.5"/>
+  <line x1="292" y1="180" x2="316" y2="180" stroke="#94a3b8" stroke-width="3" stroke-linecap="round" opacity="0.5"/>
+  <line x1="220" y1="200" x2="240" y2="200" stroke="#94a3b8" stroke-width="3" stroke-linecap="round" opacity="0.5"/>
+  <line x1="272" y1="200" x2="292" y2="200" stroke="#94a3b8" stroke-width="3" stroke-linecap="round" opacity="0.5"/>
+</svg>
