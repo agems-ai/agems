@@ -377,6 +377,11 @@ export class RuntimeService {
       merged.unshift({ role: 'user', content: 'Continue the conversation.' });
     }
 
+    // Ensure last message is from user (add action reminder if last is assistant)
+    if (merged.length > 0 && merged[merged.length - 1].role === 'assistant') {
+      merged.push({ role: 'user', content: '[System: Respond to the above. If an action was requested, use tools NOW — do not write plans or promise future work.]' });
+    }
+
     return merged;
   }
 
@@ -547,9 +552,13 @@ export class RuntimeService {
         };
       });
 
-      // Create abort controller for this execution
+      // Create abort controller for this execution with 30-minute timeout
       const abortController = new AbortController();
       this.abortControllers.set(execution.id, abortController);
+      const executionTimeout = setTimeout(() => {
+        this.logger.warn(`Agent ${agent.name}: execution timeout (30 min) — aborting`);
+        abortController.abort();
+      }, 30 * 60 * 1000);
 
       const runner = new AgentRunner({
         provider: {
@@ -591,6 +600,22 @@ export class RuntimeService {
           : [...input, { role: 'user' as const, content: hint }];
         result = await runner.run(retryInput, abortController.signal, streamCallbacks);
       }
+
+      // Anti-hallucination: if agent claims to do something but made 0 tool calls, force retry
+      if (result.text && (result.toolCalls?.length || 0) === 0) {
+        const actionWords = /(?:creating|generating|launching|uploading|running|executing|sending|starting)/i;
+        if (actionWords.test(result.text)) {
+          this.logger.warn(`Agent ${agent.name}: claimed action but 0 tool calls — forcing retry`);
+          const retryHint = `[System: You just wrote "${result.text.substring(0, 100)}..." but made ZERO tool calls. This is unacceptable. You MUST call the actual tool NOW to do the work. Do not describe what you will do — execute it with a tool call.]`;
+          const retryInput = typeof input === 'string'
+            ? `${input}\n\n${retryHint}`
+            : [...input, { role: 'user' as const, content: retryHint }];
+          result = await runner.run(retryInput, abortController.signal, streamCallbacks);
+        }
+      }
+
+      // Clear execution timeout
+      clearTimeout(executionTimeout);
 
       this.logger.log(`Agent ${agent.name}: ${result.toolCalls?.length || 0} tool calls, ${result.iterations} iterations, text=${result.text?.substring(0, 80)}...`);
 
@@ -647,9 +672,10 @@ export class RuntimeService {
 
       return { executionId: execution.id, ...result, waitingForApproval: false };
     } catch (error) {
+      clearTimeout(executionTimeout);
       this.abortControllers.delete(execution.id);
       const isAborted = error instanceof Error && (error.name === 'AbortError' || error.message.includes('aborted'));
-      const errorMessage = isAborted ? 'Execution stopped by user' : (error instanceof Error ? error.message : String(error));
+      const errorMessage = isAborted ? 'Execution timed out or stopped' : (error instanceof Error ? error.message : String(error));
       this.logger.log(isAborted ? `Agent ${agentId} execution stopped by user` : `Agent ${agentId} execution failed: ${errorMessage}`);
 
       await this.prisma.agentExecution.update({
@@ -2453,13 +2479,21 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
       // Extract and save base64 images (e.g. from Gemini image generation)
       const savedImages = this.extractAndSaveBase64Images(data);
 
-      // Truncate large responses
+      // Truncate large responses (smart array truncation instead of broken JSON)
       const str = JSON.stringify(data);
-      if (str.length > 50000) {
+      if (str.length > 100000) {
         if (savedImages.length > 0) {
           return { status: res.status, savedImages, note: 'Response contained images that were saved to disk. Full JSON response was too large and omitted.' };
         }
-        return { data: JSON.parse(str.substring(0, 50000) + '..."'), truncated: true };
+        // Smart truncation: if response is an array, return first 10 items
+        if (data?.data && Array.isArray(data.data) && data.data.length > 0) {
+          const partial = { ...data, data: data.data.slice(0, 10) };
+          const partialStr = JSON.stringify(partial);
+          if (partialStr.length <= 100000) {
+            return { data: partial, truncated: true, total: data.data.length, returned: Math.min(10, data.data.length), note: `Response too large (${str.length} chars). Showing first 10 of ${data.data.length} items. Use limit parameter to reduce results.` };
+          }
+        }
+        return { error: `Response too large (${str.length} chars). Use fewer fields or add limit parameter to reduce response size.`, truncated: true };
       }
       return { status: res.status, data, ...(savedImages.length > 0 && { savedImages }) };
     } catch (err: any) {

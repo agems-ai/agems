@@ -115,6 +115,11 @@ export class AgentRunner {
       maxTokens: this.config.maxTokens ?? 4096,
       ...(isAnthropicThinking ? {} : { temperature: this.config.temperature ?? 0.7 }),
       ...(Object.keys(providerOptions).length > 0 && { providerOptions }),
+      repairToolCall: async ({ toolCall, error }: any) => {
+        // Fix invalid tool_use input (e.g. string instead of object)
+        const input = toolCall.args && typeof toolCall.args === 'object' ? toolCall.args : {};
+        return { ...toolCall, args: input };
+      },
     };
   }
 

@@ -121,18 +121,7 @@ export class OrgService {
   private async cloneEntities(fromOrgId: string, toOrgId: string, userId: string, entities: string[]) {
     const idMap = new Map<string, string>(); // old ID -> new ID
 
-    // Clone settings
-    if (entities.includes('settings')) {
-      const settings = await this.prisma.setting.findMany({ where: { orgId: fromOrgId } });
-      for (const s of settings) {
-        await this.prisma.setting.create({
-          data: { orgId: toOrgId, key: s.key, value: s.value },
-        });
-      }
-      this.logger.log(`Cloned ${settings.length} settings`);
-    }
-
-    // Clone tools
+    // Clone tools (before settings, so idMap has tool IDs for widget remapping)
     if (entities.includes('tools')) {
       const tools = await this.prisma.tool.findMany({ where: { orgId: fromOrgId } });
       for (const t of tools) {
@@ -147,6 +136,24 @@ export class OrgService {
         idMap.set(t.id, newTool.id);
       }
       this.logger.log(`Cloned ${tools.length} tools`);
+    }
+
+    // Clone settings (after tools, so dashboard_widgets can remap tool IDs)
+    if (entities.includes('settings')) {
+      const settings = await this.prisma.setting.findMany({ where: { orgId: fromOrgId } });
+      for (const s of settings) {
+        let value = s.value;
+        // Remap tool IDs inside dashboard_widgets code
+        if (s.key === 'dashboard_widgets' && idMap.size > 0) {
+          for (const [oldId, newId] of idMap.entries()) {
+            value = value.split(oldId).join(newId);
+          }
+        }
+        await this.prisma.setting.create({
+          data: { orgId: toOrgId, key: s.key, value },
+        });
+      }
+      this.logger.log(`Cloned ${settings.length} settings`);
     }
 
     // Clone skills
