@@ -92,12 +92,15 @@ export class TelegramBotManager {
       this.logger.error(`Bot ${agentId} error:`, err);
     });
 
-    // Start polling (non-blocking)
+    // Start polling (non-blocking) — catch polling errors to prevent process crash
     bot.start({
       drop_pending_updates: true,
       onStart: () => {
         this.logger.log(`Bot started for agent ${agentId}`);
       },
+    }).catch((err) => {
+      this.logger.error(`Bot polling crashed for agent ${agentId}: ${err.message}`);
+      this.bots.delete(agentId);
     });
 
     this.bots.set(agentId, {
