@@ -5,8 +5,6 @@ services:
       POSTGRES_USER: agems
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agems}
       POSTGRES_DB: agems
-    ports:
-      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -17,8 +15,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -38,8 +34,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
-      WEB_URL: ${WEB_URL:-http://localhost:3000}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      WEB_URL: ${WEB_URL:-http://localhost:3000}
       API_PORT: 3001
     volumes:
       - web_uploads:/app/apps/web/public/uploads

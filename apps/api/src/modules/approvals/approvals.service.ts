@@ -362,6 +362,7 @@ export class ApprovalsService {
 
   async findAll(filters: any) {
     const where: any = {};
+    if (filters.orgId) where.agent = { orgId: filters.orgId };
     if (filters.agentId) where.agentId = filters.agentId;
     if (filters.status) where.status = filters.status;
     if (filters.category) where.category = filters.category;

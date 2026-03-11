@@ -494,6 +494,7 @@ export class RuntimeService {
       },
     });
 
+    let executionTimeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const tools = await this.buildTools(agent, context);
 
@@ -506,6 +507,16 @@ export class RuntimeService {
       const llmConfig = agent.llmConfig as Record<string, unknown> ?? {};
 
       const apiKey = await this.getApiKey(agent.llmProvider);
+
+      // If no API key configured, return a helpful welcome message instead of failing
+      if (!apiKey) {
+        const noKeyMessage = `Hello! I'm ${agent.name}, your AGEMS agent.\n\nI'm not able to respond yet because no API key has been configured for my LLM provider (${agent.llmProvider}).\n\nTo set me up:\n1. Go to **Settings** > **LLM Keys**\n2. Enter your API key for **${agent.llmProvider}**\n3. Come back and chat with me!\n\nOnce configured, I'll be ready to help you manage your AGEMS platform.`;
+        await this.prisma.agentExecution.update({
+          where: { id: execution.id },
+          data: { status: 'COMPLETED', output: { text: noKeyMessage }, endedAt: new Date() },
+        });
+        return { text: noKeyMessage, toolCalls: [], tokensUsed: 0, costUsd: 0, waitingForApproval: false, thinking: [] as string[], iterations: 0, loopDetected: false, executionId: execution.id };
+      }
 
       this.logger.log(`Agent ${agent.name}: ${wrappedTools.length} tools, provider=${agent.llmProvider}, model=${agent.llmModel}`);
 
@@ -555,7 +566,7 @@ export class RuntimeService {
       // Create abort controller for this execution with 30-minute timeout
       const abortController = new AbortController();
       this.abortControllers.set(execution.id, abortController);
-      const executionTimeout = setTimeout(() => {
+      executionTimeout = setTimeout(() => {
         this.logger.warn(`Agent ${agent.name}: execution timeout (30 min) — aborting`);
         abortController.abort();
       }, 30 * 60 * 1000);
@@ -568,7 +579,7 @@ export class RuntimeService {
         },
         systemPrompt: await this.buildSystemPrompt(agent),
         tools: liveTools,
-        maxIterations: (runtimeConfig.maxIterations as number) ?? 50,
+        maxIterations: (runtimeConfig.maxIterations as number) ?? 150,
         maxTokens: (llmConfig.maxTokens as number) ?? 4096,
         temperature: (llmConfig.temperature as number) ?? 0.7,
         thinkingBudget: (llmConfig.thinkingBudget as number) ?? 4000,
@@ -603,7 +614,7 @@ export class RuntimeService {
 
       // Anti-hallucination: if agent claims to do something but made 0 tool calls, force retry
       if (result.text && (result.toolCalls?.length || 0) === 0) {
-        const actionWords = /(?:creating|generating|launching|uploading|running|executing|sending|starting)/i;
+        const actionWords = /(?:создаю|генерирую|запускаю|загружаю|делаю|начинаю|выполняю|отправляю|сейчас|creating|generating|launching|uploading|running|executing|sending|starting)/i;
         if (actionWords.test(result.text)) {
           this.logger.warn(`Agent ${agent.name}: claimed action but 0 tool calls — forcing retry`);
           const retryHint = `[System: You just wrote "${result.text.substring(0, 100)}..." but made ZERO tool calls. This is unacceptable. You MUST call the actual tool NOW to do the work. Do not describe what you will do — execute it with a tool call.]`;
@@ -1080,7 +1091,7 @@ Use this to change agent models, prompts, configs, or check agent status.`,
         switch (params.action) {
           case 'list': {
             const agents = await this.prisma.agent.findMany({
-              where: { status: { not: 'ARCHIVED' } },
+              where: { orgId: agent.orgId, status: { not: 'ARCHIVED' } },
               select: { id: true, name: true, slug: true, status: true, mission: true, llmProvider: true, llmModel: true },
               orderBy: { name: 'asc' },
             });
@@ -1088,8 +1099,8 @@ Use this to change agent models, prompts, configs, or check agent status.`,
           }
           case 'get': {
             if (!params.agentId) return { error: 'agentId is required' };
-            const a = await this.prisma.agent.findUnique({
-              where: { id: params.agentId },
+            const a = await this.prisma.agent.findFirst({
+              where: { id: params.agentId, orgId: agent.orgId },
               select: { id: true, name: true, slug: true, status: true, llmProvider: true, llmModel: true, llmConfig: true, runtimeConfig: true, systemPrompt: true, mission: true },
             });
             return a || { error: 'Agent not found' };
@@ -1097,6 +1108,9 @@ Use this to change agent models, prompts, configs, or check agent status.`,
           case 'update': {
             if (!params.agentId) return { error: 'agentId is required' };
             if (!params.updates) return { error: 'updates object is required' };
+            // Verify agent belongs to same org
+            const target = await this.prisma.agent.findFirst({ where: { id: params.agentId, orgId: agent.orgId } });
+            if (!target) return { error: 'Agent not found' };
             const data: any = {};
             if (params.updates.name) data.name = params.updates.name;
             if (params.updates.llmProvider) data.llmProvider = params.updates.llmProvider;
@@ -1137,6 +1151,7 @@ Use agems_manage_agents to get agent IDs first.`,
         switch (params.action) {
           case 'list_skills': {
             const skills = await this.prisma.skill.findMany({
+              where: { OR: [{ orgId: null }, { orgId: agent.orgId }] },
               select: { id: true, name: true, slug: true, description: true, type: true },
               orderBy: { name: 'asc' },
             });
@@ -1317,21 +1332,21 @@ You can create tasks for yourself and for other agents/humans based on company g
             return { success: true, comment };
           }
           case 'get_team': {
-            const [agents, users] = await Promise.all([
+            const [teamAgents, teamMembers] = await Promise.all([
               this.prisma.agent.findMany({
-                where: { status: { not: 'ARCHIVED' } },
+                where: { orgId: agent.orgId, status: { not: 'ARCHIVED' } },
                 select: { id: true, name: true, mission: true, status: true },
                 orderBy: { name: 'asc' },
               }),
-              this.prisma.user.findMany({
-                select: { id: true, name: true, email: true, role: true },
-                orderBy: { name: 'asc' },
+              this.prisma.orgMember.findMany({
+                where: { orgId: agent.orgId },
+                include: { user: { select: { id: true, name: true, email: true } } },
               }),
             ]);
-            return { agents, humans: users, note: 'Use assigneeType="AGENT" for agents, assigneeType="HUMAN" for humans' };
+            return { agents: teamAgents, humans: teamMembers.map(m => ({ id: m.user.id, name: m.user.name, email: m.user.email, role: m.role })), note: 'Use assigneeType="AGENT" for agents, assigneeType="HUMAN" for humans' };
           }
           case 'list_all': {
-            const where: any = {};
+            const where: any = { orgId: agent.orgId };
             if (params.status) where.status = params.status;
             if (params.assigneeId) where.assigneeId = params.assigneeId;
             if (params.creatorId) where.creatorId = params.creatorId;
@@ -1684,7 +1699,7 @@ Examples: budget approval, deployment sign-off, content review, strategy confirm
             };
           }
           case 'list_all': {
-            const filters: any = { page: '1', pageSize: '50' };
+            const filters: any = { page: '1', pageSize: '50', orgId: agent.orgId };
             if (params.status) filters.status = params.status;
             if (params.agentId) filters.agentId = params.agentId;
             if (params.requestedFromIdFilter) filters.requestedFromId = params.requestedFromIdFilter;
@@ -1804,6 +1819,136 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
         },
       });
     }
+
+    // ── List organisation files ──
+    tools.push({
+      name: 'list_org_files',
+      description: 'List files uploaded to this organisation. Use to find logos, images, documents etc. Returns file URL, name, type and size.',
+      parameters: z.object({
+        search: z.string().optional().describe('Search by filename (case-insensitive)'),
+        type: z.enum(['image', 'document', 'all']).optional().describe('Filter by type (default: all)'),
+        limit: z.number().optional().describe('Max results (default 20)'),
+      }),
+      execute: async (params: { search?: string; type?: string; limit?: number }) => {
+        const where: any = { orgId: agent.orgId };
+        if (params.search) where.originalName = { contains: params.search, mode: 'insensitive' };
+        if (params.type === 'image') where.mimetype = { startsWith: 'image/' };
+        else if (params.type === 'document') where.mimetype = { not: { startsWith: 'image/' } };
+        const files = await this.prisma.fileRecord.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          take: params.limit ?? 20,
+          select: { id: true, originalName: true, url: true, mimetype: true, size: true, createdAt: true },
+        });
+        return { count: files.length, files };
+      },
+    });
+
+    // ── Generate image with Gemini (handles base64 internally — never passes through LLM context) ──
+    tools.push({
+      name: 'gemini_generate_image',
+      description: 'Generate an image using Google Gemini AI. Can include reference images (e.g. logo) from /uploads/. The image data is handled internally — you only provide the prompt and optional file paths. Returns saved image URL. Use agems_send_image to show the result.',
+      parameters: z.object({
+        prompt: z.string().describe('Text prompt describing the image to generate'),
+        referenceImages: z.array(z.object({
+          filePath: z.string().describe('Path to image file, e.g. /uploads/abc123.png'),
+          description: z.string().optional().describe('What this image is (e.g. "company logo to embed")'),
+        })).optional().describe('Reference images to include (e.g. logo). Max 3.'),
+        model: z.string().optional().describe('Gemini model (default: gemini-3.1-flash-image-preview)'),
+        aspectRatio: z.string().optional().describe('Aspect ratio hint in prompt, e.g. "1080x1080"'),
+      }),
+      execute: async (params: { prompt: string; referenceImages?: Array<{ filePath: string; description?: string }>; model?: string; aspectRatio?: string }) => {
+        try {
+          // Get Gemini API key from the agent's Google Gemini AI tool or settings
+          let geminiApiKey: string | undefined;
+          const geminiTool = await this.prisma.agentTool.findFirst({
+            where: { agentId: agent.id, enabled: true, tool: { name: { contains: 'Gemini' } } },
+            include: { tool: { select: { authConfig: true, config: true } } },
+          });
+          if (geminiTool?.tool?.authConfig) {
+            geminiApiKey = (geminiTool.tool.authConfig as any).apiKey;
+          }
+          if (!geminiApiKey) {
+            geminiApiKey = await this.getApiKey('GOOGLE');
+          }
+          if (!geminiApiKey) {
+            return { error: 'No Google AI API key configured. Add a Google Gemini AI tool or set GOOGLE_AI_API_KEY.' };
+          }
+
+          const model = params.model || (geminiTool?.tool?.config as any)?.imageModel || 'gemini-3.1-flash-image-preview';
+          const cwd = process.cwd();
+          const isMonorepo = existsSync(join(cwd, 'apps', 'api')) && existsSync(join(cwd, 'apps', 'web'));
+          const uploadsBase = isMonorepo ? join(cwd, 'apps', 'web', 'public') : join(cwd, '..', 'web', 'public');
+
+          // Build Gemini request parts
+          const parts: any[] = [];
+
+          // Add reference images as inlineData
+          if (params.referenceImages?.length) {
+            for (const ref of params.referenceImages.slice(0, 3)) {
+              let filePath = ref.filePath;
+              if (filePath.startsWith('/uploads/')) {
+                filePath = join(uploadsBase, filePath);
+              }
+              if (!existsSync(filePath)) {
+                return { error: `Reference image not found: ${ref.filePath}` };
+              }
+              const buf = readFileSync(filePath);
+              const ext = ref.filePath.split('.').pop()?.toLowerCase() || 'png';
+              const mimeMap: Record<string, string> = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
+              parts.push({
+                inlineData: {
+                  mimeType: mimeMap[ext] || 'image/png',
+                  data: buf.toString('base64'),
+                },
+              });
+              if (ref.description) {
+                parts.push({ text: `[Above image: ${ref.description}]` });
+              }
+            }
+          }
+
+          // Add text prompt
+          parts.push({ text: params.prompt });
+
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`;
+          const body = {
+            contents: [{ parts }],
+            generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
+          };
+
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(120000),
+          });
+
+          const data = await res.json();
+
+          if (!res.ok) {
+            return { error: `Gemini API error ${res.status}: ${JSON.stringify(data).substring(0, 500)}` };
+          }
+
+          // Extract and save generated images
+          const savedImages = this.extractAndSaveBase64Images(data);
+          if (savedImages.length === 0) {
+            // Extract text response if any
+            const textParts = data?.candidates?.[0]?.content?.parts?.filter((p: any) => p.text) || [];
+            const textResponse = textParts.map((p: any) => p.text).join('\n');
+            return { error: 'No image generated', textResponse: textResponse || 'Gemini did not return an image. Try rephrasing the prompt.' };
+          }
+
+          return {
+            success: true,
+            images: savedImages,
+            note: 'Image saved. Use agems_send_image with the URL to show it in chat.',
+          };
+        } catch (err: any) {
+          return { error: err.message };
+        }
+      },
+    });
 
     // ── Send photo to Telegram contact ──
     if (tgConfig?.apiId && tgConfig?.apiHash && tgConfig?.sessionString) {
@@ -2371,8 +2516,12 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
 
       if (params.queryParams) {
         const qp = JSON.parse(params.queryParams);
-        const qs = new URLSearchParams(qp).toString();
-        url += (url.includes('?') ? '&' : '?') + qs;
+        // Serialize nested objects as JSON strings (URLSearchParams would produce [object Object])
+        const parts: string[] = [];
+        for (const [k, v] of Object.entries(qp)) {
+          parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(typeof v === 'object' ? JSON.stringify(v) : String(v))}`);
+        }
+        url += (url.includes('?') ? '&' : '?') + parts.join('&');
       }
 
       const headers: Record<string, string> = {};
@@ -2479,13 +2628,13 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
       // Extract and save base64 images (e.g. from Gemini image generation)
       const savedImages = this.extractAndSaveBase64Images(data);
 
-      // Truncate large responses (smart array truncation instead of broken JSON)
+      // Truncate large responses
       const str = JSON.stringify(data);
       if (str.length > 100000) {
         if (savedImages.length > 0) {
           return { status: res.status, savedImages, note: 'Response contained images that were saved to disk. Full JSON response was too large and omitted.' };
         }
-        // Smart truncation: if response is an array, return first 10 items
+        // Try to return a valid partial response for arrays (e.g. Meta Ads data.data[])
         if (data?.data && Array.isArray(data.data) && data.data.length > 0) {
           const partial = { ...data, data: data.data.slice(0, 10) };
           const partialStr = JSON.stringify(partial);
@@ -2695,6 +2844,8 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     add('agems_meetings', 'Schedule and manage meetings', 'AGEMS Platform');
     add('agems_approvals', 'Request and resolve approvals between agents/humans', 'AGEMS Platform');
     add('agems_send_image', 'Send image to chat channel', 'AGEMS Platform');
+    add('list_org_files', 'List and search uploaded files in the organisation', 'AGEMS Platform');
+    add('gemini_generate_image', 'Generate images with Gemini AI (supports logo/reference images)', 'AGEMS Platform');
     add('dashboard_manage_widget', 'Manage dashboard widgets', 'AGEMS Platform');
 
     return result;

@@ -2,13 +2,46 @@ import {
   Controller, Get, Post, Patch, Delete, Body, Param, Query, Request,
 } from '@nestjs/common';
 import { AgentsService } from './agents.service';
+import { DemoSeedService } from '../bootstrap/demo-seed.service';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { AGENT_TEMPLATES } from '../bootstrap/agent-templates';
 import type { CreateAgentInput, UpdateAgentInput, AgentFilters } from '@agems/shared';
 import type { RequestUser } from '../../common/types';
 
 @Controller('agents')
 export class AgentsController {
-  constructor(private agentsService: AgentsService) {}
+  constructor(
+    private agentsService: AgentsService,
+    private demoSeed: DemoSeedService,
+  ) {}
+
+  /** List all available agent templates for import */
+  @Get('templates')
+  getTemplates() {
+    return AGENT_TEMPLATES.map(t => ({
+      slug: t.slug,
+      name: t.name,
+      avatar: t.avatar,
+      type: t.type,
+      department: t.department,
+      position: t.position,
+      mission: t.mission,
+      tags: t.tags,
+      tools: t.tools,
+      skills: t.skills,
+      isStartupEssential: t.isStartupEssential,
+    }));
+  }
+
+  /** Import an agent from a template into the current org */
+  @Post('import-template')
+  @Roles('MANAGER')
+  async importTemplate(
+    @Body() body: { templateSlug: string },
+    @Request() req: { user: RequestUser },
+  ) {
+    return this.demoSeed.importAgentFromTemplate(req.user.orgId, req.user.id, body.templateSlug);
+  }
 
   @Post()
   @Roles('MANAGER')

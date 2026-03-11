@@ -67,6 +67,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   /** Main scheduler tick — recurring resets + pending task pickup + review cycles */
   private async tick() {
     try {
+      if (!(await this.isEnabled())) return;
       await this.checkRecurringTasks();
       await this.pickupPendingAgentTasks();
 
@@ -655,19 +656,10 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   /** Pickup PENDING tasks assigned to agents that haven't been executed yet */
   private async pickupPendingAgentTasks() {
     try {
-      // Get orgs where task agents are enabled
-      const enabledSettings = await this.prisma.setting.findMany({
-        where: { key: 'task_agents_enabled', value: 'true' },
-        select: { orgId: true },
-      });
-      const enabledOrgIds = enabledSettings.map(s => s.orgId).filter(Boolean) as string[];
-      if (enabledOrgIds.length === 0) return;
-
       const pendingTasks = await this.prisma.task.findMany({
         where: {
           assigneeType: 'AGENT',
           status: 'PENDING',
-          orgId: { in: enabledOrgIds },
         },
         orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
         take: 10,

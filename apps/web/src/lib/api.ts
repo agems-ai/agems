@@ -57,10 +57,10 @@ class ApiClient {
   }
 
   // Auth
-  register(email: string, password: string, name: string, orgName?: string) {
+  register(email: string, password: string, name: string, orgName?: string, inviteCode?: string) {
     return this.fetch<{ user: any; org: any; token: string }>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ email, password, name, orgName }),
+      body: JSON.stringify({ email, password, name, orgName, inviteCode }),
     });
   }
 
@@ -101,6 +101,17 @@ class ApiClient {
 
   createAgent(data: any) {
     return this.fetch('/agents', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  getAgentTemplates() {
+    return this.fetch<any[]>('/agents/templates');
+  }
+
+  importAgentFromTemplate(templateSlug: string) {
+    return this.fetch<any>('/agents/import-template', {
+      method: 'POST',
+      body: JSON.stringify({ templateSlug }),
+    });
   }
 
   updateAgent(id: string, data: any) {
@@ -260,16 +271,6 @@ class ApiClient {
   // Skills
   getSkills() {
     return this.fetch<any>('/skills?pageSize=100');
-  }
-
-  getDefaultSkills() {
-    return this.fetch<any[]>('/skills/defaults/list');
-  }
-
-  importDefaultSkills(slugs?: string[]) {
-    return this.fetch<{ created: number; skipped: number }>('/skills/defaults/import', {
-      method: 'POST', body: JSON.stringify(slugs ? { slugs } : {}),
-    });
   }
 
   createSkill(data: any) {
@@ -839,6 +840,10 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify({ preset }),
     });
+  }
+  // Admin
+  getAdminStats() {
+    return this.fetch<any>('/admin/stats');
   }
 }
 

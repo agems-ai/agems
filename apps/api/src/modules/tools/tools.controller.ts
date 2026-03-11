@@ -44,16 +44,6 @@ export class ToolsController {
 
   // ── Skills ──
 
-  @Get('skills/defaults/list')
-  getDefaultSkills() {
-    return this.skillsService.getDefaultSkills();
-  }
-
-  @Post('skills/defaults/import')
-  importDefaultSkills(@Body() body: { slugs?: string[] }, @Request() req: { user: RequestUser }) {
-    return this.skillsService.importDefaultSkills(req.user.orgId, body.slugs);
-  }
-
   @Post('skills')
   createSkill(@Body() body: any, @Request() req: { user: RequestUser }) {
     return this.skillsService.createSkill(body, req.user.orgId);

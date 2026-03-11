@@ -1,6 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../config/prisma.service';
-import { DEFAULT_SKILLS } from '../settings/default-skills';
 
 @Injectable()
 export class SkillsService {
@@ -65,48 +64,6 @@ export class SkillsService {
     const skill = await this.prisma.skill.findUnique({ where: { id } });
     if (!skill) throw new NotFoundException('Skill not found');
     return this.prisma.skill.delete({ where: { id } });
-  }
-
-  async getDefaultSkills() {
-    return DEFAULT_SKILLS.map(s => ({ name: s.name, slug: s.slug, description: s.description, type: s.type }));
-  }
-
-  async importDefaultSkills(orgId: string, slugs?: string[]) {
-    const toImport = slugs
-      ? DEFAULT_SKILLS.filter(s => slugs.includes(s.slug))
-      : DEFAULT_SKILLS;
-
-    // Check which slugs already exist in this org
-    const existing = await this.prisma.skill.findMany({
-      where: { orgId },
-      select: { slug: true },
-    });
-    const existingSlugs = new Set(existing.map(s => s.slug));
-
-    const created: string[] = [];
-    const skipped: string[] = [];
-
-    for (const s of toImport) {
-      if (existingSlugs.has(s.slug)) {
-        skipped.push(s.slug);
-        continue;
-      }
-      await this.prisma.skill.create({
-        data: {
-          orgId,
-          name: s.name,
-          slug: s.slug,
-          description: s.description,
-          content: s.content,
-          version: s.version,
-          type: s.type,
-          entryPoint: s.entryPoint,
-        },
-      });
-      created.push(s.slug);
-    }
-
-    return { created: created.length, skipped: skipped.length, details: { created, skipped } };
   }
 
   async assignSkillToAgent(agentId: string, skillId: string, config?: any) {

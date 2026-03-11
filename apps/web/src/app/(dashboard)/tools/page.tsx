@@ -123,8 +123,11 @@ export default function ToolsPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {tools.map((tool) => {
             const cfg = tool.config || {};
+            const authCfg = tool.authConfig || {};
+            const needsCreds = tool.authType && tool.authType !== 'NONE';
+            const hasEmptyCreds = needsCreds && (!authCfg || Object.keys(authCfg).length === 0 || Object.values(authCfg).every((v: any) => !v));
             return (
-              <div key={tool.id} className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5 hover:border-[var(--accent)]/30 transition">
+              <div key={tool.id} className={`bg-[var(--card)] border rounded-xl p-5 transition ${hasEmptyCreds ? 'border-red-500/60 hover:border-red-400' : 'border-[var(--border)] hover:border-[var(--accent)]/30'}`}>
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex-1 min-w-0">
                     <h3 className="font-semibold truncate">
@@ -135,6 +138,9 @@ export default function ToolsPage() {
                       <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--hover)] text-[var(--muted)]">{tool.type}</span>
                       {tool.authType && tool.authType !== 'NONE' && (
                         <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--hover)] text-[var(--muted)]">{tool.authType}</span>
+                      )}
+                      {hasEmptyCreds && (
+                        <span className="text-[10px] px-2 py-0.5 rounded bg-red-500/20 text-red-400 font-medium">No credentials</span>
                       )}
                     </div>
                   </div>

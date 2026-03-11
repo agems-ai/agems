@@ -1,16 +1,25 @@
-import { Injectable, UnauthorizedException, ConflictException, BadRequestException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, BadRequestException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../config/prisma.service';
+import { DemoSeedService } from '../bootstrap/demo-seed.service';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
+    private demoSeed: DemoSeedService,
   ) {}
 
-  async register(email: string, password: string, name: string, orgName?: string) {
+  private readonly INVITE_CODE = 'agems-early-2026';
+
+  async register(email: string, password: string, name: string, orgName?: string, inviteCode?: string) {
+    if (!inviteCode || inviteCode !== this.INVITE_CODE) {
+      throw new BadRequestException('Invalid invite code');
+    }
     if (!password || password.length < 8) {
       throw new BadRequestException('Password must be at least 8 characters');
     }
@@ -56,6 +65,11 @@ export class AuthService {
       sub: user.id, email: user.email, name: user.name, role: 'ADMIN', orgId: org.id,
     });
 
+    // Create demo orgs in background (don't block registration)
+    this.demoSeed.ensureDemoOrgs(user.id).catch(err => {
+      this.logger.error(`Failed to create demo orgs for user ${user.id}: ${err.message}`);
+    });
+
     return {
       user: { id: user.id, email: user.email, name: user.name, role: 'ADMIN' },
       org: { id: org.id, name: org.name, slug: org.slug, plan: org.plan },
@@ -74,6 +88,11 @@ export class AuthService {
     if (!valid) throw new UnauthorizedException('Invalid credentials');
 
     if (user.memberships.length === 0) throw new UnauthorizedException('No organization found');
+
+    // Ensure demo orgs exist for this user (migration for existing users)
+    this.demoSeed.ensureDemoOrgs(user.id).catch(err => {
+      this.logger.error(`Failed to ensure demo orgs for user ${user.id}: ${err.message}`);
+    });
 
     // If user has multiple orgs and no orgId specified, return org list for picker
     if (user.memberships.length > 1 && !orgId) {

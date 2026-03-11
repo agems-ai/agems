@@ -11,4 +11,3 @@ coverage/
 apps/web/public/uploads/
 apps/web/public/avatars/users/
 *.pyc
-tsconfig.tsbuildinfo
