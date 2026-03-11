@@ -120,7 +120,6 @@ export default function SkillsPage() {
     }
   };
 
-  const handleEditorKeyDown = (e: React.KeyboardEvent) => {
   const openImport = async () => {
     setShowImport(true);
     try {
@@ -151,6 +150,7 @@ export default function SkillsPage() {
     }
   };
 
+  const handleEditorKeyDown = (e: React.KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 's') {
       e.preventDefault();
       if (dirty) handleSave();
