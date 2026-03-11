@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
-import { Save, Plus, Trash2, Pencil, X } from 'lucide-react';
+import { Save, Plus, Trash2, Pencil, X, Download } from 'lucide-react';
 
 const skillTypes = ['BUILTIN', 'PLUGIN', 'CUSTOM'];
 
@@ -28,6 +28,10 @@ export default function SkillsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({ name: '', slug: '', description: '' });
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [showImport, setShowImport] = useState(false);
+  const [defaults, setDefaults] = useState<any[]>([]);
+  const [selectedSlugs, setSelectedSlugs] = useState<Set<string>>(new Set());
+  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     api.getSkills().then((r: any) => {
@@ -117,6 +121,36 @@ export default function SkillsPage() {
   };
 
   const handleEditorKeyDown = (e: React.KeyboardEvent) => {
+  const openImport = async () => {
+    setShowImport(true);
+    try {
+      const res = await api.getDefaultSkills();
+      const list = Array.isArray(res) ? res : (res as any).data || [];
+      setDefaults(list);
+      const existingSlugs = new Set(skills.map((s: any) => s.slug));
+      setSelectedSlugs(new Set(list.filter((d: any) => !existingSlugs.has(d.slug)).map((d: any) => d.slug)));
+    } catch (e: any) {
+      alert(e.message || 'Failed to load defaults');
+      setShowImport(false);
+    }
+  };
+
+  const handleImport = async () => {
+    if (selectedSlugs.size === 0) return;
+    setImporting(true);
+    try {
+      const result = await api.importDefaultSkills([...selectedSlugs]);
+      const refreshed = await api.getSkills();
+      setSkills((refreshed as any).data || refreshed || []);
+      setShowImport(false);
+      alert(`Imported ${(result as any).created} skills` + ((result as any).skipped ? `, ${(result as any).skipped} already existed` : ''));
+    } catch (e: any) {
+      alert(e.message || 'Import failed');
+    } finally {
+      setImporting(false);
+    }
+  };
+
     if ((e.metaKey || e.ctrlKey) && e.key === 's') {
       e.preventDefault();
       if (dirty) handleSave();
@@ -130,9 +164,14 @@ export default function SkillsPage() {
           <h1 className="text-2xl md:text-3xl font-bold mb-1">Skills</h1>
           <p className="text-[var(--muted)] text-sm">Reusable instructions injected into agent system prompts</p>
         </div>
-        <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90 text-sm">
-          + New Skill
-        </button>
+        <div className="flex gap-2">
+          <button onClick={openImport} className="flex items-center gap-1.5 px-4 py-2 border border-[var(--border)] text-sm rounded-lg hover:bg-[var(--hover)]">
+            <Download size={14} /> Import Defaults
+          </button>
+          <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90 text-sm">
+            + New Skill
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -290,6 +329,56 @@ export default function SkillsPage() {
                     className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm font-mono" />
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Import defaults modal ── */}
+      {showImport && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowImport(false)}>
+          <div className="bg-[var(--card)] rounded-xl p-6 w-full max-w-[600px] mx-4 border border-[var(--border)] max-h-[80vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">Import Default Skills</h3>
+              <span className="text-sm text-[var(--muted)]">{selectedSlugs.size} selected</span>
+            </div>
+            <p className="text-sm text-[var(--muted)] mb-4">Select skills to import. Already existing skills (by slug) are marked.</p>
+            <div className="flex gap-2 mb-3">
+              <button onClick={() => setSelectedSlugs(new Set(defaults.map(d => d.slug)))}
+                className="text-xs px-3 py-1 rounded border border-[var(--border)] hover:bg-[var(--hover)]">Select All</button>
+              <button onClick={() => setSelectedSlugs(new Set())}
+                className="text-xs px-3 py-1 rounded border border-[var(--border)] hover:bg-[var(--hover)]">Deselect All</button>
+            </div>
+            <div className="flex-1 overflow-y-auto space-y-1 mb-4">
+              {defaults.map((d) => {
+                const exists = skills.some((s: any) => s.slug === d.slug);
+                return (
+                  <label key={d.slug} className={`flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-[var(--hover)] cursor-pointer ${exists ? 'opacity-50' : ''}`}>
+                    <input type="checkbox" checked={selectedSlugs.has(d.slug)}
+                      onChange={(e) => {
+                        const next = new Set(selectedSlugs);
+                        e.target.checked ? next.add(d.slug) : next.delete(d.slug);
+                        setSelectedSlugs(next);
+                      }}
+                      className="accent-[var(--accent)]" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium">{d.name}</span>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${typeBadge[d.type] || 'bg-gray-500/15 text-gray-400'}`}>{d.type}</span>
+                        {exists && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400">exists</span>}
+                      </div>
+                      <p className="text-xs text-[var(--muted)] truncate">{d.description}</p>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowImport(false)} className="px-4 py-2 rounded-lg border border-[var(--border)]">Cancel</button>
+              <button onClick={handleImport} disabled={selectedSlugs.size === 0 || importing}
+                className="px-4 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90 disabled:opacity-30">
+                {importing ? 'Importing...' : `Import ${selectedSlugs.size} Skills`}
+              </button>
             </div>
           </div>
         </div>

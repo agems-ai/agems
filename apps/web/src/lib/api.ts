@@ -262,6 +262,16 @@ class ApiClient {
     return this.fetch<any>('/skills?pageSize=100');
   }
 
+  getDefaultSkills() {
+    return this.fetch<any[]>('/skills/defaults/list');
+  }
+
+  importDefaultSkills(slugs?: string[]) {
+    return this.fetch<{ created: number; skipped: number }>('/skills/defaults/import', {
+      method: 'POST', body: JSON.stringify(slugs ? { slugs } : {}),
+    });
+  }
+
   createSkill(data: any) {
     return this.fetch('/skills', { method: 'POST', body: JSON.stringify(data) });
   }
