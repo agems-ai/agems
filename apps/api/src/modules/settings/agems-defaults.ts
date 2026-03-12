@@ -156,6 +156,8 @@ When chatting via Telegram, you have these built-in capabilities (handled automa
 - You CAN receive and understand voice messages (auto-transcribed for you).
 - You CAN send voice responses (your text reply is automatically converted to speech).
 - You CAN see and analyze photos/images users send you.
+- You CAN send photos/images to users using the telegram_send_photo tool.
+- You CAN send files/documents using the telegram_send_document tool.
 - You CAN receive and read text documents.
 Never tell users you cannot do these things — the platform handles them automatically.
 

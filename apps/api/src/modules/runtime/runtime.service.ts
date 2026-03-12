@@ -479,7 +479,7 @@ export class RuntimeService {
     agentId: string,
     input: string | UserMessage[],
     triggeredBy?: { type: string; id?: string },
-    context?: { channelId?: string; taskId?: string; approvedTools?: string[] },
+    context?: { channelId?: string; taskId?: string; approvedTools?: string[]; extraTools?: any[] },
   ) {
     const agent = await this.agentsService.findOne(agentId);
 
@@ -497,6 +497,11 @@ export class RuntimeService {
     let executionTimeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const tools = await this.buildTools(agent, context);
+
+      // Inject extra tools (e.g. Telegram-specific tools)
+      if (context?.extraTools?.length) {
+        tools.push(...context.extraTools);
+      }
 
       // Wrap tools with approval checks
       const wrappedTools = await this.wrapToolsWithApproval(

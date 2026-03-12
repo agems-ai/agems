@@ -6,7 +6,11 @@ import { TelegramMediaService } from './telegram-media.service';
 import { RuntimeService } from '../runtime/runtime.service';
 import { CommsService } from '../comms/comms.service';
 import type { Context } from 'grammy';
+import { InputFile } from 'grammy';
 import type { UserMessage } from '@agems/ai';
+import { z } from 'zod';
+import { join } from 'path';
+import { existsSync, readFileSync } from 'fs';
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -244,7 +248,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const context = await this.buildTelegramContext(chat.channelId, agentId);
 
       // Execute agent
-      const result = await this.runtime.execute(agentId, context, { type: 'TELEGRAM', id: chat.channelId });
+      const result = await this.runtime.execute(agentId, context, { type: 'TELEGRAM', id: chat.channelId }, { channelId: chat.channelId, extraTools: this.buildTelegramTools(ctx, agentId) });
 
       // Save agent response
       await this.comms.sendMessage(chat.channelId, { content: result.text, contentType: 'TEXT' }, 'AGENT', agentId);
@@ -280,7 +284,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
       // Execute agent
       const context = await this.buildTelegramContext(chat.channelId, agentId, { isVoice: true });
-      const result = await this.runtime.execute(agentId, context, { type: 'TELEGRAM', id: chat.channelId });
+      const result = await this.runtime.execute(agentId, context, { type: 'TELEGRAM', id: chat.channelId }, { channelId: chat.channelId, extraTools: this.buildTelegramTools(ctx, agentId) });
 
       // Save agent response
       await this.comms.sendMessage(chat.channelId, { content: result.text, contentType: 'TEXT' }, 'AGENT', agentId);
@@ -332,7 +336,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         },
       ];
 
-      const result = await this.runtime.execute(agentId, messages, { type: 'TELEGRAM', id: chat.channelId });
+      const result = await this.runtime.execute(agentId, messages, { type: 'TELEGRAM', id: chat.channelId }, { channelId: chat.channelId, extraTools: this.buildTelegramTools(ctx, agentId) });
 
       await this.comms.sendMessage(chat.channelId, { content: result.text, contentType: 'TEXT' }, 'AGENT', agentId);
       await this.sendResponse(ctx, agentId, result.text, false);
@@ -378,7 +382,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       );
 
       const context = await this.buildTelegramContext(chat.channelId, agentId);
-      const result = await this.runtime.execute(agentId, context, { type: 'TELEGRAM', id: chat.channelId });
+      const result = await this.runtime.execute(agentId, context, { type: 'TELEGRAM', id: chat.channelId }, { channelId: chat.channelId, extraTools: this.buildTelegramTools(ctx, agentId) });
 
       await this.comms.sendMessage(chat.channelId, { content: result.text, contentType: 'TEXT' }, 'AGENT', agentId);
       await this.sendResponse(ctx, agentId, result.text, false);
@@ -561,6 +565,60 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         }
       }
     }
+  }
+
+  /** Build Telegram-specific tools that agents can use during execution */
+  private buildTelegramTools(ctx: Context, agentId: string) {
+    const uploadsDir = join(process.cwd(), '..', 'web', 'public', 'uploads');
+    return [
+      {
+        name: 'telegram_send_photo',
+        description: 'Send a photo/image to the current Telegram chat. Use filename from AGEMS uploads (e.g. "25462f0f-641f-4022-9ca8-91daf82d54ef.png") or a full URL.',
+        parameters: z.object({
+          source: z.string().describe('Filename from uploads directory (UUID.ext) or a full https:// URL'),
+          caption: z.string().optional().describe('Optional caption for the photo'),
+        }),
+        execute: async (params: { source: string; caption?: string }) => {
+          try {
+            if (params.source.startsWith('http')) {
+              await ctx.replyWithPhoto(params.source, { caption: params.caption });
+              return { success: true, sent: params.source };
+            }
+            // Try uploads directory
+            const filePath = join(uploadsDir, params.source);
+            if (!existsSync(filePath)) {
+              return { error: `File not found: ${params.source}` };
+            }
+            const buffer = readFileSync(filePath);
+            await ctx.replyWithPhoto(new InputFile(buffer, params.source), { caption: params.caption });
+            return { success: true, sent: params.source };
+          } catch (err: any) {
+            return { error: `Failed to send photo: ${err.message}` };
+          }
+        },
+      },
+      {
+        name: 'telegram_send_document',
+        description: 'Send a document/file to the current Telegram chat from AGEMS uploads.',
+        parameters: z.object({
+          filename: z.string().describe('Filename from uploads directory (UUID.ext)'),
+          caption: z.string().optional().describe('Optional caption'),
+        }),
+        execute: async (params: { filename: string; caption?: string }) => {
+          try {
+            const filePath = join(uploadsDir, params.filename);
+            if (!existsSync(filePath)) {
+              return { error: `File not found: ${params.filename}` };
+            }
+            const buffer = readFileSync(filePath);
+            await ctx.replyWithDocument(new InputFile(buffer, params.filename), { caption: params.caption });
+            return { success: true, sent: params.filename };
+          } catch (err: any) {
+            return { error: `Failed to send document: ${err.message}` };
+          }
+        },
+      },
+    ];
   }
 
   private async withTyping(ctx: Context, fn: () => Promise<void>) {
