@@ -1271,6 +1271,22 @@ You can create tasks for yourself and for other agents/humans based on company g
           case 'create': {
             if (!params.task?.title) return { error: 'task.title is required' };
             const assigneeType = (params.task.assigneeType as any) || 'AGENT';
+            // Validate assignee exists in the same org
+            let resolvedAssigneeId = params.task.assigneeId || agent.id;
+            if (resolvedAssigneeId !== agent.id) {
+              if (assigneeType === 'AGENT') {
+                const assignee = await this.prisma.agent.findFirst({ where: { id: resolvedAssigneeId, orgId: agent.orgId } });
+                if (!assignee) {
+                  // Try to find by name (agents often hallucinate IDs)
+                  const byName = await this.prisma.agent.findFirst({ where: { orgId: agent.orgId, name: { contains: resolvedAssigneeId, mode: 'insensitive' } } });
+                  if (byName) {
+                    resolvedAssigneeId = byName.id;
+                  } else {
+                    return { error: `Agent "${resolvedAssigneeId}" not found in your organization. Use get_team to see available agents.` };
+                  }
+                }
+              }
+            }
             // Build metadata from verification fields
             const taskMeta: any = {};
             if (params.task.expectedResult) taskMeta.expectedResult = params.task.expectedResult;
@@ -1288,7 +1304,7 @@ You can create tasks for yourself and for other agents/humans based on company g
                 creatorType: 'AGENT',
                 creatorId: agent.id,
                 assigneeType,
-                assigneeId: params.task.assigneeId || agent.id,
+                assigneeId: resolvedAssigneeId,
                 deadline: params.task.deadline ? new Date(params.task.deadline) : null,
                 parentTaskId: params.task.parentTaskId || null,
                 metadata: Object.keys(taskMeta).length > 0 ? taskMeta : undefined,
