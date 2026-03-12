@@ -511,7 +511,7 @@ export class RuntimeService {
       const runtimeConfig = agent.runtimeConfig as Record<string, unknown> ?? {};
       const llmConfig = agent.llmConfig as Record<string, unknown> ?? {};
 
-      const apiKey = await this.getApiKey(agent.llmProvider);
+      const apiKey = await this.getApiKey(agent.llmProvider, agent.orgId);
 
       // If no API key configured, return a helpful welcome message instead of failing
       if (!apiKey) {
@@ -1907,7 +1907,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
             geminiApiKey = (geminiTool.tool.authConfig as any).apiKey;
           }
           if (!geminiApiKey) {
-            geminiApiKey = await this.getApiKey('GOOGLE');
+            geminiApiKey = await this.getApiKey('GOOGLE', agent.orgId);
           }
           if (!geminiApiKey) {
             return { error: 'No Google AI API key configured. Add a Google Gemini AI tool or set GOOGLE_AI_API_KEY.' };
@@ -2813,12 +2813,16 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
   }
 
   /** Get LLM API key: Settings table first, then env vars fallback */
-  private async getApiKey(provider: string): Promise<string | undefined> {
+  private async getApiKey(provider: string, orgId?: string): Promise<string | undefined> {
     const settingsMap: Record<string, string> = { ANTHROPIC: 'llm_key_anthropic', OPENAI: 'llm_key_openai', GOOGLE: 'llm_key_google', DEEPSEEK: 'llm_key_deepseek', MISTRAL: 'llm_key_mistral' };
     const envMap: Record<string, string> = { ANTHROPIC: 'ANTHROPIC_API_KEY', OPENAI: 'OPENAI_API_KEY', GOOGLE: 'GOOGLE_AI_API_KEY', DEEPSEEK: 'DEEPSEEK_API_KEY', MISTRAL: 'MISTRAL_API_KEY' };
 
     const sk = settingsMap[provider];
-    if (sk) { const v = await this.settings.get(sk); if (v) return v; }
+    if (sk) {
+      // Try org-specific key first, then global
+      if (orgId) { const v = await this.settings.get(sk, orgId); if (v) return v; }
+      const v = await this.settings.get(sk); if (v) return v;
+    }
     const ev = envMap[provider];
     return ev ? process.env[ev] : undefined;
   }
