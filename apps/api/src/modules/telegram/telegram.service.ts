@@ -6,6 +6,7 @@ import { TelegramMediaService } from './telegram-media.service';
 import { RuntimeService } from '../runtime/runtime.service';
 import { CommsService } from '../comms/comms.service';
 import type { Context } from 'grammy';
+import type { UserMessage } from '@agems/ai';
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -308,7 +309,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const mime = mimeMap[ext] || 'image/jpeg';
       const b64 = buffer.toString('base64');
 
-      const caption = ctx.message?.caption || 'What do you see in this image? If it contains an error, explain what is wrong and how to fix it.';
+      const caption = ctx.message?.caption || 'What do you see in this image?';
 
       // Save to channel
       await this.comms.sendMessage(
@@ -318,14 +319,20 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         `tg-${chatId}`,
       );
 
-      // Build vision content for the agent
-      // Note: The RuntimeService execute() takes a string input. For vision, we embed the base64 description.
-      const visionPrompt = `[User sent a photo]\nCaption: ${caption}\n[Image data: base64 ${mime}, ${buffer.length} bytes]\nAnalyze the image based on the caption/question.`;
-
+      // Build multimodal input with actual image data for vision models
       const context = await this.buildTelegramContext(chat.channelId, agentId);
-      const fullInput = context + '\n\n' + visionPrompt;
+      const messages: UserMessage[] = [
+        { role: 'user', content: context },
+        {
+          role: 'user',
+          content: [
+            { type: 'image', image: b64, mimeType: mime },
+            { type: 'text', text: caption },
+          ],
+        },
+      ];
 
-      const result = await this.runtime.execute(agentId, fullInput, { type: 'TELEGRAM', id: chat.channelId });
+      const result = await this.runtime.execute(agentId, messages, { type: 'TELEGRAM', id: chat.channelId });
 
       await this.comms.sendMessage(chat.channelId, { content: result.text, contentType: 'TEXT' }, 'AGENT', agentId);
       await this.sendResponse(ctx, agentId, result.text, false);

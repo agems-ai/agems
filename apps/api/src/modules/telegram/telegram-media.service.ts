@@ -155,6 +155,8 @@ export class TelegramMediaService {
     'voice reply', 'reply with voice', 'respond with audio',
     'send voice', 'send audio', 'audio reply', 'voice message',
     'reply by voice', 'answer with voice', 'record audio',
+    'ответь голосом', 'голосовое', 'голосом ответь', 'запиши аудио',
+    'ответь аудио', 'скажи голосом', 'аудио ответ', 'voice',
   ];
 
   /** Check if user requested a voice response */

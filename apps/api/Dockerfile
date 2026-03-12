@@ -18,6 +18,7 @@ RUN pnpm --filter @agems/db generate
 RUN pnpm --filter @agems/api build
 
 FROM base AS runner
+RUN apk add --no-cache ffmpeg
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app ./

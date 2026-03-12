@@ -34,9 +34,8 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
-      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
-      WEB_URL: ${WEB_URL:-http://localhost:3000}
       API_PORT: 3001
+      NODE_OPTIONS: "--dns-result-order=ipv4first"
     volumes:
       - web_uploads:/app/apps/web/public/uploads
       - web_avatars:/app/apps/web/public/avatars
