@@ -1029,7 +1029,7 @@ export class RuntimeService {
 
     // ── Agent-assigned tools from database (N8N, DigitalOcean, REST_API, DATABASE, etc.) ──
     const chatCtx = context?.channelId ? { channelId: context.channelId, agentId: agent.id } : undefined;
-    await this.buildAgentTools(agent.id, tools, chatCtx);
+    await this.buildAgentTools(agent.id, agent.orgId, tools, chatCtx);
 
     // ── Telegram Account tools (MTProto) ──
     const tgConfig = agent.telegramConfig as Record<string, any> | null;
@@ -1823,13 +1823,30 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
           const { statSync } = await import('fs');
           const size = statSync(filePath).size;
 
+          // Ensure file is registered in DB (visible in /files)
+          const existingRecord = await this.prisma.fileRecord.findFirst({ where: { filename } });
+          if (!existingRecord) {
+            await this.prisma.fileRecord.create({
+              data: {
+                orgId: agent.orgId,
+                filename,
+                originalName: params.caption || filename,
+                mimetype,
+                size,
+                url,
+                uploadedBy: 'AGENT',
+                uploaderId: agent.id,
+              },
+            }).catch(() => {});
+          }
+
           await this.comms.sendMessage(
             context.channelId!,
             {
               content: params.caption || 'Image',
               contentType: 'FILE',
               metadata: {
-                files: [{ url, filename, mimetype, size, originalName: filename }],
+                files: [{ url, filename, mimetype, size, originalName: params.caption || filename }],
                 text: params.caption || undefined,
               },
             },
@@ -1951,8 +1968,12 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
             return { error: `Gemini API error ${res.status}: ${JSON.stringify(data).substring(0, 500)}` };
           }
 
-          // Extract and save generated images
-          const savedImages = this.extractAndSaveBase64Images(data);
+          // Extract and save generated images (with DB registration)
+          const savedImages = this.extractAndSaveBase64Images(data, {
+            orgId: agent.orgId,
+            agentId: agent.id,
+            promptHint: params.prompt.substring(0, 80),
+          });
           if (savedImages.length === 0) {
             // Extract text response if any
             const textParts = data?.candidates?.[0]?.content?.parts?.filter((p: any) => p.text) || [];
@@ -2000,7 +2021,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
   }
 
   /** Fetch tools assigned to agent from database and add executable definitions */
-  private async buildAgentTools(agentId: string, tools: any[], chatContext?: { channelId: string; agentId: string }) {
+  private async buildAgentTools(agentId: string, orgId: string, tools: any[], chatContext?: { channelId: string; agentId: string }) {
     const agentTools = await this.prisma.agentTool.findMany({
       where: { agentId, enabled: true },
       include: { tool: true },
@@ -2018,7 +2039,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
             this.addDatabaseTools(tools, tool.name, config, authConfig, perms);
             break;
           case 'REST_API':
-            this.addRestApiTool(tools, tool.name, config, authConfig, chatContext);
+            this.addRestApiTool(tools, tool.name, config, authConfig, chatContext, agentId, orgId);
             break;
           case 'N8N':
             this.addN8nTools(tools, config, authConfig);
@@ -2091,7 +2112,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
   }
 
   /** Add HTTP request tool for a REST_API tool */
-  private addRestApiTool(tools: any[], toolName: string, config: Record<string, any>, authConfig: Record<string, any>, chatContext?: { channelId: string; agentId: string }) {
+  private addRestApiTool(tools: any[], toolName: string, config: Record<string, any>, authConfig: Record<string, any>, chatContext?: { channelId: string; agentId: string }, fileAgentId?: string, fileOrgId?: string) {
     const safeName = toolName.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
     const desc = config.description || toolName;
     const baseUrl = config.url || '';
@@ -2109,7 +2130,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
         fileField: z.string().optional().describe('Form field name for file upload (default: "file")'),
       }),
       execute: async (params: { method: string; path: string; bodyJson?: string; queryParams?: string; contentType?: string; filePath?: string; fileField?: string }) => {
-        const result = await this.executeHttpRequest(baseUrl, config, authConfig, params);
+        const result = await this.executeHttpRequest(baseUrl, config, authConfig, params, fileOrgId && fileAgentId ? { orgId: fileOrgId, agentId: fileAgentId, promptHint: `API ${toolName}` } : undefined);
 
         // Note: images are NOT auto-sent here — the agent sends them explicitly via agems_send_image with a caption
 
@@ -2531,6 +2552,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     config: Record<string, any>,
     authConfig: Record<string, any>,
     params: { method: string; path: string; bodyJson?: string; queryParams?: string; contentType?: string; filePath?: string; fileField?: string },
+    fileContext?: { orgId: string; agentId: string; promptHint?: string },
   ) {
     try {
       let url = baseUrl.replace(/\/$/, '') + params.path;
@@ -2647,7 +2669,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
       }
 
       // Extract and save base64 images (e.g. from Gemini image generation)
-      const savedImages = this.extractAndSaveBase64Images(data);
+      const savedImages = this.extractAndSaveBase64Images(data, fileContext);
 
       // Truncate large responses
       const str = JSON.stringify(data);
@@ -2671,8 +2693,8 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     }
   }
 
-  /** Extract base64 image data from API responses (e.g. Gemini), save to disk, return file paths */
-  private extractAndSaveBase64Images(data: any): Array<{ url: string; mimeType: string; size: number }> {
+  /** Extract base64 image data from API responses (e.g. Gemini), save to disk AND register in DB */
+  private extractAndSaveBase64Images(data: any, fileContext?: { orgId: string; agentId: string; promptHint?: string }): Array<{ url: string; mimeType: string; size: number }> {
     const saved: Array<{ url: string; mimeType: string; size: number }> = [];
     if (!data || typeof data !== 'object') return saved;
 
@@ -2702,6 +2724,23 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
 
             // Replace the base64 data in-place so JSON.stringify is small
             parts[i].inlineData = { mimeType: inlineData.mimeType, savedTo: `/uploads/${filename}` };
+
+            // Register in DB so file is visible in /files and findable by agents
+            if (fileContext?.orgId) {
+              const hint = fileContext.promptHint?.substring(0, 80) || 'Generated image';
+              this.prisma.fileRecord.create({
+                data: {
+                  orgId: fileContext.orgId,
+                  filename,
+                  originalName: `${hint}${ext}`,
+                  mimetype: inlineData.mimeType,
+                  size: buf.length,
+                  url: `/uploads/${filename}`,
+                  uploadedBy: 'AGENT',
+                  uploaderId: fileContext.agentId,
+                },
+              }).catch(() => {}); // fire-and-forget, don't block
+            }
           }
         }
       }

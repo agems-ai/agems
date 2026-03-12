@@ -10,7 +10,8 @@ import { InputFile } from 'grammy';
 import type { UserMessage } from '@agems/ai';
 import { z } from 'zod';
 import { join } from 'path';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -315,10 +316,20 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
       const caption = ctx.message?.caption || 'What do you see in this image?';
 
+      // Save photo to uploads dir and register in DB
+      const savedFile = await this.saveFileToUploads(buffer, `photo.${ext}`, mime, agentId);
+
       // Save to channel
       await this.comms.sendMessage(
         chat.channelId,
-        { content: `[Photo] ${caption}`, contentType: 'FILE', metadata: { type: 'photo', mime } },
+        {
+          content: `[Photo] ${caption}`,
+          contentType: 'FILE',
+          metadata: {
+            type: 'photo', mime,
+            files: savedFile ? [{ url: savedFile.url, filename: savedFile.filename, mimetype: mime, size: buffer.length, originalName: caption || `Telegram photo` }] : undefined,
+          },
+        },
         'HUMAN',
         `tg-${chatId}`,
       );
@@ -374,9 +385,20 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
       if (caption) docDescription += `\n\nCaption: ${caption}`;
 
+      // Save document to uploads dir and register in DB
+      const docMime = doc.mime_type || 'application/octet-stream';
+      const savedFile = await this.saveFileToUploads(buffer, fileName, docMime, agentId);
+
       await this.comms.sendMessage(
         chat.channelId,
-        { content: docDescription, contentType: 'FILE', metadata: { type: 'document', fileName } },
+        {
+          content: docDescription,
+          contentType: 'FILE',
+          metadata: {
+            type: 'document', fileName,
+            files: savedFile ? [{ url: savedFile.url, filename: savedFile.filename, mimetype: docMime, size: buffer.length, originalName: fileName }] : undefined,
+          },
+        },
         'HUMAN',
         `tg-${chatId}`,
       );
@@ -564,6 +586,42 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           this.logger.error('Failed to send message:', err);
         }
       }
+    }
+  }
+
+  /** Save a file to uploads dir and register in DB. Returns { url, filename } or null on error. */
+  private async saveFileToUploads(buffer: Buffer, originalName: string, mimetype: string, agentId: string): Promise<{ url: string; filename: string } | null> {
+    try {
+      const ext = originalName.split('.').pop()?.toLowerCase() || 'bin';
+      const filename = `${randomUUID()}.${ext}`;
+      const cwd = process.cwd();
+      const uploadsDir = existsSync(join(cwd, 'apps', 'web'))
+        ? join(cwd, 'apps', 'web', 'public', 'uploads')
+        : join(cwd, '..', 'web', 'public', 'uploads');
+      if (!existsSync(uploadsDir)) mkdirSync(uploadsDir, { recursive: true });
+      writeFileSync(join(uploadsDir, filename), buffer);
+      const url = `/uploads/${filename}`;
+
+      // Get agent's orgId
+      const agent = await this.prisma.agent.findUnique({ where: { id: agentId }, select: { orgId: true } });
+      if (agent) {
+        await this.prisma.fileRecord.create({
+          data: {
+            orgId: agent.orgId,
+            filename,
+            originalName,
+            mimetype,
+            size: buffer.length,
+            url,
+            uploadedBy: 'HUMAN',
+            uploaderId: null,
+          },
+        }).catch(() => {});
+      }
+      return { url, filename };
+    } catch (err) {
+      this.logger.error('Failed to save file to uploads:', err);
+      return null;
     }
   }
 
