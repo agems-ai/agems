@@ -279,7 +279,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.comms.sendMessage(chat.channelId, { content: userText, contentType: 'TEXT' }, 'HUMAN', `tg-${chatId}`);
 
       // Execute agent
-      const context = await this.buildTelegramContext(chat.channelId, agentId);
+      const context = await this.buildTelegramContext(chat.channelId, agentId, { isVoice: true });
       const result = await this.runtime.execute(agentId, context, { type: 'TELEGRAM', id: chat.channelId });
 
       // Save agent response
@@ -320,7 +320,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       );
 
       // Build multimodal input with actual image data for vision models
-      const context = await this.buildTelegramContext(chat.channelId, agentId);
+      const context = await this.buildTelegramContext(chat.channelId, agentId, { isPhoto: true });
       const messages: UserMessage[] = [
         { role: 'user', content: context },
         {
@@ -474,7 +474,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return { channelId: channel.id, telegramChatId: bigChatId };
   }
 
-  private async buildTelegramContext(channelId: string, agentId: string): Promise<string> {
+  private async buildTelegramContext(channelId: string, agentId: string, options?: { isVoice?: boolean; isPhoto?: boolean }): Promise<string> {
     const messages = await this.prisma.message.findMany({
       where: { channelId },
       orderBy: { createdAt: 'desc' },
@@ -515,7 +515,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    return `This conversation is happening in Telegram (external messenger, not the internal AGEMS platform).${armContext}\n\n${lines.join('\n')}\n\nContinue the conversation. Respond naturally and concisely.`;
+    // Build capabilities description
+    const botConfig = this.botManager.getBotInstance(agentId)?.config;
+    let capabilities = '';
+    if (botConfig?.voiceEnabled) {
+      capabilities += '\nYour Telegram capabilities: You CAN receive and understand voice messages (they are auto-transcribed for you). You CAN send voice responses (the system converts your text to speech automatically). You CAN see and analyze photos/images sent to you.';
+    } else {
+      capabilities += '\nYour Telegram capabilities: You CAN receive and understand voice messages (they are auto-transcribed for you). You CAN see and analyze photos/images sent to you. Voice responses are disabled.';
+    }
+    if (options?.isVoice) {
+      capabilities += ' The user sent a voice message which was transcribed below.';
+    }
+    if (options?.isPhoto) {
+      capabilities += ' The user sent a photo which you can see.';
+    }
+
+    return `This conversation is happening in Telegram (external messenger, not the internal AGEMS platform).${capabilities}${armContext}\n\n${lines.join('\n')}\n\nContinue the conversation. Respond naturally and concisely.`;
   }
 
   private async sendResponse(ctx: Context, agentId: string, text: string, voiceRequested: boolean) {
