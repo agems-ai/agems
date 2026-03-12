@@ -515,7 +515,7 @@ export class RuntimeService {
 
       // If no API key configured, return a helpful welcome message instead of failing
       if (!apiKey) {
-        const noKeyMessage = `Hello! I'm ${agent.name}, your AGEMS agent.\n\nI'm not able to respond yet because no API key has been configured for my LLM provider (${agent.llmProvider}).\n\nTo set me up:\n1. Go to **Settings** > **LLM Keys**\n2. Enter your API key for **${agent.llmProvider}**\n3. Come back and chat with me!\n\nOnce configured, I'll be ready to help you manage your AGEMS platform.`;
+        const noKeyMessage = `Hello! I'm ${agent.name}, your AGEMS assistant.\n\nTo start working, I need an API key for any LLM provider. You can choose based on your needs and budget:\n\n**Popular options:**\n• **Google Gemini** — great free tier, good for getting started → [ai.google.dev](https://ai.google.dev)\n• **Anthropic Claude** — excellent reasoning and coding → [console.anthropic.com](https://console.anthropic.com)\n• **OpenAI GPT** — versatile, widely supported → [platform.openai.com](https://platform.openai.com)\n• **DeepSeek** — very affordable, strong performance → [platform.deepseek.com](https://platform.deepseek.com)\n\n**How to set up:**\n1. Get an API key from any provider above\n2. Go to **Settings** → **LLM Keys** and paste your key\n3. Come back here and I'm ready!\n\n**Want to change your model later?**\nGo to **Agents** → select me → change **LLM Provider** and **Model** anytime.\n\nPick what works for you — I'll work with any of them!`;
         await this.prisma.agentExecution.update({
           where: { id: execution.id },
           data: { status: 'COMPLETED', output: { text: noKeyMessage }, endedAt: new Date() },

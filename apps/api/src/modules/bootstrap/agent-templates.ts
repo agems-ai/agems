@@ -1129,3 +1129,40 @@ export const DEMO_STARTUP_SETTINGS: Record<string, string> = {
   company_languages: 'English',
   company_website: '',
 };
+
+/**
+ * Global skill definitions — seeded as orgId=null, available to all orgs.
+ */
+export const GLOBAL_SKILL_DEFINITIONS: Array<{ slug: string; name: string; description: string; content?: string }> = [
+  { slug: 'strategic-planning', name: 'Strategic Planning', description: 'Framework for goal setting, OKRs, roadmap creation, and long-term planning.' },
+  { slug: 'leadership-delegation', name: 'Leadership & Delegation', description: 'Patterns for task assignment, team coordination, and work distribution across agents.' },
+  { slug: 'financial-analysis', name: 'Financial Analysis', description: 'Revenue analysis, cost tracking, budget planning, and financial reporting.' },
+  { slug: 'communication-mgmt', name: 'Communication Management', description: 'Best practices for inter-agent messaging, status updates, and stakeholder communication.' },
+  { slug: 'report-generation', name: 'Report Generation', description: 'Templates and patterns for creating structured business reports and summaries.' },
+  { slug: 'data-analysis', name: 'Data Analysis', description: 'Statistical analysis, trend detection, data visualization, and insight extraction.' },
+  { slug: 'process-optimization', name: 'Process Optimization', description: 'Workflow improvement, bottleneck identification, and efficiency optimization.' },
+  { slug: 'api-integration', name: 'API Integration', description: 'REST API consumption, webhook handling, OAuth flows, and external service integration.' },
+  { slug: 'content-creation', name: 'Content Creation', description: 'Writing marketing copy, blog posts, social media content, and documentation.' },
+  { slug: 'ai-prompt-engineering', name: 'AI Prompt Engineering', description: 'Crafting effective prompts for LLMs, chain-of-thought, and structured output generation.' },
+  { slug: 'ai-image-generation', name: 'AI Image Generation', description: 'Creating images with AI models (Gemini, DALL-E), prompt crafting, and visual content creation.' },
+  { slug: 'marketing-strategy', name: 'Marketing Strategy', description: 'Campaign planning, market analysis, positioning, and go-to-market strategies.' },
+  { slug: 'marketing-analytics', name: 'Marketing Analytics', description: 'KPI tracking, ROAS calculation, A/B testing, attribution modeling, and reporting dashboards.' },
+  { slug: 'marketing-funnels', name: 'Marketing Funnels', description: 'Sales funnels, lead magnets, email sequences, and conversion optimization.' },
+  { slug: 'ad-campaign-mgmt', name: 'Ad Campaign Management', description: 'Managing Facebook/Meta, Google Ads campaigns — targeting, budgets, optimization.' },
+  { slug: 'ad-copywriting', name: 'Ad Copywriting', description: 'Writing headlines, CTAs, ad creatives for paid channels. Multi-language support.' },
+  { slug: 'sales-management', name: 'Sales Management', description: 'Pipeline management, lead qualification, deal tracking, and sales process optimization.' },
+  { slug: 'customer-success', name: 'Customer Success', description: 'Onboarding, retention strategies, support workflows, and customer health monitoring.' },
+  { slug: 'quality-assurance', name: 'Quality Assurance', description: 'Testing strategies, QA checklists, review processes, and deliverable quality standards.' },
+  { slug: 'hr-management', name: 'HR Management', description: 'Recruitment, onboarding, performance reviews, and team culture development.' },
+  { slug: 'product-management', name: 'Product Management', description: 'Feature prioritization, user stories, sprint planning, and product roadmap management.' },
+  { slug: 'cohort-funnel-analysis', name: 'Cohort & Funnel Analysis', description: 'User cohort analysis, conversion funnel tracking, and retention metrics.' },
+  { slug: 'localization', name: 'Localization', description: 'Multi-language content adaptation, translation workflows, and cultural context.' },
+  { slug: 'n8n-workflows', name: 'N8N Workflows', description: 'Building and managing N8N automation workflows for business process automation.' },
+  { slug: 'n8n-mcp-tools-expert', name: 'N8N MCP Tools Expert', description: 'Expert guide for using N8N MCP server tools — node search, validation, configuration.' },
+  { slug: 'n8n-workflow-patterns', name: 'N8N Workflow Patterns', description: 'Proven architectural patterns for N8N workflows — webhooks, APIs, databases, AI integration.' },
+  { slug: 'n8n-node-configuration', name: 'N8N Node Configuration', description: 'Operation-aware node configuration guidance for N8N workflow nodes.' },
+  { slug: 'n8n-code-javascript', name: 'N8N Code JavaScript', description: 'Writing JavaScript in N8N Code nodes — data access, helpers, date handling.' },
+  { slug: 'n8n-code-python', name: 'N8N Code Python', description: 'Writing Python in N8N Code nodes — standard library only, syntax differences.' },
+  { slug: 'n8n-expression-syntax', name: 'N8N Expression Syntax', description: 'Correct N8N expression syntax — $json, $node references, webhook data access.' },
+  { slug: 'n8n-validation-expert', name: 'N8N Validation Expert', description: 'Interpreting validation errors, fixing configurations, and understanding validation profiles.' },
+];

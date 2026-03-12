@@ -89,17 +89,26 @@ export class AuthService {
 
     if (user.memberships.length === 0) throw new UnauthorizedException('No organization found');
 
-    // Ensure demo orgs exist for this user (migration for existing users)
-    this.demoSeed.ensureDemoOrgs(user.id).catch(err => {
+    // Ensure demo orgs exist for this user (await so new orgs appear in org picker)
+    try {
+      await this.demoSeed.ensureDemoOrgs(user.id);
+    } catch (err: any) {
       this.logger.error(`Failed to ensure demo orgs for user ${user.id}: ${err.message}`);
+    }
+
+    // Re-fetch memberships (demo orgs may have been created above)
+    const freshUser = await this.prisma.user.findUnique({
+      where: { id: user.id },
+      include: { memberships: { include: { org: true }, orderBy: { joinedAt: 'asc' } } },
     });
+    const memberships = freshUser?.memberships || user.memberships;
 
     // If user has multiple orgs and no orgId specified, return org list for picker
-    if (user.memberships.length > 1 && !orgId) {
+    if (memberships.length > 1 && !orgId) {
       return {
         requireOrgSelection: true,
         user: { id: user.id, email: user.email, name: user.name },
-        organizations: user.memberships.map(m => ({
+        organizations: memberships.map(m => ({
           id: m.org.id, name: m.org.name, slug: m.org.slug, plan: m.org.plan, role: m.role,
         })),
       };
@@ -107,8 +116,8 @@ export class AuthService {
 
     // Select the specified org or default to first
     const membership = orgId
-      ? user.memberships.find(m => m.orgId === orgId)
-      : user.memberships[0];
+      ? memberships.find(m => m.orgId === orgId)
+      : memberships[0];
     if (!membership) throw new UnauthorizedException('Not a member of this organization');
 
     const token = this.jwt.sign({

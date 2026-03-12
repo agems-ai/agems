@@ -6,6 +6,7 @@ import {
   TOOL_TEMPLATES,
   DEMO_COMPANY_SETTINGS,
   DEMO_STARTUP_SETTINGS,
+  GLOBAL_SKILL_DEFINITIONS,
   type AgentTemplate,
 } from './agent-templates';
 
@@ -20,11 +21,37 @@ export class DemoSeedService {
     private bootstrap: BootstrapService,
   ) {}
 
+  /** Ensure global skills exist (orgId: null). Idempotent. */
+  async ensureGlobalSkills() {
+    const existing = await this.prisma.skill.findMany({
+      where: { orgId: null },
+      select: { slug: true },
+    });
+    const existingSlugs = new Set(existing.map(s => s.slug));
+
+    for (const def of GLOBAL_SKILL_DEFINITIONS) {
+      if (existingSlugs.has(def.slug)) continue;
+      await this.prisma.skill.create({
+        data: {
+          name: def.name,
+          slug: def.slug,
+          description: def.description,
+          content: def.content || '',
+          version: '1.0.0',
+          type: 'BUILTIN',
+          entryPoint: '',
+        },
+      }).catch(() => {}); // ignore unique constraint race
+    }
+  }
+
   /**
    * Ensure demo orgs exist for a user. Idempotent — skips if already created.
    * Creates "Demo Company" (all 29 agents) and "Demo Startup" (8 essential agents).
    */
   async ensureDemoOrgs(userId: string) {
+    // Ensure global skills exist first (needed for agent skill assignment)
+    await this.ensureGlobalSkills();
     const memberships = await this.prisma.orgMember.findMany({
       where: { userId },
       include: { org: true },

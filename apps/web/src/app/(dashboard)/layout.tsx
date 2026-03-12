@@ -146,7 +146,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <button onClick={() => setSidebarOpen(true)} className="p-1 -ml-1 text-[var(--muted)] hover:text-white">
           <Menu size={22} />
         </button>
-        <Link href="/" className="text-lg font-bold">
+        <Link href="/dashboard" className="text-lg font-bold">
           {companyName && <span className="text-white mr-1.5">{companyName}</span>}
           <span className="bg-gradient-to-r from-[#6c5ce7] to-[#00cec9] bg-clip-text text-transparent">AGEMS</span>
         </Link>
@@ -165,7 +165,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
         <div className="p-4 border-b border-[var(--border)] flex items-center justify-between">
-          <Link href="/" className="text-xl font-bold">
+          <Link href="/dashboard" className="text-xl font-bold">
             {companyName && (
               <span className="text-white mr-1.5">{companyName}</span>
             )}
