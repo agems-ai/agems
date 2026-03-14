@@ -128,65 +128,65 @@ export class CatalogService {
         llmProvider: item.llmProvider, llmModel: item.llmModel,
         llmConfig: item.llmConfig as any, runtimeConfig: item.runtimeConfig as any,
         values: item.values as any, metadata: item.metadata as any, ownerId,
+        status: 'ACTIVE',
       },
     });
 
-    // Import linked skills
+    // Import linked skills — reuse existing in same org, create only if missing
     if (item.skillSlugs?.length) {
       for (const skillSlug of item.skillSlugs) {
         try {
+          // Check if skill already exists in this org
           let skill = await this.prisma.skill.findFirst({ where: { slug: skillSlug, orgId } });
           if (!skill) {
-            // Fetch from catalog (remote or local)
+            // Fetch from catalog
             let catalogSkill: any;
             if (this.isRemote) {
-              const res: any = await this.fetchRemote(`/skills?search=${encodeURIComponent(skillSlug)}&pageSize=1`);
+              const res: any = await this.fetchRemote(`/skills?search=${encodeURIComponent(skillSlug)}&pageSize=10`);
               catalogSkill = res.data?.find((s: any) => s.slug === skillSlug);
             } else {
               catalogSkill = await this.prisma.catalogSkill.findUnique({ where: { slug: skillSlug } });
             }
             if (catalogSkill) {
-              const sSuffix = Math.random().toString(36).substring(2, 10);
-              let sSlug = catalogSkill.slug;
-              const existingS = await this.prisma.skill.findFirst({ where: { slug: sSlug } });
-              if (existingS && existingS.orgId !== orgId) sSlug = `${catalogSkill.slug}-${sSuffix}`;
-              else if (existingS) { skill = existingS; }
-
-              if (!skill) {
-                skill = await this.prisma.skill.create({
-                  data: {
-                    orgId, name: catalogSkill.name, slug: sSlug,
-                    description: catalogSkill.description, content: catalogSkill.content,
-                    version: catalogSkill.version, type: catalogSkill.type,
-                    entryPoint: catalogSkill.entryPoint, configSchema: catalogSkill.configSchema as any,
-                  },
-                });
-              }
+              skill = await this.prisma.skill.create({
+                data: {
+                  orgId, name: catalogSkill.name, slug: catalogSkill.slug,
+                  description: catalogSkill.description, content: catalogSkill.content,
+                  version: catalogSkill.version, type: catalogSkill.type,
+                  entryPoint: catalogSkill.entryPoint, configSchema: catalogSkill.configSchema as any,
+                },
+              });
             }
           }
           if (skill) {
-            await this.prisma.agentSkill.create({ data: { agentId: agent.id, skillId: skill.id } });
+            const existing = await this.prisma.agentSkill.findFirst({ where: { agentId: agent.id, skillId: skill.id } });
+            if (!existing) {
+              await this.prisma.agentSkill.create({ data: { agentId: agent.id, skillId: skill.id } });
+            }
           }
         } catch { /* skip if linking fails */ }
       }
     }
 
-    // Import linked tools
+    // Import linked tools — reuse existing in same org, create only if missing
     if (item.toolSlugs?.length) {
       for (const toolSlug of item.toolSlugs) {
         try {
+          const normalizedSlug = toolSlug.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+          // Check if tool already exists in this org (by name or slug match)
           let tool = await this.prisma.tool.findFirst({ where: { name: toolSlug, orgId } });
           if (!tool) {
-            const normalizedSlug = toolSlug.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+            // Fetch from catalog
             let catalogTool: any;
             if (this.isRemote) {
-              const res: any = await this.fetchRemote(`/tools?search=${encodeURIComponent(toolSlug)}&pageSize=1`);
+              const res: any = await this.fetchRemote(`/tools?search=${encodeURIComponent(toolSlug)}&pageSize=10`);
               catalogTool = res.data?.find((t: any) => t.slug === toolSlug || t.slug === normalizedSlug);
             } else {
               catalogTool = await this.prisma.catalogTool.findUnique({ where: { slug: toolSlug } });
               if (!catalogTool) catalogTool = await this.prisma.catalogTool.findUnique({ where: { slug: normalizedSlug } });
             }
             if (catalogTool) {
+              // Check again by catalog name+type (could differ from slug)
               tool = await this.prisma.tool.findFirst({ where: { name: catalogTool.name, type: catalogTool.type, orgId } });
               if (!tool) {
                 tool = await this.prisma.tool.create({
@@ -200,15 +200,18 @@ export class CatalogService {
             }
           }
           if (tool) {
-            await this.prisma.agentTool.create({
-              data: { agentId: agent.id, toolId: tool.id, permissions: { read: true, write: false, execute: true } },
-            });
+            const existing = await this.prisma.agentTool.findFirst({ where: { agentId: agent.id, toolId: tool.id } });
+            if (!existing) {
+              await this.prisma.agentTool.create({
+                data: { agentId: agent.id, toolId: tool.id, permissions: { read: true, write: false, execute: true } },
+              });
+            }
           }
         } catch { /* skip if linking fails */ }
       }
     }
 
-    // Increment downloads on remote
+    // Increment downloads
     if (this.isRemote) {
       this.fetchRemote(`/agents/${id}/import`, { method: 'POST' }).catch(() => {});
     } else {
@@ -295,14 +298,13 @@ export class CatalogService {
   async importSkill(id: string, orgId: string) {
     const item: any = await this.getSkill(id);
 
-    const suffix = Math.random().toString(36).substring(2, 10);
-    let slug = item.slug;
-    const existingSlug = await this.prisma.skill.findFirst({ where: { slug } });
-    if (existingSlug) slug = `${item.slug}-${suffix}`;
+    // Reuse existing skill in same org if slug matches
+    const existing = await this.prisma.skill.findFirst({ where: { slug: item.slug, orgId } });
+    if (existing) return existing;
 
     const skill = await this.prisma.skill.create({
       data: {
-        orgId, name: item.name, slug, description: item.description, content: item.content,
+        orgId, name: item.name, slug: item.slug, description: item.description, content: item.content,
         version: item.version, type: item.type, entryPoint: item.entryPoint,
         configSchema: item.configSchema as any,
       },
@@ -392,6 +394,11 @@ export class CatalogService {
 
   async importTool(id: string, orgId: string) {
     const item: any = await this.getTool(id);
+
+    // Reuse existing tool in same org if name+type matches
+    const existing = await this.prisma.tool.findFirst({ where: { name: item.name, type: item.type, orgId } });
+    if (existing) return existing;
+
     const tool = await this.prisma.tool.create({
       data: {
         orgId, name: item.name, type: item.type,
