@@ -20,16 +20,18 @@ model Organization {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  members    OrgMember[]
-  agents     Agent[]
-  tools      Tool[]
-  skills     Skill[]
-  channels   Channel[]
-  tasks      Task[]
-  meetings   Meeting[]
-  positions  OrgPosition[]
-  settings   Setting[]
-  auditLogs  AuditLog[]
+  members      OrgMember[]
+  agents       Agent[]
+  tools        Tool[]
+  skills       Skill[]
+  channels     Channel[]
+  tasks        Task[]
+  meetings     Meeting[]
+  positions    OrgPosition[]
+  settings     Setting[]
+  auditLogs    AuditLog[]
+  payments     Payment[]
+  subscription Subscription?
 
   @@map("organizations")
 }
@@ -49,7 +51,9 @@ model OrgMember {
 
 enum OrgPlan {
   FREE
+  STARTER
   PRO
+  BUSINESS
   ENTERPRISE
 }
 
@@ -176,7 +180,7 @@ model Skill {
   orgId        String?   @map("org_id")
   org          Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
   name         String
-  slug         String    @unique
+  slug         String
   description  String
   content      String    @default("")
   version      String
@@ -186,6 +190,7 @@ model Skill {
   agents       AgentSkill[]
   createdAt    DateTime  @default(now()) @map("created_at")
 
+  @@unique([orgId, slug])
   @@map("skills")
 }
 
@@ -235,6 +240,7 @@ enum ToolType {
   N8N
   DIGITALOCEAN
   SSH
+  FIRECRAWL
 }
 
 enum AuthType {
@@ -484,6 +490,7 @@ enum TaskStatus {
   IN_REVIEW          // Executor finished, waiting for QA/reviewer
   IN_TESTING         // Reviewer is checking the work
   VERIFIED           // Reviewer approved, waiting for creator sign-off
+  AWAITING_APPROVAL
   COMPLETED
   FAILED
   BLOCKED
@@ -501,6 +508,52 @@ enum TaskType {
   ONE_TIME
   RECURRING
   CONTINUOUS
+}
+
+// ═══════════════════════════════════════════════════
+// PAYMENTS & SUBSCRIPTIONS
+// ═══════════════════════════════════════════════════
+
+model Payment {
+  id                  String        @id @default(uuid())
+  stripeSessionId     String        @unique @map("stripe_session_id")
+  stripePaymentIntent String?       @map("stripe_payment_intent")
+  email               String
+  amount              Int           @default(0)
+  currency            String        @default("usd")
+  status              PaymentStatus @default(PENDING)
+  product             String?
+  orgId               String?       @map("org_id")
+  org                 Organization? @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  metadata            Json?
+  createdAt           DateTime      @default(now()) @map("created_at")
+
+  @@map("payments")
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+model Subscription {
+  id                    String    @id @default(uuid())
+  orgId                 String    @unique @map("org_id")
+  org                   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  stripeSubscriptionId  String    @unique @map("stripe_subscription_id")
+  stripeCustomerId      String?   @map("stripe_customer_id")
+  stripePriceId         String    @map("stripe_price_id")
+  plan                  String
+  hoursPerMonth         Int       @default(0) @map("hours_per_month")
+  status                String    @default("active")
+  currentPeriodStart    DateTime? @map("current_period_start")
+  currentPeriodEnd      DateTime? @map("current_period_end")
+  canceledAt            DateTime? @map("canceled_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+
+  @@map("subscriptions")
 }
 
 // ═══════════════════════════════════════════════════
@@ -882,6 +935,75 @@ model FileRecord {
   @@index([orgId, folderId])
   @@index([filename])
   @@map("file_records")
+}
+
+// ═══════════════════════════════════════════════════
+// CATALOG / MARKETPLACE
+// ═══════════════════════════════════════════════════
+
+model CatalogAgent {
+  id           String      @id @default(uuid())
+  slug         String      @unique
+  name         String
+  avatar       String?
+  type         AgentType   @default(AUTONOMOUS)
+  description  String      @db.Text
+  systemPrompt String      @map("system_prompt") @db.Text
+  mission      String?     @db.Text
+  llmProvider  LLMProvider @map("llm_provider")
+  llmModel     String      @map("llm_model")
+  llmConfig    Json        @default("{}") @map("llm_config")
+  runtimeConfig Json       @default("{}") @map("runtime_config")
+  values       Json?
+  metadata     Json?
+  tags         String[]    @default([])
+  toolSlugs    String[]    @default([]) @map("tool_slugs")
+  skillSlugs   String[]    @default([]) @map("skill_slugs")
+  authorOrg    String      @map("author_org")
+  authorEmail  String?     @map("author_email")
+  downloads    Int         @default(0)
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  @@map("catalog_agents")
+}
+
+model CatalogSkill {
+  id           String    @id @default(uuid())
+  slug         String    @unique
+  name         String
+  description  String    @db.Text
+  content      String    @default("") @db.Text
+  version      String    @default("1.0.0")
+  type         SkillType @default(CUSTOM)
+  entryPoint   String    @default("") @map("entry_point")
+  configSchema Json?     @map("config_schema")
+  tags         String[]  @default([])
+  authorOrg    String    @map("author_org")
+  authorEmail  String?   @map("author_email")
+  downloads    Int       @default(0)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@map("catalog_skills")
+}
+
+model CatalogTool {
+  id             String    @id @default(uuid())
+  slug           String    @unique
+  name           String
+  description    String    @db.Text
+  type           ToolType
+  configTemplate Json      @default("{}") @map("config_template")
+  authType       AuthType? @map("auth_type")
+  tags           String[]  @default([])
+  authorOrg      String    @map("author_org")
+  authorEmail    String?   @map("author_email")
+  downloads      Int       @default(0)
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  @@map("catalog_tools")
 }
 
 // ═══════════════════════════════════════════════════

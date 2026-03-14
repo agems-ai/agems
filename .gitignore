@@ -9,9 +9,3 @@ dist/
 .DS_Store
 coverage/
 apps/web/public/uploads/
-apps/web/public/avatars/users/
-*.pyc
-
-# Admin panel (internal only)
-apps/api/src/modules/admin/
-apps/web/src/app/admin/

@@ -63,6 +63,22 @@ export class ToolsService {
     const start = Date.now();
     try {
       const config = tool.config as any;
+      const authConfig = (tool.authConfig as any) ?? {};
+
+      if (tool.type === 'FIRECRAWL') {
+        const apiKey = authConfig.token || authConfig.apiKey || authConfig.bearerToken || '';
+        const baseUrl = config.url || 'https://api.firecrawl.dev/v2';
+        if (!apiKey) return { success: false, latencyMs: Date.now() - start, error: 'No API key configured' };
+        const res = await fetch(`${baseUrl}/scrape`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+          body: JSON.stringify({ url: 'https://example.com', formats: ['markdown'] }),
+          signal: AbortSignal.timeout(15000),
+        }).catch(() => null);
+        const data = res ? await res.json().catch(() => null) : null;
+        return { success: !!data?.success, latencyMs: Date.now() - start, status: res?.status };
+      }
+
       if (config?.url) {
         const res = await fetch(config.url, { method: 'HEAD', signal: AbortSignal.timeout(5000) }).catch(() => null);
         return { success: !!res?.ok, latencyMs: Date.now() - start, status: res?.status };
@@ -71,6 +87,51 @@ export class ToolsService {
     } catch (err: any) {
       return { success: false, latencyMs: Date.now() - start, error: err.message };
     }
+  }
+
+  async exportTools(orgId: string) {
+    const tools = await this.prisma.tool.findMany({
+      where: { orgId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return {
+      version: '1.0.0',
+      exportedAt: new Date().toISOString(),
+      tools: tools.map(({ id, orgId: _org, createdAt: _c, ...rest }) => rest),
+    };
+  }
+
+  async importTools(input: any, orgId: string) {
+    const items = Array.isArray(input) ? input : input.tools ?? [input];
+    const results: { created: number; skipped: number; errors: string[] } = { created: 0, skipped: 0, errors: [] };
+
+    for (const item of items) {
+      if (!item.name || !item.type) {
+        results.errors.push(`Missing name or type: ${JSON.stringify(item).slice(0, 80)}`);
+        continue;
+      }
+      const existing = await this.prisma.tool.findFirst({ where: { name: item.name, type: item.type, orgId } });
+      if (existing) {
+        results.skipped++;
+        continue;
+      }
+      try {
+        await this.prisma.tool.create({
+          data: {
+            name: item.name,
+            type: item.type,
+            config: item.config ?? {},
+            authType: item.authType,
+            authConfig: item.authConfig ?? {},
+            orgId,
+          },
+        });
+        results.created++;
+      } catch (e: any) {
+        results.errors.push(`Failed to create "${item.name}": ${e.message}`);
+      }
+    }
+    return results;
   }
 
   async assignToolToAgent(agentId: string, toolId: string, permissions: any) {

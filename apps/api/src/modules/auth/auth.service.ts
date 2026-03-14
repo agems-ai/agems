@@ -14,12 +14,7 @@ export class AuthService {
     private demoSeed: DemoSeedService,
   ) {}
 
-  private readonly INVITE_CODE = 'agems-early-2026';
-
-  async register(email: string, password: string, name: string, orgName?: string, inviteCode?: string) {
-    if (!inviteCode || inviteCode !== this.INVITE_CODE) {
-      throw new BadRequestException('Invalid invite code');
-    }
+  async register(email: string, password: string, name: string, orgName?: string) {
     if (!password || password.length < 8) {
       throw new BadRequestException('Password must be at least 8 characters');
     }

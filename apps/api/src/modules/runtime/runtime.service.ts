@@ -2050,6 +2050,9 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
           case 'SSH':
             this.addSshTools(tools, tool.name, config, authConfig);
             break;
+          case 'FIRECRAWL':
+            this.addFirecrawlTools(tools, config, authConfig);
+            break;
         }
       } catch (err) {
         this.logger.warn(`Failed to build tool "${tool.name}": ${err}`);
@@ -2509,6 +2512,138 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     );
   }
 
+  /** Add Firecrawl web scraping/crawling tools */
+  private addFirecrawlTools(tools: any[], config: Record<string, any>, authConfig: Record<string, any>) {
+    const apiKey = authConfig.token || authConfig.apiKey || authConfig.bearerToken || '';
+    const baseUrl = config.url || 'https://api.firecrawl.dev/v2';
+    if (!apiKey) return;
+
+    const fcFetch = async (endpoint: string, body: Record<string, any>): Promise<any> => {
+      const res = await fetch(`${baseUrl}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(120000),
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) return { error: data.error || `HTTP ${res.status}`, status: res.status };
+      return data;
+    };
+
+    tools.push(
+      {
+        name: 'firecrawl_scrape',
+        description: 'Scrape a single web page and extract its content as clean markdown, HTML, or structured data. Great for reading articles, documentation, product pages, etc.',
+        parameters: z.object({
+          url: z.string().describe('URL to scrape'),
+          formats: z.array(z.string()).optional().describe('Output formats: markdown (default), html, rawHtml, links, screenshot'),
+          onlyMainContent: z.boolean().optional().describe('Extract only main content, skip headers/footers (default: true)'),
+          waitFor: z.number().optional().describe('Wait milliseconds before extracting (for JS-heavy pages)'),
+        }),
+        execute: async (params: { url: string; formats?: string[]; onlyMainContent?: boolean; waitFor?: number }) => {
+          const body: any = { url: params.url };
+          if (params.formats) body.formats = params.formats;
+          if (params.onlyMainContent !== undefined) body.onlyMainContent = params.onlyMainContent;
+          if (params.waitFor) body.waitFor = params.waitFor;
+          const result = await fcFetch('/scrape', body);
+          // Truncate large responses
+          if (result?.data?.markdown && result.data.markdown.length > 50000) {
+            result.data.markdown = result.data.markdown.substring(0, 50000) + '\n\n[...truncated]';
+          }
+          return result;
+        },
+      },
+      {
+        name: 'firecrawl_search',
+        description: 'Search the web and get full page content from results. Combines search engine results with Firecrawl scraping to get clean, readable content.',
+        parameters: z.object({
+          query: z.string().describe('Search query (max 500 chars)'),
+          limit: z.number().optional().describe('Max results (1-20, default 5)'),
+          lang: z.string().optional().describe('Language code, e.g. "en", "he", "ru"'),
+          country: z.string().optional().describe('Country code, e.g. "US", "IL", "DE"'),
+          scrapeContent: z.boolean().optional().describe('Scrape full page content of results (default: true)'),
+        }),
+        execute: async (params: { query: string; limit?: number; lang?: string; country?: string; scrapeContent?: boolean }) => {
+          const body: any = { query: params.query, limit: Math.min(params.limit ?? 5, 20) };
+          if (params.country) body.country = params.country;
+          if (params.lang) body.lang = params.lang;
+          if (params.scrapeContent !== false) body.scrapeOptions = { formats: ['markdown'] };
+          const result = await fcFetch('/search', body);
+          // Truncate large markdown in results
+          if (result?.data) {
+            for (const item of (Array.isArray(result.data) ? result.data : result.data.web || [])) {
+              if (item?.markdown && item.markdown.length > 10000) {
+                item.markdown = item.markdown.substring(0, 10000) + '\n\n[...truncated]';
+              }
+            }
+          }
+          return result;
+        },
+      },
+      {
+        name: 'firecrawl_crawl',
+        description: 'Crawl an entire website starting from a URL. Discovers and scrapes multiple pages. Returns a job ID — use firecrawl_crawl_status to check results.',
+        parameters: z.object({
+          url: z.string().describe('Starting URL to crawl'),
+          limit: z.number().optional().describe('Max pages to crawl (default 10, max 100)'),
+          maxDepth: z.number().optional().describe('Max link depth from start URL (default 2)'),
+          includePaths: z.array(z.string()).optional().describe('Regex patterns — only crawl matching URLs'),
+          excludePaths: z.array(z.string()).optional().describe('Regex patterns — skip matching URLs'),
+        }),
+        execute: async (params: { url: string; limit?: number; maxDepth?: number; includePaths?: string[]; excludePaths?: string[] }) => {
+          const body: any = {
+            url: params.url,
+            limit: Math.min(params.limit ?? 10, 100),
+            maxDiscoveryDepth: params.maxDepth ?? 2,
+            scrapeOptions: { formats: ['markdown'] },
+          };
+          if (params.includePaths) body.includePaths = params.includePaths;
+          if (params.excludePaths) body.excludePaths = params.excludePaths;
+          return fcFetch('/crawl', body);
+        },
+      },
+      {
+        name: 'firecrawl_crawl_status',
+        description: 'Check the status of a Firecrawl crawl job and get results.',
+        parameters: z.object({
+          jobId: z.string().describe('Crawl job ID returned by firecrawl_crawl'),
+        }),
+        execute: async (params: { jobId: string }) => {
+          const res = await fetch(`${baseUrl}/crawl/${params.jobId}`, {
+            headers: { Authorization: `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(30000),
+          });
+          const data = await res.json();
+          // Truncate markdown in crawl results
+          if (data?.data) {
+            for (const page of data.data) {
+              if (page?.markdown && page.markdown.length > 20000) {
+                page.markdown = page.markdown.substring(0, 20000) + '\n\n[...truncated]';
+              }
+            }
+          }
+          return data;
+        },
+      },
+      {
+        name: 'firecrawl_map',
+        description: 'Discover and catalog all URLs on a website. Fast way to get site structure without scraping content.',
+        parameters: z.object({
+          url: z.string().describe('Website URL to map'),
+          search: z.string().optional().describe('Filter URLs by relevance to this search term'),
+          limit: z.number().optional().describe('Max URLs to return (default 100, max 5000)'),
+          includeSubdomains: z.boolean().optional().describe('Include subdomain URLs (default: true)'),
+        }),
+        execute: async (params: { url: string; search?: string; limit?: number; includeSubdomains?: boolean }) => {
+          const body: any = { url: params.url, limit: Math.min(params.limit ?? 100, 5000) };
+          if (params.search) body.search = params.search;
+          if (params.includeSubdomains !== undefined) body.includeSubdomains = params.includeSubdomains;
+          return fcFetch('/map', body);
+        },
+      },
+    );
+  }
+
   /** Execute SQL query using mysql2 */
   private async executeSqlQuery(config: Record<string, any>, authConfig: Record<string, any>, query: string, allowWrite: boolean) {
     // Safety: block write operations if not allowed
@@ -2889,6 +3024,12 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
         add(`ssh_exec_${sn}`, `Execute command on ${tool.name}`, 'SSH');
         add(`ssh_upload_${sn}`, `Upload file to ${tool.name}`, 'SSH');
         add(`ssh_download_${sn}`, `Download file from ${tool.name}`, 'SSH');
+      } else if (tool.type === 'FIRECRAWL') {
+        add('firecrawl_scrape', 'Scrape a web page to markdown', 'Firecrawl');
+        add('firecrawl_search', 'Search the web and get page content', 'Firecrawl');
+        add('firecrawl_crawl', 'Crawl an entire website', 'Firecrawl');
+        add('firecrawl_crawl_status', 'Check crawl job status', 'Firecrawl');
+        add('firecrawl_map', 'Discover all URLs on a website', 'Firecrawl');
       }
     }
 

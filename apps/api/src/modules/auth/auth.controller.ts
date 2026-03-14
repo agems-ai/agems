@@ -8,8 +8,8 @@ export class AuthController {
 
   @Public()
   @Post('register')
-  register(@Body() body: { email: string; password: string; name: string; orgName?: string; inviteCode?: string }) {
-    return this.authService.register(body.email, body.password, body.name, body.orgName, body.inviteCode);
+  register(@Body() body: { email: string; password: string; name: string; orgName?: string }) {
+    return this.authService.register(body.email, body.password, body.name, body.orgName);
   }
 
   @Public()

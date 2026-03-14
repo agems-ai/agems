@@ -833,7 +833,7 @@ export default function AgentDetailPage() {
             <div className="space-y-2">
               {allTools.filter((t: any) => !agent.tools?.some((at: any) => at.toolId === t.id)).map((tool: any) => {
                 const cfg = tool.config || {};
-                const typeIcons: Record<string, string> = { DATABASE: '🗄️', REST_API: '🌐', MCP_SERVER: '🔌', GRAPHQL: '📊', WEBHOOK: '🔗', N8N: '⚡', DIGITALOCEAN: '🌊', SSH: '🖥️', CUSTOM: '⚙️' };
+                const typeIcons: Record<string, string> = { DATABASE: '🗄️', REST_API: '🌐', MCP_SERVER: '🔌', GRAPHQL: '📊', WEBHOOK: '🔗', N8N: '⚡', DIGITALOCEAN: '🌊', SSH: '🖥️', FIRECRAWL: '🔥', CUSTOM: '⚙️' };
                 return (
                   <button
                     key={tool.id}

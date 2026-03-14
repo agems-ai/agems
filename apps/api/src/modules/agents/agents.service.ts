@@ -240,6 +240,59 @@ export class AgentsService {
     return { agent: { id: agent.id, name: agent.name, slug: agent.slug }, parentChain, children: descendants };
   }
 
+  async exportAgents(orgId: string) {
+    const agents = await this.prisma.agent.findMany({
+      where: { orgId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return {
+      version: '1.0.0',
+      exportedAt: new Date().toISOString(),
+      agents: agents.map(({ id, orgId: _org, ownerId: _o, createdAt: _c, ...rest }) => rest),
+    };
+  }
+
+  async importAgents(input: any, userId: string, orgId: string) {
+    const items = Array.isArray(input) ? input : input.agents ?? [input];
+    const results: { created: number; skipped: number; errors: string[] } = { created: 0, skipped: 0, errors: [] };
+
+    for (const item of items) {
+      if (!item.name || !item.slug) {
+        results.errors.push(`Missing name or slug: ${JSON.stringify(item).slice(0, 80)}`);
+        continue;
+      }
+      const existing = await this.prisma.agent.findFirst({ where: { slug: item.slug, orgId } });
+      if (existing) {
+        results.skipped++;
+        continue;
+      }
+      try {
+        await this.prisma.agent.create({
+          data: {
+            name: item.name,
+            slug: item.slug,
+            avatar: item.avatar,
+            type: item.type ?? 'AUTONOMOUS',
+            llmProvider: item.llmProvider ?? 'ANTHROPIC',
+            llmModel: item.llmModel ?? 'claude-sonnet-4-20250514',
+            llmConfig: item.llmConfig ?? {},
+            systemPrompt: item.systemPrompt ?? '',
+            mission: item.mission,
+            values: item.values ?? [],
+            runtimeConfig: item.runtimeConfig ?? {},
+            metadata: item.metadata,
+            orgId,
+            ownerId: userId,
+          },
+        });
+        results.created++;
+      } catch (e: any) {
+        results.errors.push(`Failed to create "${item.name}": ${e.message}`);
+      }
+    }
+    return results;
+  }
+
   async delegate(parentId: string, childId: string, taskInput: any, userId: string, orgId?: string) {
     const parent = await this.findOne(parentId, orgId);
     const task = await this.prisma.task.create({

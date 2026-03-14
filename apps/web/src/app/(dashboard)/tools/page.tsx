@@ -3,9 +3,9 @@
 import { useState, useEffect } from 'react';
 import { api } from '@/lib/api';
 
-const toolTypes = ['REST_API', 'GRAPHQL', 'DATABASE', 'MCP_SERVER', 'WEBHOOK', 'N8N', 'DIGITALOCEAN', 'SSH', 'CUSTOM'];
+const toolTypes = ['REST_API', 'GRAPHQL', 'DATABASE', 'MCP_SERVER', 'WEBHOOK', 'N8N', 'DIGITALOCEAN', 'SSH', 'FIRECRAWL', 'CUSTOM'];
 const authTypes = ['NONE', 'API_KEY', 'BEARER_TOKEN', 'BASIC', 'OAUTH2', 'CUSTOM'];
-const typeIcons: Record<string, string> = { DATABASE: '🗄️', REST_API: '🌐', MCP_SERVER: '🔌', GRAPHQL: '📊', WEBHOOK: '🔗', N8N: '⚡', DIGITALOCEAN: '🌊', SSH: '🖥️', CUSTOM: '⚙️' };
+const typeIcons: Record<string, string> = { DATABASE: '🗄️', REST_API: '🌐', MCP_SERVER: '🔌', GRAPHQL: '📊', WEBHOOK: '🔗', N8N: '⚡', DIGITALOCEAN: '🌊', SSH: '🖥️', FIRECRAWL: '🔥', CUSTOM: '⚙️' };
 
 const emptyForm = { name: '', type: 'REST_API', description: '', config: '{}', authType: 'NONE', authConfig: '{}' };
 
@@ -19,10 +19,38 @@ export default function ToolsPage() {
   const [error, setError] = useState('');
   const [testResults, setTestResults] = useState<Record<string, { ok: boolean; ms?: number }>>({});
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [showCatalog, setShowCatalog] = useState(false);
+  const [catalogItems, setCatalogItems] = useState<any[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogImporting, setCatalogImporting] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadTools = () => {
     api.getTools().then((r: any) => setTools(r.data || [])).finally(() => setLoading(false));
-  }, []);
+  };
+
+  useEffect(() => { loadTools(); }, []);
+
+  const openCatalog = async () => {
+    setShowCatalog(true);
+    setCatalogLoading(true);
+    try {
+      const res = await api.getCatalogTools({ pageSize: '100' });
+      setCatalogItems(res.data || []);
+    } catch { setCatalogItems([]); }
+    setCatalogLoading(false);
+  };
+
+  const handleCatalogImport = async (id: string) => {
+    setCatalogImporting(id);
+    try {
+      await api.importToolFromCatalog(id);
+      alert('Tool imported successfully!');
+      loadTools();
+    } catch (e: any) {
+      alert(e.message || 'Import failed');
+    }
+    setCatalogImporting(null);
+  };
 
   const openCreate = () => {
     setEditingTool(null);
@@ -105,9 +133,40 @@ export default function ToolsPage() {
           <h1 className="text-2xl md:text-3xl font-bold mb-1">Tools</h1>
           <p className="text-[var(--muted)] text-sm">Manage REST APIs, databases, MCP servers, and integrations</p>
         </div>
-        <button onClick={openCreate} className="px-4 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90 text-sm">
-          + New Tool
-        </button>
+        <div className="flex gap-2">
+          <button onClick={async () => {
+            try {
+              const data = await api.exportTools();
+              const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url; a.download = `agems-tools-${new Date().toISOString().slice(0, 10)}.json`;
+              a.click(); URL.revokeObjectURL(url);
+            } catch (e: any) { alert(e.message); }
+          }} className="px-3 py-2 border border-[var(--border)] rounded-lg hover:bg-[var(--hover)] text-sm">
+            Export
+          </button>
+          <label className="px-3 py-2 border border-[var(--border)] rounded-lg hover:bg-[var(--hover)] text-sm cursor-pointer">
+            Import
+            <input type="file" accept=".json" className="hidden" onChange={async (e) => {
+              const file = e.target.files?.[0]; if (!file) return;
+              try {
+                const text = await file.text();
+                const data = JSON.parse(text);
+                const res = await api.importTools(data);
+                alert(`Created: ${res.created}, Skipped: ${res.skipped}${res.errors?.length ? ', Errors: ' + res.errors.join('; ') : ''}`);
+                loadTools();
+              } catch (err: any) { alert(err.message); }
+              e.target.value = '';
+            }} />
+          </label>
+          <button onClick={openCatalog} className="px-3 py-2 border border-[var(--border)] rounded-lg hover:bg-[var(--hover)] text-sm">
+            Catalog
+          </button>
+          <button onClick={openCreate} className="px-4 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90 text-sm">
+            + New Tool
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -184,6 +243,48 @@ export default function ToolsPage() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Catalog modal */}
+      {showCatalog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowCatalog(false)}>
+          <div className="bg-[var(--card)] rounded-xl p-6 w-full max-w-[600px] mx-4 max-h-[75vh] overflow-y-auto border border-[var(--border)]" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold mb-2">Add from Catalog</h3>
+            <p className="text-sm text-[var(--muted)] mb-4">Import tools shared by the community</p>
+
+            {catalogLoading ? (
+              <div className="text-center py-10 text-[var(--muted)]">Loading...</div>
+            ) : catalogItems.length === 0 ? (
+              <div className="text-center py-10 text-[var(--muted)]">No tools in catalog yet</div>
+            ) : (
+              <div className="space-y-2">
+                {catalogItems.map((item: any) => (
+                  <div key={item.id} className="flex items-center justify-between p-3 rounded-lg border border-[var(--border)] hover:border-[var(--accent)]/30">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-lg flex-shrink-0">{typeIcons[item.type] || '⚙️'}</span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{item.name}</p>
+                        <p className="text-xs text-[var(--muted)]">{item.type} | by {item.authorOrg}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleCatalogImport(item.id)}
+                      disabled={catalogImporting === item.id}
+                      className="px-3 py-1.5 bg-[var(--accent)] text-white rounded-lg text-xs font-medium hover:opacity-90 disabled:opacity-50 flex-shrink-0"
+                    >
+                      {catalogImporting === item.id ? 'Importing...' : 'Import'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <button onClick={() => setShowCatalog(false)}
+              className="mt-4 w-full px-4 py-2 border border-[var(--border)] rounded-lg text-sm hover:bg-[var(--border)]/50 transition">
+              Close
+            </button>
+          </div>
         </div>
       )}
 

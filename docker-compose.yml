@@ -35,6 +35,9 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
       API_PORT: 3001
+      WEB_URL: ${WEB_URL:-https://agems.ai}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       NODE_OPTIONS: "--dns-result-order=ipv4first"
     volumes:
       - web_uploads:/app/apps/web/public/uploads
@@ -49,10 +52,10 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ""
     ports:
       - "3000:3000"
-    environment:
-      NEXT_PUBLIC_API_URL: http://localhost:3001
     volumes:
       - web_avatars:/app/apps/web/public/avatars
       - web_uploads:/app/apps/web/public/uploads

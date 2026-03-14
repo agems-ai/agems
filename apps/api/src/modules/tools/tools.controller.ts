@@ -22,6 +22,16 @@ export class ToolsController {
     return this.toolsService.findAllTools(filters, req.user.orgId);
   }
 
+  @Get('tools/export')
+  exportTools(@Request() req: { user: RequestUser }) {
+    return this.toolsService.exportTools(req.user.orgId);
+  }
+
+  @Post('tools/import')
+  importTools(@Body() body: any, @Request() req: { user: RequestUser }) {
+    return this.toolsService.importTools(body, req.user.orgId);
+  }
+
   @Get('tools/:id')
   findOneTool(@Param('id') id: string, @Request() req: { user: RequestUser }) {
     return this.toolsService.findOneTool(id, req.user.orgId);
@@ -52,6 +62,16 @@ export class ToolsController {
   @Get('skills')
   findAllSkills(@Query() filters: any, @Request() req: { user: RequestUser }) {
     return this.skillsService.findAllSkills(filters, req.user.orgId);
+  }
+
+  @Get('skills/export')
+  exportSkills(@Request() req: { user: RequestUser }) {
+    return this.skillsService.exportSkills(req.user.orgId);
+  }
+
+  @Post('skills/import')
+  importSkills(@Body() body: any, @Request() req: { user: RequestUser }) {
+    return this.skillsService.importSkills(body, req.user.orgId);
   }
 
   @Get('skills/:id')

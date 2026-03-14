@@ -33,6 +33,17 @@ export class AgentsController {
     }));
   }
 
+  @Get('export')
+  exportAgents(@Request() req: { user: RequestUser }) {
+    return this.agentsService.exportAgents(req.user.orgId);
+  }
+
+  @Post('import')
+  @Roles('MANAGER')
+  importAgents(@Body() body: any, @Request() req: { user: RequestUser }) {
+    return this.agentsService.importAgents(body, req.user.id, req.user.orgId);
+  }
+
   /** Import an agent from a template into the current org */
   @Post('import-template')
   @Roles('MANAGER')

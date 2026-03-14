@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
-import { Save, Plus, Trash2, Pencil, X } from 'lucide-react';
+import { Save, Plus, Trash2, Pencil, X, Upload, Download, Store } from 'lucide-react';
 
 const skillTypes = ['BUILTIN', 'PLUGIN', 'CUSTOM'];
 
@@ -28,6 +28,76 @@ export default function SkillsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({ name: '', slug: '', description: '' });
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [showCatalog, setShowCatalog] = useState(false);
+  const [catalogItems, setCatalogItems] = useState<any[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogImporting, setCatalogImporting] = useState<string | null>(null);
+
+  const handleExport = async () => {
+    try {
+      const data = await api.exportSkills();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `agems-skills-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      alert(e.message || 'Export failed');
+    }
+  };
+
+  const handleImport = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      setImporting(true);
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        const result = await api.importSkills(data);
+        const msg = [`Imported: ${result.created} skill(s)`];
+        if (result.skipped) msg.push(`Skipped (duplicate): ${result.skipped}`);
+        if (result.errors?.length) msg.push(`Errors: ${result.errors.join('; ')}`);
+        alert(msg.join('\n'));
+        const r = await api.getSkills();
+        setSkills(r.data || r || []);
+      } catch (e: any) {
+        alert(e.message || 'Import failed — invalid JSON');
+      } finally {
+        setImporting(false);
+      }
+    };
+    input.click();
+  };
+
+  const openCatalog = async () => {
+    setShowCatalog(true);
+    setCatalogLoading(true);
+    try {
+      const res = await api.getCatalogSkills({ pageSize: '100' });
+      setCatalogItems(res.data || []);
+    } catch { setCatalogItems([]); }
+    setCatalogLoading(false);
+  };
+
+  const handleCatalogImport = async (id: string) => {
+    setCatalogImporting(id);
+    try {
+      await api.importSkillFromCatalog(id);
+      alert('Skill imported successfully!');
+      const r = await api.getSkills();
+      setSkills(r.data || r || []);
+    } catch (e: any) {
+      alert(e.message || 'Import failed');
+    }
+    setCatalogImporting(null);
+  };
 
   useEffect(() => {
     api.getSkills().then((r: any) => {
@@ -130,9 +200,23 @@ export default function SkillsPage() {
           <h1 className="text-2xl md:text-3xl font-bold mb-1">Skills</h1>
           <p className="text-[var(--muted)] text-sm">Reusable instructions injected into agent system prompts</p>
         </div>
-        <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90 text-sm">
-          + New Skill
-        </button>
+        <div className="flex gap-2">
+          <button onClick={handleImport} disabled={importing}
+            className="flex items-center gap-1.5 px-3 py-2 border border-[var(--border)] rounded-lg hover:bg-[var(--hover)] text-sm disabled:opacity-50">
+            <Upload size={14} /> {importing ? 'Importing...' : 'Import'}
+          </button>
+          <button onClick={handleExport}
+            className="flex items-center gap-1.5 px-3 py-2 border border-[var(--border)] rounded-lg hover:bg-[var(--hover)] text-sm">
+            <Download size={14} /> Export
+          </button>
+          <button onClick={openCatalog}
+            className="flex items-center gap-1.5 px-3 py-2 border border-[var(--border)] rounded-lg hover:bg-[var(--hover)] text-sm">
+            <Store size={14} /> Catalog
+          </button>
+          <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90 text-sm">
+            + New Skill
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -291,6 +375,48 @@ export default function SkillsPage() {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Catalog modal ── */}
+      {showCatalog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowCatalog(false)}>
+          <div className="bg-[var(--card)] rounded-xl p-6 w-full max-w-[600px] mx-4 max-h-[75vh] overflow-y-auto border border-[var(--border)]" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold mb-2">Add from Catalog</h3>
+            <p className="text-sm text-[var(--muted)] mb-4">Import skills shared by the community</p>
+
+            {catalogLoading ? (
+              <div className="text-center py-10 text-[var(--muted)]">Loading...</div>
+            ) : catalogItems.length === 0 ? (
+              <div className="text-center py-10 text-[var(--muted)]">No skills in catalog yet</div>
+            ) : (
+              <div className="space-y-2">
+                {catalogItems.map((item: any) => (
+                  <div key={item.id} className="flex items-center justify-between p-3 rounded-lg border border-[var(--border)] hover:border-[var(--accent)]/30">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-lg flex-shrink-0">{typeIcon[item.type] || '🧠'}</span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{item.name}</p>
+                        <p className="text-xs text-[var(--muted)]">{item.type} | by {item.authorOrg}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleCatalogImport(item.id)}
+                      disabled={catalogImporting === item.id}
+                      className="px-3 py-1.5 bg-[var(--accent)] text-white rounded-lg text-xs font-medium hover:opacity-90 disabled:opacity-50 flex-shrink-0"
+                    >
+                      {catalogImporting === item.id ? 'Importing...' : 'Import'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <button onClick={() => setShowCatalog(false)}
+              className="mt-4 w-full px-4 py-2 border border-[var(--border)] rounded-lg text-sm hover:bg-[var(--border)]/50 transition">
+              Close
+            </button>
           </div>
         </div>
       )}

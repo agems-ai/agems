@@ -66,6 +66,54 @@ export class SkillsService {
     return this.prisma.skill.delete({ where: { id } });
   }
 
+  async exportSkills(orgId?: string) {
+    const skills = await this.prisma.skill.findMany({
+      where: orgId ? { orgId } : {},
+      orderBy: { createdAt: 'desc' },
+    });
+    return {
+      version: '1.0.0',
+      exportedAt: new Date().toISOString(),
+      skills: skills.map(({ id, orgId: _org, createdAt: _c, ...rest }) => rest),
+    };
+  }
+
+  async importSkills(input: any, orgId?: string) {
+    const items = Array.isArray(input) ? input : input.skills ?? [input];
+    const results: { created: number; skipped: number; errors: string[] } = { created: 0, skipped: 0, errors: [] };
+
+    for (const item of items) {
+      if (!item.name || !item.slug) {
+        results.errors.push(`Missing name or slug: ${JSON.stringify(item).slice(0, 80)}`);
+        continue;
+      }
+      const existing = await this.prisma.skill.findFirst({ where: { slug: item.slug, orgId: orgId ?? null } });
+      if (existing) {
+        results.skipped++;
+        continue;
+      }
+      try {
+        await this.prisma.skill.create({
+          data: {
+            name: item.name,
+            slug: item.slug,
+            description: item.description || '',
+            content: item.content ?? '',
+            version: item.version ?? '1.0.0',
+            type: item.type ?? 'CUSTOM',
+            entryPoint: item.entryPoint ?? '',
+            configSchema: item.configSchema,
+            ...(orgId && { orgId }),
+          },
+        });
+        results.created++;
+      } catch (e: any) {
+        results.errors.push(`Failed to create "${item.name}": ${e.message}`);
+      }
+    }
+    return results;
+  }
+
   async assignSkillToAgent(agentId: string, skillId: string, config?: any) {
     return this.prisma.agentSkill.create({
       data: { agentId, skillId, config: config ?? {} },

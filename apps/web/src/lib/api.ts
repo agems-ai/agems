@@ -285,6 +285,14 @@ class ApiClient {
     return this.fetch(`/skills/${id}`, { method: 'DELETE' });
   }
 
+  exportSkills() {
+    return this.fetch<any>('/skills/export');
+  }
+
+  importSkills(data: any) {
+    return this.fetch<any>('/skills/import', { method: 'POST', body: JSON.stringify(data) });
+  }
+
   assignSkillToAgent(agentId: string, skillId: string, config?: any) {
     return this.fetch(`/agents/${agentId}/skills`, { method: 'POST', body: JSON.stringify({ skillId, config }) });
   }
@@ -841,6 +849,88 @@ class ApiClient {
       body: JSON.stringify({ preset }),
     });
   }
+  // Agents export/import
+  exportAgents() {
+    return this.fetch<any>('/agents/export');
+  }
+
+  importAgents(data: any) {
+    return this.fetch<any>('/agents/import', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  // Tools export/import
+  exportTools() {
+    return this.fetch<any>('/tools/export');
+  }
+
+  importTools(data: any) {
+    return this.fetch<any>('/tools/import', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  // Catalog / Marketplace
+  getCatalogAgents(params?: Record<string, string>) {
+    const query = params ? '?' + new URLSearchParams(params).toString() : '';
+    return this.fetch<any>(`/catalog/agents${query}`);
+  }
+
+  getCatalogSkills(params?: Record<string, string>) {
+    const query = params ? '?' + new URLSearchParams(params).toString() : '';
+    return this.fetch<any>(`/catalog/skills${query}`);
+  }
+
+  getCatalogTools(params?: Record<string, string>) {
+    const query = params ? '?' + new URLSearchParams(params).toString() : '';
+    return this.fetch<any>(`/catalog/tools${query}`);
+  }
+
+  getCatalogAgent(id: string) {
+    return this.fetch<any>(`/catalog/agents/${id}`);
+  }
+
+  getCatalogSkill(id: string) {
+    return this.fetch<any>(`/catalog/skills/${id}`);
+  }
+
+  getCatalogTool(id: string) {
+    return this.fetch<any>(`/catalog/tools/${id}`);
+  }
+
+  publishAgentToCatalog(data: any) {
+    return this.fetch<any>('/catalog/agents/publish', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  publishSkillToCatalog(data: any) {
+    return this.fetch<any>('/catalog/skills/publish', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  publishToolToCatalog(data: any) {
+    return this.fetch<any>('/catalog/tools/publish', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  importAgentFromCatalog(id: string) {
+    return this.fetch<any>(`/catalog/agents/${id}/import`, { method: 'POST' });
+  }
+
+  importSkillFromCatalog(id: string) {
+    return this.fetch<any>(`/catalog/skills/${id}/import`, { method: 'POST' });
+  }
+
+  importToolFromCatalog(id: string) {
+    return this.fetch<any>(`/catalog/tools/${id}/import`, { method: 'POST' });
+  }
+
+  deleteCatalogAgent(id: string) {
+    return this.fetch(`/catalog/agents/${id}`, { method: 'DELETE' });
+  }
+
+  deleteCatalogSkill(id: string) {
+    return this.fetch(`/catalog/skills/${id}`, { method: 'DELETE' });
+  }
+
+  deleteCatalogTool(id: string) {
+    return this.fetch(`/catalog/tools/${id}`, { method: 'DELETE' });
+  }
+
   // Admin
   getAdminStats() {
     return this.fetch<any>('/admin/stats');
