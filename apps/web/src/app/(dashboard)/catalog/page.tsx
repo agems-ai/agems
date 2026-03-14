@@ -2,16 +2,19 @@
 
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
+import { X, Download, Cpu, Wrench, Sparkles, Tag, User, ChevronRight } from 'lucide-react';
 
 type Tab = 'agents' | 'skills' | 'tools';
 
-function AgentAvatar({ avatar, type, size = 'text-xl' }: { avatar?: string; type?: string; size?: string }) {
+function AgentAvatar({ avatar, type, size = 'md' }: { avatar?: string; type?: string; size?: 'sm' | 'md' | 'lg' }) {
+  const dims = size === 'lg' ? 'w-12 h-12' : size === 'md' ? 'w-8 h-8' : 'w-6 h-6';
+  const textSize = size === 'lg' ? 'text-3xl' : size === 'md' ? 'text-xl' : 'text-base';
   if (avatar && avatar.startsWith('/')) {
-    return <img src={avatar} alt="" className={`${size === 'text-xl' ? 'w-7 h-7' : 'w-6 h-6'} rounded-full object-cover`} />;
+    return <img src={avatar} alt="" className={`${dims} rounded-full object-cover`} />;
   }
-  if (avatar && !avatar.startsWith('/')) return <span className={size}>{avatar}</span>;
+  if (avatar && !avatar.startsWith('/')) return <span className={textSize}>{avatar}</span>;
   const icons: Record<string, string> = { AUTONOMOUS: '🤖', ASSISTANT: '💬', META: '🧠', REACTIVE: '⚡' };
-  return <span className={size}>{icons[type || ''] || '🤖'}</span>;
+  return <span className={textSize}>{icons[type || ''] || '🤖'}</span>;
 }
 
 const typeIcons: Record<string, string> = {
@@ -22,6 +25,14 @@ const typeIcons: Record<string, string> = {
   WEBSOCKET: '📡', GRPC: '🔧', S3_STORAGE: '📁',
 };
 
+const typeLabels: Record<string, string> = {
+  AUTONOMOUS: 'Autonomous', ASSISTANT: 'Assistant', META: 'Meta Agent', REACTIVE: 'Reactive',
+  BUILTIN: 'Built-in', PLUGIN: 'Plugin', CUSTOM: 'Custom',
+  DATABASE: 'Database', REST_API: 'REST API', MCP_SERVER: 'MCP Server', GRAPHQL: 'GraphQL',
+  WEBHOOK: 'Webhook', N8N: 'n8n', DIGITALOCEAN: 'DigitalOcean', SSH: 'SSH', FIRECRAWL: 'Firecrawl',
+  WEBSOCKET: 'WebSocket', GRPC: 'gRPC', S3_STORAGE: 'S3 Storage',
+};
+
 export default function CatalogPage() {
   const [tab, setTab] = useState<Tab>('agents');
   const [items, setItems] = useState<any[]>([]);
@@ -29,6 +40,8 @@ export default function CatalogPage() {
   const [search, setSearch] = useState('');
   const [importing, setImporting] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [selectedItem, setSelectedItem] = useState<any | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   // Publish modal
   const [showPublish, setShowPublish] = useState(false);
@@ -56,6 +69,20 @@ export default function CatalogPage() {
 
   useEffect(() => { loadCatalog(); }, [tab, search]);
 
+  const openDetail = async (item: any) => {
+    setSelectedItem(item);
+    setDetailLoading(true);
+    try {
+      const full = tab === 'agents'
+        ? await api.getCatalogAgent(item.id)
+        : tab === 'skills'
+          ? await api.getCatalogSkill(item.id)
+          : await api.getCatalogTool(item.id);
+      setSelectedItem(full);
+    } catch { /* keep the list item data */ }
+    setDetailLoading(false);
+  };
+
   const handleImport = async (id: string) => {
     setImporting(id);
     setMessage(null);
@@ -77,6 +104,7 @@ export default function CatalogPage() {
       if (tab === 'agents') await api.deleteCatalogAgent(id);
       else if (tab === 'skills') await api.deleteCatalogSkill(id);
       else await api.deleteCatalogTool(id);
+      setSelectedItem(null);
       loadCatalog();
     } catch (e: any) {
       setMessage({ type: 'error', text: e.message || 'Delete failed' });
@@ -111,49 +139,28 @@ export default function CatalogPage() {
     setPublishing(item.id);
     try {
       if (publishTab === 'agents') {
-        // Fetch full agent data with skills/tools
         const fullAgent = await api.getAgent(item.id);
         const skillSlugs = (fullAgent.skills || []).map((s: any) => s.skill?.slug).filter(Boolean);
         const toolSlugs = (fullAgent.tools || []).map((t: any) => t.tool?.name).filter(Boolean);
-
         await api.publishAgentToCatalog({
-          slug: fullAgent.slug,
-          name: fullAgent.name,
-          avatar: fullAgent.avatar,
-          type: fullAgent.type,
-          description: fullAgent.mission || fullAgent.name,
-          systemPrompt: fullAgent.systemPrompt,
-          mission: fullAgent.mission,
-          llmProvider: fullAgent.llmProvider,
-          llmModel: fullAgent.llmModel,
-          llmConfig: fullAgent.llmConfig,
-          runtimeConfig: fullAgent.runtimeConfig,
-          values: fullAgent.values,
-          metadata: fullAgent.metadata,
-          tags: [],
-          skillSlugs,
-          toolSlugs,
+          slug: fullAgent.slug, name: fullAgent.name, avatar: fullAgent.avatar,
+          type: fullAgent.type, description: fullAgent.mission || fullAgent.name,
+          systemPrompt: fullAgent.systemPrompt, mission: fullAgent.mission,
+          llmProvider: fullAgent.llmProvider, llmModel: fullAgent.llmModel,
+          llmConfig: fullAgent.llmConfig, runtimeConfig: fullAgent.runtimeConfig,
+          values: fullAgent.values, metadata: fullAgent.metadata,
+          tags: [], skillSlugs, toolSlugs,
         });
       } else if (publishTab === 'skills') {
         await api.publishSkillToCatalog({
-          slug: item.slug,
-          name: item.name,
-          description: item.description,
-          content: item.content,
-          version: item.version,
-          type: item.type,
-          entryPoint: item.entryPoint,
-          configSchema: item.configSchema,
-          tags: [],
+          slug: item.slug, name: item.name, description: item.description,
+          content: item.content, version: item.version, type: item.type,
+          entryPoint: item.entryPoint, configSchema: item.configSchema, tags: [],
         });
       } else {
         await api.publishToolToCatalog({
-          name: item.name,
-          description: (item.config as any)?.description || item.name,
-          type: item.type,
-          configTemplate: item.config,
-          authType: item.authType,
-          tags: [],
+          name: item.name, description: (item.config as any)?.description || item.name,
+          type: item.type, configTemplate: item.config, authType: item.authType, tags: [],
         });
       }
       setMessage({ type: 'success', text: `Published "${item.name}" to catalog` });
@@ -239,9 +246,13 @@ export default function CatalogPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {items.map((item: any) => (
-            <div key={item.id} className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5 hover:border-[var(--accent)]/30 transition">
-              <div className="flex items-start justify-between mb-3">
-                <div className="flex items-center gap-2">
+            <div
+              key={item.id}
+              onClick={() => openDetail(item)}
+              className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5 hover:border-[var(--accent)]/30 transition cursor-pointer group"
+            >
+              <div className="flex items-start justify-between mb-2">
+                <div className="flex items-center gap-2.5">
                   {tab === 'agents'
                     ? <AgentAvatar avatar={item.avatar} type={item.type} />
                     : <span className="text-xl">{typeIcons[item.type] || '📦'}</span>}
@@ -250,14 +261,37 @@ export default function CatalogPage() {
                     <p className="text-xs text-[var(--muted)]">{item.slug}</p>
                   </div>
                 </div>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--accent)]/10 text-[var(--accent)]">
-                  {item.type}
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--accent)]/10 text-[var(--accent)]">
+                    {typeLabels[item.type] || item.type}
+                  </span>
+                  <ChevronRight size={14} className="text-[var(--muted)] opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
               </div>
 
               <p className="text-sm text-[var(--muted)] mb-3 line-clamp-2">
                 {item.description || item.mission || ''}
               </p>
+
+              {/* Agent-specific info */}
+              {tab === 'agents' && (item.llmProvider || item.llmModel) && (
+                <div className="flex items-center gap-1.5 text-xs text-[var(--muted)] mb-2">
+                  <Cpu size={11} />
+                  <span>{item.llmProvider}{item.llmModel ? ` / ${item.llmModel}` : ''}</span>
+                </div>
+              )}
+
+              {/* Tools/Skills counts for agents */}
+              {tab === 'agents' && (item.toolSlugs?.length > 0 || item.skillSlugs?.length > 0) && (
+                <div className="flex items-center gap-3 text-xs text-[var(--muted)] mb-2">
+                  {item.toolSlugs?.length > 0 && (
+                    <span className="flex items-center gap-1"><Wrench size={11} /> {item.toolSlugs.length} tools</span>
+                  )}
+                  {item.skillSlugs?.length > 0 && (
+                    <span className="flex items-center gap-1"><Sparkles size={11} /> {item.skillSlugs.length} skills</span>
+                  )}
+                </div>
+              )}
 
               {item.tags?.length > 0 && (
                 <div className="flex flex-wrap gap-1 mb-3">
@@ -266,33 +300,182 @@ export default function CatalogPage() {
                       {tag}
                     </span>
                   ))}
+                  {item.tags.length > 4 && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--border)] text-[var(--muted)]">
+                      +{item.tags.length - 4}
+                    </span>
+                  )}
                 </div>
               )}
 
-              <div className="flex items-center justify-between text-xs text-[var(--muted)] mb-3">
-                <span>by {item.authorOrg}</span>
-                <span>{item.downloads || 0} imports</span>
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleImport(item.id)}
-                  disabled={importing === item.id}
-                  className="flex-1 px-3 py-2 bg-[var(--accent)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 transition"
-                >
-                  {importing === item.id ? 'Importing...' : 'Import'}
-                </button>
-                {user?.role === 'ADMIN' && (
-                  <button
-                    onClick={() => handleDelete(item.id)}
-                    className="px-3 py-2 text-red-500 border border-red-500/20 rounded-lg text-sm hover:bg-red-500/10 transition"
-                  >
-                    Delete
-                  </button>
-                )}
+              <div className="flex items-center justify-between text-xs text-[var(--muted)] pt-2 border-t border-[var(--border)]">
+                <span className="flex items-center gap-1"><User size={11} /> {item.authorOrg}</span>
+                <span className="flex items-center gap-1"><Download size={11} /> {item.downloads || 0} imports</span>
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Detail Modal */}
+      {selectedItem && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setSelectedItem(null)}>
+          <div
+            className="bg-[var(--card)] rounded-xl w-full max-w-[640px] mx-4 max-h-[85vh] overflow-y-auto border border-[var(--border)]"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="sticky top-0 bg-[var(--card)] border-b border-[var(--border)] p-5 flex items-start justify-between z-10">
+              <div className="flex items-center gap-3">
+                {tab === 'agents'
+                  ? <AgentAvatar avatar={selectedItem.avatar} type={selectedItem.type} size="lg" />
+                  : <span className="text-3xl">{typeIcons[selectedItem.type] || '📦'}</span>}
+                <div>
+                  <h2 className="text-lg font-bold">{selectedItem.name}</h2>
+                  <p className="text-sm text-[var(--muted)]">{selectedItem.slug}</p>
+                </div>
+              </div>
+              <button onClick={() => setSelectedItem(null)} className="p-1 rounded-lg hover:bg-[var(--border)]/50">
+                <X size={18} />
+              </button>
+            </div>
+
+            {detailLoading ? (
+              <div className="p-8 text-center text-[var(--muted)]">Loading details...</div>
+            ) : (
+              <div className="p-5 space-y-5">
+                {/* Type & Meta */}
+                <div className="flex flex-wrap gap-2">
+                  <span className="text-xs px-2.5 py-1 rounded-full bg-[var(--accent)]/10 text-[var(--accent)] font-medium">
+                    {typeLabels[selectedItem.type] || selectedItem.type}
+                  </span>
+                  {tab === 'agents' && selectedItem.llmProvider && (
+                    <span className="text-xs px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-400 font-medium flex items-center gap-1">
+                      <Cpu size={11} /> {selectedItem.llmProvider} / {selectedItem.llmModel || '—'}
+                    </span>
+                  )}
+                  {tab === 'tools' && selectedItem.authType && selectedItem.authType !== 'NONE' && (
+                    <span className="text-xs px-2.5 py-1 rounded-full bg-yellow-500/10 text-yellow-400 font-medium">
+                      Auth: {selectedItem.authType}
+                    </span>
+                  )}
+                </div>
+
+                {/* Description */}
+                {(selectedItem.description || selectedItem.mission) && (
+                  <div>
+                    <h4 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-1.5">Description</h4>
+                    <p className="text-sm leading-relaxed">{selectedItem.description || selectedItem.mission}</p>
+                  </div>
+                )}
+
+                {/* System Prompt (agents only) */}
+                {tab === 'agents' && selectedItem.systemPrompt && (
+                  <div>
+                    <h4 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-1.5">System Prompt</h4>
+                    <pre className="text-xs bg-[var(--background)] rounded-lg p-3 whitespace-pre-wrap max-h-48 overflow-y-auto border border-[var(--border)] leading-relaxed">
+                      {selectedItem.systemPrompt}
+                    </pre>
+                  </div>
+                )}
+
+                {/* Tools & Skills (agents only) */}
+                {tab === 'agents' && (selectedItem.toolSlugs?.length > 0 || selectedItem.skillSlugs?.length > 0) && (
+                  <div className="grid grid-cols-2 gap-4">
+                    {selectedItem.toolSlugs?.length > 0 && (
+                      <div>
+                        <h4 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                          <Wrench size={11} /> Tools ({selectedItem.toolSlugs.length})
+                        </h4>
+                        <div className="space-y-1">
+                          {selectedItem.toolSlugs.map((slug: string) => (
+                            <div key={slug} className="text-xs px-2 py-1 rounded bg-[var(--background)] border border-[var(--border)]">
+                              {slug}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {selectedItem.skillSlugs?.length > 0 && (
+                      <div>
+                        <h4 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                          <Sparkles size={11} /> Skills ({selectedItem.skillSlugs.length})
+                        </h4>
+                        <div className="space-y-1">
+                          {selectedItem.skillSlugs.map((slug: string) => (
+                            <div key={slug} className="text-xs px-2 py-1 rounded bg-[var(--background)] border border-[var(--border)]">
+                              {slug}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Config Template (tools only) */}
+                {tab === 'tools' && selectedItem.configTemplate && Object.keys(selectedItem.configTemplate).length > 0 && (
+                  <div>
+                    <h4 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-1.5">Configuration</h4>
+                    <pre className="text-xs bg-[var(--background)] rounded-lg p-3 whitespace-pre-wrap max-h-48 overflow-y-auto border border-[var(--border)] leading-relaxed">
+                      {JSON.stringify(selectedItem.configTemplate, null, 2)}
+                    </pre>
+                  </div>
+                )}
+
+                {/* Content (skills only) */}
+                {tab === 'skills' && selectedItem.content && (
+                  <div>
+                    <h4 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-1.5">Content</h4>
+                    <pre className="text-xs bg-[var(--background)] rounded-lg p-3 whitespace-pre-wrap max-h-48 overflow-y-auto border border-[var(--border)] leading-relaxed">
+                      {selectedItem.content}
+                    </pre>
+                  </div>
+                )}
+
+                {/* Tags */}
+                {selectedItem.tags?.length > 0 && (
+                  <div>
+                    <h4 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                      <Tag size={11} /> Tags
+                    </h4>
+                    <div className="flex flex-wrap gap-1.5">
+                      {selectedItem.tags.map((tag: string) => (
+                        <span key={tag} className="text-xs px-2.5 py-1 rounded-full bg-[var(--border)] text-[var(--muted)]">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Author & Stats */}
+                <div className="flex items-center justify-between text-sm text-[var(--muted)] pt-3 border-t border-[var(--border)]">
+                  <span className="flex items-center gap-1.5"><User size={13} /> {selectedItem.authorOrg}</span>
+                  <span className="flex items-center gap-1.5"><Download size={13} /> {selectedItem.downloads || 0} imports</span>
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-2 pt-1">
+                  <button
+                    onClick={() => handleImport(selectedItem.id)}
+                    disabled={importing === selectedItem.id}
+                    className="flex-1 px-4 py-2.5 bg-[var(--accent)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 transition"
+                  >
+                    {importing === selectedItem.id ? 'Importing...' : 'Import to My Workspace'}
+                  </button>
+                  {user?.role === 'ADMIN' && (
+                    <button
+                      onClick={() => handleDelete(selectedItem.id)}
+                      className="px-4 py-2.5 text-red-500 border border-red-500/20 rounded-lg text-sm hover:bg-red-500/10 transition"
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -305,7 +488,6 @@ export default function CatalogPage() {
               Select a {publishTab.slice(0, -1)} from your organization to share with the community
             </p>
 
-            {/* Publish type tabs */}
             <div className="flex gap-1 mb-4 bg-[var(--background)] rounded-lg p-1 w-fit">
               {tabs.map(t => (
                 <button
@@ -331,7 +513,7 @@ export default function CatalogPage() {
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="flex-shrink-0">
                         {publishTab === 'agents'
-                          ? <AgentAvatar avatar={item.avatar} type={item.type} size="text-lg" />
+                          ? <AgentAvatar avatar={item.avatar} type={item.type} size="sm" />
                           : <span className="text-lg">{typeIcons[item.type] || '📦'}</span>}
                       </span>
                       <div className="min-w-0">
