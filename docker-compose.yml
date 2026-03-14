@@ -38,6 +38,7 @@ services:
       WEB_URL: ${WEB_URL:-https://agems.ai}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      CATALOG_API_URL: ${CATALOG_API_URL:-https://agems.ai}
       NODE_OPTIONS: "--dns-result-order=ipv4first"
     volumes:
       - web_uploads:/app/apps/web/public/uploads

@@ -8,7 +8,18 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api');
   app.enableCors({
-    origin: process.env.WEB_URL || 'http://localhost:3000',
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const allowed = [
+        process.env.WEB_URL || 'http://localhost:3000',
+        'https://agems.ai',
+        'https://open.agems.ai',
+      ];
+      if (allowed.includes(origin) || origin.endsWith('.agems.ai')) {
+        return callback(null, true);
+      }
+      callback(null, false);
+    },
     credentials: true,
   });
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
