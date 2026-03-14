@@ -12,8 +12,12 @@ export class CommsController {
   constructor(private commsService: CommsService) {}
 
   @Post()
-  create(@Body() body: CreateChannelInput, @Req() req: { user: RequestUser }) {
-    return this.commsService.createChannel(body, 'HUMAN', req.user.id, req.user.orgId);
+  create(@Body() body: any, @Req() req: { user: RequestUser }) {
+    // Support shorthand { targetType, targetId } from ChatPanel auto-create
+    if (!body.participantIds && body.targetType && body.targetId) {
+      body.participantIds = [{ type: body.targetType, id: body.targetId }];
+    }
+    return this.commsService.createChannel(body as CreateChannelInput, 'HUMAN', req.user.id, req.user.orgId);
   }
 
   @Get()
