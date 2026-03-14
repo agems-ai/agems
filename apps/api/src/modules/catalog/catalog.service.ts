@@ -59,7 +59,23 @@ export class CatalogService {
     if (this.isRemote) return this.fetchRemote(`/agents/${id}`);
     const item = await this.prisma.catalogAgent.findUnique({ where: { id } });
     if (!item) throw new NotFoundException('Catalog agent not found');
-    return item;
+
+    // Resolve linked skills and tools by slugs
+    let linkedSkills: any[] = [];
+    let linkedTools: any[] = [];
+    if (item.skillSlugs?.length) {
+      linkedSkills = await this.prisma.catalogSkill.findMany({
+        where: { slug: { in: item.skillSlugs } },
+        select: { id: true, slug: true, name: true, description: true, type: true, version: true },
+      });
+    }
+    if (item.toolSlugs?.length) {
+      linkedTools = await this.prisma.catalogTool.findMany({
+        where: { slug: { in: item.toolSlugs } },
+        select: { id: true, slug: true, name: true, description: true, type: true, authType: true },
+      });
+    }
+    return { ...item, linkedSkills, linkedTools };
   }
 
   async publishAgent(input: any, orgName: string, email?: string) {

@@ -379,37 +379,65 @@ export default function CatalogPage() {
                   </div>
                 )}
 
-                {/* Tools & Skills (agents only) */}
-                {tab === 'agents' && (selectedItem.toolSlugs?.length > 0 || selectedItem.skillSlugs?.length > 0) && (
-                  <div className="grid grid-cols-2 gap-4">
-                    {selectedItem.toolSlugs?.length > 0 && (
-                      <div>
-                        <h4 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                          <Wrench size={11} /> Tools ({selectedItem.toolSlugs.length})
-                        </h4>
-                        <div className="space-y-1">
-                          {selectedItem.toolSlugs.map((slug: string) => (
-                            <div key={slug} className="text-xs px-2 py-1 rounded bg-[var(--background)] border border-[var(--border)]">
-                              {slug}
+                {/* Tools (agents only) */}
+                {tab === 'agents' && (selectedItem.linkedTools?.length > 0 || selectedItem.toolSlugs?.length > 0) && (
+                  <div>
+                    <h4 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-2 flex items-center gap-1">
+                      <Wrench size={11} /> Tools ({selectedItem.linkedTools?.length || selectedItem.toolSlugs?.length})
+                    </h4>
+                    <div className="space-y-2">
+                      {(selectedItem.linkedTools?.length > 0 ? selectedItem.linkedTools : selectedItem.toolSlugs?.map((s: string) => ({ slug: s, name: s }))).map((tool: any) => (
+                        <div key={tool.slug || tool.id} className="flex items-start gap-2.5 p-3 rounded-lg bg-[var(--background)] border border-[var(--border)]">
+                          <span className="text-base flex-shrink-0">{typeIcons[tool.type] || '🔧'}</span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium">{tool.name}</span>
+                              {tool.type && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--accent)]/10 text-[var(--accent)]">
+                                  {typeLabels[tool.type] || tool.type}
+                                </span>
+                              )}
+                              {tool.authType && tool.authType !== 'NONE' && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-400">
+                                  {tool.authType}
+                                </span>
+                              )}
                             </div>
-                          ))}
+                            {tool.description && <p className="text-xs text-[var(--muted)] mt-0.5 line-clamp-2">{tool.description}</p>}
+                          </div>
                         </div>
-                      </div>
-                    )}
-                    {selectedItem.skillSlugs?.length > 0 && (
-                      <div>
-                        <h4 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                          <Sparkles size={11} /> Skills ({selectedItem.skillSlugs.length})
-                        </h4>
-                        <div className="space-y-1">
-                          {selectedItem.skillSlugs.map((slug: string) => (
-                            <div key={slug} className="text-xs px-2 py-1 rounded bg-[var(--background)] border border-[var(--border)]">
-                              {slug}
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Skills (agents only) */}
+                {tab === 'agents' && (selectedItem.linkedSkills?.length > 0 || selectedItem.skillSlugs?.length > 0) && (
+                  <div>
+                    <h4 className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider mb-2 flex items-center gap-1">
+                      <Sparkles size={11} /> Skills ({selectedItem.linkedSkills?.length || selectedItem.skillSlugs?.length})
+                    </h4>
+                    <div className="space-y-2">
+                      {(selectedItem.linkedSkills?.length > 0 ? selectedItem.linkedSkills : selectedItem.skillSlugs?.map((s: string) => ({ slug: s, name: s }))).map((skill: any) => (
+                        <div key={skill.slug || skill.id} className="flex items-start gap-2.5 p-3 rounded-lg bg-[var(--background)] border border-[var(--border)]">
+                          <span className="text-base flex-shrink-0">{skill.type === 'BUILTIN' ? '📦' : skill.type === 'PLUGIN' ? '🔌' : '✨'}</span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium">{skill.name}</span>
+                              {skill.type && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400">
+                                  {skill.type}
+                                </span>
+                              )}
+                              {skill.version && (
+                                <span className="text-[10px] text-[var(--muted)]">v{skill.version}</span>
+                              )}
                             </div>
-                          ))}
+                            {skill.description && <p className="text-xs text-[var(--muted)] mt-0.5 line-clamp-2">{skill.description}</p>}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      ))}
+                    </div>
                   </div>
                 )}
 
