@@ -218,7 +218,11 @@ export class SettingsController {
       return { ok: false, error: 'Docker socket not mounted. Add "/var/run/docker.sock" volume to docker-compose.' };
     }
     try {
-      const pullLog = execSync('git pull origin main 2>&1', { cwd: HOST_REPO, timeout: 60000 }).toString().trim();
+      const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: HOST_REPO }).toString().trim();
+      // Stash local changes (e.g. custom docker-compose ports), pull, then restore
+      execSync('git stash 2>&1', { cwd: HOST_REPO, timeout: 10000 });
+      const pullLog = execSync(`git pull origin ${branch} 2>&1`, { cwd: HOST_REPO, timeout: 60000 }).toString().trim();
+      execSync('git stash pop 2>&1 || true', { cwd: HOST_REPO, timeout: 10000 });
       // Rebuild containers in background (this will replace the current container)
       const child = require('child_process').spawn(
         'docker', ['compose', 'up', '-d', '--build', 'api', 'web'],
