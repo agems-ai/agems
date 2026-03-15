@@ -1,11 +1,14 @@
 import { Controller, Get, Patch, Post, Delete, Body, Param, UseInterceptors, UploadedFile, Request } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { writeFileSync, mkdirSync } from 'fs';
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
 import { extname, join } from 'path';
+import { execSync } from 'child_process';
 import { SettingsService } from './settings.service';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { RequestUser } from '../../common/types';
+
+const HOST_REPO = '/app/host-repo';
 
 @Controller('settings')
 export class SettingsController {
@@ -160,6 +163,72 @@ export class SettingsController {
   @Roles('ADMIN')
   resetSystemPrompt(@Body() body: { key: string }, @Request() req: { user: RequestUser }) {
     return this.settingsService.resetSystemPromptToDefault(body.key, req.user.orgId);
+  }
+
+  // ── System Update ──
+
+  @Get('system/version')
+  getSystemVersion() {
+    const hasRepo = existsSync(join(HOST_REPO, '.git'));
+    if (!hasRepo) {
+      // Fall back to package.json version
+      try {
+        const pkg = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf-8'));
+        return { version: pkg.version || '0.0.0', commit: null, date: null, updateAvailable: false, canAutoUpdate: false };
+      } catch {
+        return { version: '0.0.0', commit: null, date: null, updateAvailable: false, canAutoUpdate: false };
+      }
+    }
+    try {
+      const commit = execSync('git rev-parse --short HEAD', { cwd: HOST_REPO }).toString().trim();
+      const date = execSync('git log -1 --format=%ci', { cwd: HOST_REPO }).toString().trim();
+      const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: HOST_REPO }).toString().trim();
+      // Check for updates
+      execSync('git fetch origin --quiet', { cwd: HOST_REPO, timeout: 15000 });
+      const behind = execSync(`git rev-list HEAD..origin/${branch} --count`, { cwd: HOST_REPO }).toString().trim();
+      const remoteCommit = execSync(`git rev-parse --short origin/${branch}`, { cwd: HOST_REPO }).toString().trim();
+      const remoteLog = parseInt(behind) > 0
+        ? execSync(`git log HEAD..origin/${branch} --oneline --no-decorate`, { cwd: HOST_REPO }).toString().trim()
+        : '';
+      return {
+        version: commit,
+        commit,
+        date,
+        branch,
+        updateAvailable: parseInt(behind) > 0,
+        commitsBehind: parseInt(behind),
+        remoteCommit,
+        remoteLog: remoteLog || null,
+        canAutoUpdate: true,
+      };
+    } catch (e: any) {
+      return { version: '?', commit: null, date: null, updateAvailable: false, canAutoUpdate: false, error: e.message };
+    }
+  }
+
+  @Post('system/update')
+  @Roles('ADMIN')
+  async triggerSystemUpdate() {
+    const hasRepo = existsSync(join(HOST_REPO, '.git'));
+    if (!hasRepo) {
+      return { ok: false, error: 'Host repo not mounted. Add ".:/app/host-repo:rw" volume to docker-compose.' };
+    }
+    const hasDocker = existsSync('/var/run/docker.sock');
+    if (!hasDocker) {
+      return { ok: false, error: 'Docker socket not mounted. Add "/var/run/docker.sock" volume to docker-compose.' };
+    }
+    try {
+      const pullLog = execSync('git pull origin main 2>&1', { cwd: HOST_REPO, timeout: 60000 }).toString().trim();
+      // Rebuild containers in background (this will replace the current container)
+      const child = require('child_process').spawn(
+        'docker', ['compose', 'up', '-d', '--build', 'api', 'web'],
+        { cwd: HOST_REPO, detached: true, stdio: 'ignore' },
+      );
+      child.unref();
+      return { ok: true, pullLog, message: 'Update started. Containers are rebuilding — page will reload in ~30 seconds.' };
+    } catch (e: any) {
+      return { ok: false, error: e.message, output: e.stdout?.toString() || e.stderr?.toString() };
+    }
   }
 
 }

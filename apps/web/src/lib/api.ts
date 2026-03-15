@@ -931,6 +931,15 @@ class ApiClient {
     return this.fetch(`/catalog/tools/${id}`, { method: 'DELETE' });
   }
 
+  // System Update
+  getSystemVersion() {
+    return this.fetch<any>('/settings/system/version');
+  }
+
+  triggerSystemUpdate() {
+    return this.fetch<any>('/settings/system/update', { method: 'POST' });
+  }
+
   // Admin
   getAdminStats() {
     return this.fetch<any>('/admin/stats');

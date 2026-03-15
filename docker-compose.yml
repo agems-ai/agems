@@ -43,6 +43,8 @@ services:
     volumes:
       - web_uploads:/app/apps/web/public/uploads
       - web_avatars:/app/apps/web/public/avatars
+      - .:/app/host-repo:rw
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy

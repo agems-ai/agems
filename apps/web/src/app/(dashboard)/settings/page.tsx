@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 
 export default function SettingsPage() {
-  const [tab, setTab] = useState<'llm' | 'platform' | 'n8n' | 'tasks' | 'prompts'>('llm');
+  const [tab, setTab] = useState<'llm' | 'platform' | 'n8n' | 'tasks' | 'prompts' | 'system'>('llm');
 
   // LLM Keys
   const [llmKeys, setLlmKeys] = useState<Record<string, { set: boolean; masked: string }>>({});
@@ -47,6 +47,12 @@ export default function SettingsPage() {
   const [n8nSaved, setN8nSaved] = useState(false);
   const [n8nTest, setN8nTest] = useState<{ ok?: boolean; error?: string; workflowCount?: number } | null>(null);
   const [testingN8n, setTestingN8n] = useState(false);
+
+  // System Update
+  const [versionInfo, setVersionInfo] = useState<any>(null);
+  const [checkingVersion, setCheckingVersion] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [updateResult, setUpdateResult] = useState<any>(null);
 
   useEffect(() => {
     api.getLlmKeys().then(setLlmKeys).catch(() => {});
@@ -127,6 +133,7 @@ export default function SettingsPage() {
           { key: 'tasks', label: 'Task Agents' },
           { key: 'prompts', label: 'System Prompts' },
           { key: 'n8n', label: 'N8N' },
+          { key: 'system', label: 'System' },
         ].map((t) => (
           <button key={t.key} onClick={() => setTab(t.key as any)}
             className={`px-4 py-2 rounded-md text-sm font-medium transition ${tab === t.key ? 'bg-[var(--accent)] text-white' : 'hover:bg-[var(--hover)]'}`}>
@@ -514,6 +521,157 @@ export default function SettingsPage() {
 
             {promptsSaved && <span className="text-green-500 text-sm">Saved!</span>}
           </div>
+        </div>
+      )}
+
+      {tab === 'system' && (
+        <div className="space-y-4">
+          <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-semibold">System Version</h3>
+                <p className="text-xs text-[var(--muted)]">Check for updates and update from GitHub</p>
+              </div>
+              <button
+                onClick={async () => {
+                  setCheckingVersion(true);
+                  try {
+                    const info = await api.getSystemVersion();
+                    setVersionInfo(info);
+                  } catch (e: any) {
+                    setVersionInfo({ error: e.message });
+                  }
+                  setCheckingVersion(false);
+                }}
+                disabled={checkingVersion}
+                className="px-4 py-2 border border-[var(--border)] rounded-lg hover:bg-[var(--hover)] disabled:opacity-50 text-sm"
+              >
+                {checkingVersion ? 'Checking...' : 'Check for Updates'}
+              </button>
+            </div>
+
+            {versionInfo && !versionInfo.error && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-3 rounded-lg bg-[var(--bg)] border border-[var(--border)]">
+                    <div className="text-xs text-[var(--muted)] mb-1">Current Version</div>
+                    <div className="font-mono text-sm">{versionInfo.commit || versionInfo.version}</div>
+                    {versionInfo.date && <div className="text-xs text-[var(--muted)] mt-0.5">{new Date(versionInfo.date).toLocaleString()}</div>}
+                  </div>
+                  <div className="p-3 rounded-lg bg-[var(--bg)] border border-[var(--border)]">
+                    <div className="text-xs text-[var(--muted)] mb-1">Branch</div>
+                    <div className="font-mono text-sm">{versionInfo.branch || 'unknown'}</div>
+                    {versionInfo.commitsBehind > 0 && (
+                      <div className="text-xs text-amber-400 mt-0.5">{versionInfo.commitsBehind} commit(s) behind</div>
+                    )}
+                  </div>
+                </div>
+
+                {versionInfo.updateAvailable ? (
+                  <div className="p-4 rounded-lg border border-amber-500/30 bg-amber-500/10">
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse" />
+                      <span className="text-sm font-medium text-amber-400">Update Available</span>
+                      <span className="text-xs text-[var(--muted)] ml-auto">Latest: {versionInfo.remoteCommit}</span>
+                    </div>
+                    {versionInfo.remoteLog && (
+                      <pre className="text-xs text-[var(--muted)] bg-black/20 rounded p-2 mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap font-mono">
+                        {versionInfo.remoteLog}
+                      </pre>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-4 rounded-lg border border-green-500/30 bg-green-500/10">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-green-400" />
+                      <span className="text-sm font-medium text-green-400">Up to date</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {versionInfo?.error && (
+              <div className="p-4 rounded-lg border border-red-500/30 bg-red-500/10">
+                <p className="text-red-400 text-sm">{versionInfo.error}</p>
+              </div>
+            )}
+
+            {!versionInfo && !checkingVersion && (
+              <div className="p-4 rounded-lg border border-[var(--border)] bg-[var(--bg)]">
+                <p className="text-sm text-[var(--muted)]">Click &quot;Check for Updates&quot; to see the current version and available updates.</p>
+              </div>
+            )}
+          </div>
+
+          {versionInfo?.updateAvailable && versionInfo?.canAutoUpdate && (
+            <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5">
+              <h3 className="font-semibold mb-2">Apply Update</h3>
+              <p className="text-xs text-[var(--muted)] mb-4">
+                This will pull the latest code from GitHub and rebuild the containers. The platform will restart automatically — this takes about 30-60 seconds.
+              </p>
+              <button
+                onClick={async () => {
+                  if (!confirm('Update AGEMS to the latest version? The platform will restart.')) return;
+                  setUpdating(true);
+                  setUpdateResult(null);
+                  try {
+                    const result = await api.triggerSystemUpdate();
+                    setUpdateResult(result);
+                    if (result.ok) {
+                      setTimeout(() => window.location.reload(), 40000);
+                    }
+                  } catch (e: any) {
+                    setUpdateResult({ ok: false, error: e.message });
+                  }
+                  setUpdating(false);
+                }}
+                disabled={updating}
+                className="px-6 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90 disabled:opacity-50"
+              >
+                {updating ? 'Updating...' : 'Update Now'}
+              </button>
+
+              {updateResult?.ok && (
+                <div className="mt-4 p-4 rounded-lg border border-green-500/30 bg-green-500/10">
+                  <p className="text-green-400 text-sm font-medium mb-2">{updateResult.message}</p>
+                  {updateResult.pullLog && (
+                    <pre className="text-xs text-[var(--muted)] bg-black/20 rounded p-2 whitespace-pre-wrap font-mono">{updateResult.pullLog}</pre>
+                  )}
+                  <p className="text-xs text-[var(--muted)] mt-2 animate-pulse">Page will reload automatically...</p>
+                </div>
+              )}
+
+              {updateResult && !updateResult.ok && (
+                <div className="mt-4 p-4 rounded-lg border border-red-500/30 bg-red-500/10">
+                  <p className="text-red-400 text-sm">{updateResult.error}</p>
+                  {updateResult.output && (
+                    <pre className="text-xs text-[var(--muted)] bg-black/20 rounded p-2 mt-2 whitespace-pre-wrap font-mono">{updateResult.output}</pre>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {versionInfo && !versionInfo.canAutoUpdate && (
+            <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5">
+              <h3 className="font-semibold mb-2">Manual Update</h3>
+              <p className="text-xs text-[var(--muted)] mb-3">
+                Auto-update is not available. To enable it, add these volumes to your <code className="text-[var(--accent)]">docker-compose.yml</code> in the api service:
+              </p>
+              <pre className="text-xs bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3 font-mono">
+{`volumes:
+  - .:/app/host-repo:rw
+  - /var/run/docker.sock:/var/run/docker.sock`}
+              </pre>
+              <p className="text-xs text-[var(--muted)] mt-3">Or update manually:</p>
+              <pre className="text-xs bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3 font-mono mt-1">
+{`cd /path/to/agems
+git pull origin main
+docker compose up -d --build`}
+              </pre>
+            </div>
+          )}
         </div>
       )}
 
