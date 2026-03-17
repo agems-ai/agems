@@ -2780,7 +2780,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
         const jwtPayload = Buffer.from(JSON.stringify({ iss: authConfig.issuerId, iat: now, exp: now + 1200, aud: 'appstoreconnect-v1' })).toString('base64url');
         const signingInput = jwtHeader + '.' + jwtPayload;
         const pk = crypto.createPrivateKey({ key: authConfig.privateKey, format: 'pem', type: 'pkcs8' });
-        const sig = crypto.sign('sha256', Buffer.from(signingInput), pk);
+        const sig = crypto.sign('sha256', Buffer.from(signingInput), { key: pk, dsaEncoding: 'ieee-p1363' });
         const jwtToken = signingInput + '.' + sig.toString('base64url');
         headers['Authorization'] = `Bearer ${jwtToken}`;
       }
