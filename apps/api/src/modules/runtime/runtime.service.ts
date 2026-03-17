@@ -1427,16 +1427,54 @@ Your agent ID: ${agent.id} | Your name: ${agent.name}`,
             return { success: true, messageId: msg.id };
           }
           case 'send_dm': {
-            if (!params.recipientId) return { error: 'recipientId is required' };
+            if (!params.recipientId) return { error: 'recipientId is required. Use get_team to find correct IDs.' };
             if (!params.message) return { error: 'message is required' };
             const recipientType = params.recipientType || 'AGENT';
-            // Find existing DM channel between this agent and recipient
+
+            // Smart recipient resolution: accept name or UUID, validate existence
+            let resolvedRecipientId = params.recipientId;
+            const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+            if (!uuidRe.test(params.recipientId)) {
+              // Not a UUID — try to find by name in the same org
+              if (recipientType === 'AGENT') {
+                const found = await this.prisma.agent.findFirst({
+                  where: { orgId: agent.orgId, name: { contains: params.recipientId, mode: 'insensitive' }, status: { not: 'ARCHIVED' } },
+                  select: { id: true },
+                });
+                if (found) { resolvedRecipientId = found.id; }
+                else { return { error: `Agent "${params.recipientId}" not found in your organization. Use get_team to see available agents.` }; }
+              } else {
+                const found = await this.prisma.user.findFirst({
+                  where: { memberships: { some: { orgId: agent.orgId } }, name: { contains: params.recipientId, mode: 'insensitive' } },
+                  select: { id: true },
+                });
+                if (found) { resolvedRecipientId = found.id; }
+                else { return { error: `Human "${params.recipientId}" not found in your organization. Use get_team to see available humans.` }; }
+              }
+            } else {
+              // UUID provided — validate it exists in this org
+              if (recipientType === 'AGENT') {
+                const exists = await this.prisma.agent.findFirst({
+                  where: { id: params.recipientId, orgId: agent.orgId },
+                  select: { id: true },
+                });
+                if (!exists) { return { error: `Agent ID "${params.recipientId}" not found in your org. Use get_team to get correct IDs.` }; }
+              } else {
+                const exists = await this.prisma.user.findFirst({
+                  where: { id: params.recipientId, memberships: { some: { orgId: agent.orgId } } },
+                  select: { id: true },
+                });
+                if (!exists) { return { error: `Human ID "${params.recipientId}" not found in your org. Use get_team to get correct IDs.` }; }
+              }
+            }
+
+            // Find existing DM channel between this agent and resolved recipient
             const existingChannel = await this.prisma.channel.findFirst({
               where: {
                 type: 'DIRECT',
                 AND: [
                   { participants: { some: { participantType: 'AGENT', participantId: agent.id } } },
-                  { participants: { some: { participantType: recipientType, participantId: params.recipientId } } },
+                  { participants: { some: { participantType: recipientType, participantId: resolvedRecipientId } } },
                 ],
               },
               select: { id: true },
@@ -1448,10 +1486,10 @@ Your agent ID: ${agent.id} | Your name: ${agent.name}`,
               // Resolve recipient name for the channel
               let recipientName = 'Unknown';
               if (recipientType === 'AGENT') {
-                const ra = await this.prisma.agent.findUnique({ where: { id: params.recipientId }, select: { name: true } });
+                const ra = await this.prisma.agent.findUnique({ where: { id: resolvedRecipientId }, select: { name: true } });
                 if (ra) recipientName = ra.name;
               } else {
-                const ru = await this.prisma.user.findUnique({ where: { id: params.recipientId }, select: { name: true } });
+                const ru = await this.prisma.user.findUnique({ where: { id: resolvedRecipientId }, select: { name: true } });
                 if (ru) recipientName = ru.name || 'Unknown';
               }
               // Create DM channel
@@ -1463,7 +1501,7 @@ Your agent ID: ${agent.id} | Your name: ${agent.name}`,
                   participants: {
                     create: [
                       { participantType: 'AGENT', participantId: agent.id },
-                      { participantType: recipientType, participantId: params.recipientId },
+                      { participantType: recipientType, participantId: resolvedRecipientId },
                     ],
                   },
                 },
@@ -2118,7 +2156,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
   private addRestApiTool(tools: any[], toolName: string, config: Record<string, any>, authConfig: Record<string, any>, chatContext?: { channelId: string; agentId: string }, fileAgentId?: string, fileOrgId?: string) {
     const safeName = toolName.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
     const desc = config.description || toolName;
-    const baseUrl = config.url || '';
+    const baseUrl = config.url || config.baseUrl || '';
 
     tools.push({
       name: `api_call_${safeName}`,
@@ -2734,6 +2772,17 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
       } else if (authConfig.username && authConfig.password) {
         const b64 = Buffer.from(`${authConfig.username}:${authConfig.password}`).toString('base64');
         headers['Authorization'] = `Basic ${b64}`;
+      } else if (authConfig.privateKey && authConfig.keyId && authConfig.issuerId) {
+        // App Store Connect JWT auth (ES256) — generate short-lived token from private key
+        const crypto = require('crypto');
+        const now = Math.floor(Date.now() / 1000);
+        const jwtHeader = Buffer.from(JSON.stringify({ alg: 'ES256', kid: authConfig.keyId, typ: 'JWT' })).toString('base64url');
+        const jwtPayload = Buffer.from(JSON.stringify({ iss: authConfig.issuerId, iat: now, exp: now + 1200, aud: 'appstoreconnect-v1' })).toString('base64url');
+        const signingInput = jwtHeader + '.' + jwtPayload;
+        const pk = crypto.createPrivateKey({ key: authConfig.privateKey, format: 'pem', type: 'pkcs8' });
+        const sig = crypto.sign('sha256', Buffer.from(signingInput), pk);
+        const jwtToken = signingInput + '.' + sig.toString('base64url');
+        headers['Authorization'] = `Bearer ${jwtToken}`;
       }
 
       const fetchOpts: RequestInit = {
