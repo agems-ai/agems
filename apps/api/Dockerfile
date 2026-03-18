@@ -23,5 +23,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app ./
 WORKDIR /app/apps/api
+COPY apps/api/entrypoint.sh /app/apps/api/entrypoint.sh
+RUN chmod +x /app/apps/api/entrypoint.sh
 EXPOSE 3001
-CMD ["node", "dist/main.js"]
+CMD ["/app/apps/api/entrypoint.sh"]

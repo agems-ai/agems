@@ -67,10 +67,13 @@ The API will be available at `http://localhost:3001` and the web interface at `h
 ### Docker
 
 ```bash
+cp .env.example .env
+# Edit .env — add at least one AI provider key (ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_AI_API_KEY)
+
 docker compose up -d
 ```
 
-This starts PostgreSQL, Redis, the API server, and the web frontend.
+Database migrations run automatically on first startup. This starts PostgreSQL, Redis, the API server, and the web frontend.
 
 ## Architecture
 
