@@ -487,6 +487,7 @@ model Task {
   goalId     String?  @map("goal_id")
   goal       Goal?    @relation(fields: [goalId], references: [id])
 
+  progress    Int          @default(0) // 0-100
   result      Json?
   deadline    DateTime?
   completedAt DateTime?    @map("completed_at")

@@ -6,7 +6,20 @@ import Link from 'next/link';
 import { api } from '@/lib/api';
 
 const providers = ['ANTHROPIC', 'OPENAI', 'GOOGLE', 'DEEPSEEK', 'MISTRAL', 'OLLAMA', 'CUSTOM'];
-const types = ['AUTONOMOUS', 'ASSISTANT', 'META', 'REACTIVE'];
+const types = ['AUTONOMOUS', 'ASSISTANT', 'META', 'REACTIVE', 'EXTERNAL'];
+const adapterTypes = ['CLAUDE_CODE', 'CODEX', 'CURSOR', 'GEMINI_CLI', 'OPENCLAW', 'OPENCODE', 'PI', 'HTTP', 'PROCESS'];
+
+const adapterConfigTemplates: Record<string, Record<string, string>> = {
+  CLAUDE_CODE: { workingDirectory: '/path/to/project', maxTokens: '8192' },
+  CODEX: { workingDirectory: '/path/to/project', approvalMode: 'suggest' },
+  CURSOR: { workingDirectory: '/path/to/project' },
+  GEMINI_CLI: { workingDirectory: '/path/to/project' },
+  OPENCLAW: { gatewayUrl: 'http://localhost:8080', apiKey: '', model: 'default' },
+  OPENCODE: { workingDirectory: '/path/to/project' },
+  PI: { workingDirectory: '/path/to/project' },
+  HTTP: { url: 'https://your-api.com/execute', method: 'POST', authType: 'bearer', authToken: '' },
+  PROCESS: { command: '/path/to/binary', args: '', workingDirectory: '/path/to/project' },
+};
 
 interface AgentTemplate {
   slug: string;
@@ -31,7 +44,7 @@ export default function NewAgentPage() {
   const [loadingTemplates, setLoadingTemplates] = useState(true);
   const [filter, setFilter] = useState('');
   const [importing, setImporting] = useState('');
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<Record<string, any>>({
     name: '',
     slug: '',
     avatar: '',
@@ -40,6 +53,8 @@ export default function NewAgentPage() {
     llmModel: 'claude-sonnet-4-5-20250929',
     systemPrompt: '',
     mission: '',
+    adapterType: '',
+    adapterConfig: {},
   });
 
   useEffect(() => {
@@ -49,12 +64,22 @@ export default function NewAgentPage() {
       .finally(() => setLoadingTemplates(false));
   }, []);
 
+  const isExternal = form.type === 'EXTERNAL';
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     setError('');
     try {
-      const agent = await api.createAgent(form) as any;
+      const payload: Record<string, any> = { ...form };
+      if (!isExternal) {
+        delete payload.adapterType;
+        delete payload.adapterConfig;
+      } else {
+        delete payload.llmProvider;
+        delete payload.llmModel;
+      }
+      const agent = await api.createAgent(payload) as any;
       router.push(`/agents/${agent.id}`);
     } catch (err: any) {
       setError(err.message || 'Failed to create agent');
@@ -193,20 +218,51 @@ export default function NewAgentPage() {
               <input value={form.avatar} onChange={e => setForm(f => ({ ...f, avatar: e.target.value }))} placeholder="/avatars/agent.png" />
             </Field>
             <Field label="Type">
-              <select value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}>
+              <select value={form.type} onChange={e => {
+                const newType = e.target.value;
+                if (newType === 'EXTERNAL') {
+                  setForm(f => ({ ...f, type: newType, adapterType: 'CLAUDE_CODE', adapterConfig: { ...adapterConfigTemplates.CLAUDE_CODE } }));
+                } else {
+                  setForm(f => ({ ...f, type: newType, adapterType: '', adapterConfig: {} }));
+                }
+              }}>
                 {types.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
             </Field>
-            <Field label="Provider">
-              <select value={form.llmProvider} onChange={e => setForm(f => ({ ...f, llmProvider: e.target.value }))}>
-                {providers.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
-            </Field>
+            {!isExternal ? (
+              <Field label="Provider">
+                <select value={form.llmProvider} onChange={e => setForm(f => ({ ...f, llmProvider: e.target.value }))}>
+                  {providers.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </Field>
+            ) : (
+              <Field label="Adapter">
+                <select value={form.adapterType} onChange={e => {
+                  const at = e.target.value;
+                  setForm(f => ({ ...f, adapterType: at, adapterConfig: { ...(adapterConfigTemplates[at] || {}) } }));
+                }}>
+                  {adapterTypes.map(a => <option key={a} value={a}>{a.replace(/_/g, ' ')}</option>)}
+                </select>
+              </Field>
+            )}
           </div>
 
-          <Field label="Model">
-            <input value={form.llmModel} onChange={e => setForm(f => ({ ...f, llmModel: e.target.value }))} placeholder="claude-sonnet-4-5-20250929" />
-          </Field>
+          {!isExternal ? (
+            <Field label="Model">
+              <input value={form.llmModel} onChange={e => setForm(f => ({ ...f, llmModel: e.target.value }))} placeholder="claude-sonnet-4-5-20250929" />
+            </Field>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm font-medium">Adapter Configuration</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {Object.entries(form.adapterConfig || {}).map(([key, val]) => (
+                  <Field key={key} label={key}>
+                    <input value={String(val)} onChange={e => setForm(f => ({ ...f, adapterConfig: { ...f.adapterConfig, [key]: e.target.value } }))} />
+                  </Field>
+                ))}
+              </div>
+            </div>
+          )}
 
           <Field label="Mission">
             <input value={form.mission} onChange={e => setForm(f => ({ ...f, mission: e.target.value }))} placeholder="What is this agent's purpose?" />

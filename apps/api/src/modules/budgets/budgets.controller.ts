@@ -15,8 +15,8 @@ export class BudgetsController {
     @Body() body: {
       agentId: string;
       monthlyLimitUsd: number;
-      periodStart: string;
-      periodEnd: string;
+      periodStart?: string;
+      periodEnd?: string;
       softAlertPercent?: number;
       hardStopEnabled?: boolean;
       metadata?: any;

@@ -18,7 +18,6 @@ import {
   ShieldCheck,
   Settings,
   LogOut,
-  Workflow,
   FolderOpen,
   Store,
   Menu,
@@ -31,34 +30,42 @@ import {
   FolderKanban,
   DollarSign,
   Inbox,
-  Puzzle,
-  Search,
 } from 'lucide-react';
 import CommandPalette from '@/components/CommandPalette';
 import ThemeToggle from '@/components/ThemeToggle';
 
-const navItems = [
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/company', label: 'Company', icon: Building2 },
-  { href: '/agents', label: 'Agents', icon: Bot },
-  { href: '/skills', label: 'Skills', icon: Sparkles },
-  { href: '/tools', label: 'Tools', icon: Wrench },
-  { href: '/catalog', label: 'Catalog', icon: Store },
-  { href: '/employees', label: 'Employees', icon: Users },
-  { href: '/comms', label: 'Comms', icon: MessageSquare },
-  { href: '/tasks', label: 'Tasks', icon: ListChecks },
-  { href: '/goals', label: 'Goals', icon: Target },
-  { href: '/projects', label: 'Projects', icon: FolderKanban },
-  { href: '/budgets', label: 'Budgets', icon: DollarSign },
-  { href: '/inbox', label: 'Inbox', icon: Inbox },
-  { href: '/approvals', label: 'Approvals', icon: ShieldAlert },
-  { href: '/meetings', label: 'Meetings', icon: Video },
-  { href: '/files', label: 'Files', icon: FolderOpen },
-  { href: '/plugins', label: 'Plugins', icon: Puzzle },
-  { href: '/security', label: 'Audit', icon: ShieldCheck },
-  { href: '/n8n', label: 'N8N', icon: Workflow },
-  { href: '/docs', label: 'Docs', icon: BookOpen },
-  { href: '/settings', label: 'Settings', icon: Settings },
+type NavEntry =
+  | { type: 'link'; href: string; label: string; icon: any }
+  | { type: 'divider'; label: string };
+
+const navItems: NavEntry[] = [
+  { type: 'link', href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+
+  { type: 'divider', label: 'AI' },
+  { type: 'link', href: '/agents', label: 'Agents', icon: Bot },
+  { type: 'link', href: '/skills', label: 'Skills', icon: Sparkles },
+  { type: 'link', href: '/tools', label: 'Tools', icon: Wrench },
+  { type: 'link', href: '/catalog', label: 'Catalog', icon: Store },
+
+  { type: 'divider', label: 'Work' },
+  { type: 'link', href: '/tasks', label: 'Tasks', icon: ListChecks },
+  { type: 'link', href: '/goals', label: 'Goals', icon: Target },
+  { type: 'link', href: '/projects', label: 'Projects', icon: FolderKanban },
+  { type: 'link', href: '/budgets', label: 'Budgets', icon: DollarSign },
+  { type: 'link', href: '/inbox', label: 'Inbox', icon: Inbox },
+
+  { type: 'divider', label: 'Team' },
+  { type: 'link', href: '/comms', label: 'Comms', icon: MessageSquare },
+  { type: 'link', href: '/meetings', label: 'Meetings', icon: Video },
+  { type: 'link', href: '/employees', label: 'Employees', icon: Users },
+  { type: 'link', href: '/company', label: 'Company', icon: Building2 },
+
+  { type: 'divider', label: 'System' },
+  { type: 'link', href: '/approvals', label: 'Approvals', icon: ShieldAlert },
+  { type: 'link', href: '/files', label: 'Files', icon: FolderOpen },
+  { type: 'link', href: '/security', label: 'Audit', icon: ShieldCheck },
+  { type: 'link', href: '/docs', label: 'Docs', icon: BookOpen },
+  { type: 'link', href: '/settings', label: 'Settings', icon: Settings },
 ];
 
 const mobileNavItems = [
@@ -196,9 +203,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               AGEMS
             </span>
           </Link>
-          <button onClick={() => setSidebarOpen(false)} className="p-1 text-[var(--muted)] hover:text-white lg:hidden">
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-1">
+            <ThemeToggle />
+            <button onClick={() => setSidebarOpen(false)} className="p-1 text-[var(--muted)] hover:text-white lg:hidden">
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         {/* Org Switcher */}
@@ -246,21 +256,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         )}
 
-        {/* Search + Theme */}
-        <div className="px-2 pt-2 flex items-center gap-1">
-          <button
-            onClick={() => { const e = new KeyboardEvent('keydown', { key: 'k', metaKey: true }); document.dispatchEvent(e); }}
-            className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--background)] border border-[var(--border)] text-[var(--muted)] text-xs hover:border-[var(--accent)]/50 transition-colors"
-          >
-            <Search size={13} />
-            <span className="flex-1 text-left">Search...</span>
-            <kbd className="text-[10px] bg-[var(--card)] px-1.5 py-0.5 rounded border border-[var(--border)]">⌘K</kbd>
-          </button>
-          <ThemeToggle />
-        </div>
-
         <nav className="flex-1 p-2 overflow-y-auto">
-          {navItems.map((item) => {
+          {navItems.map((item, i) => {
+            if (item.type === 'divider') {
+              return (
+                <div key={item.label} className={`px-3 pt-4 pb-1 ${i > 0 ? 'mt-1' : ''}`}>
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]/60">{item.label}</span>
+                </div>
+              );
+            }
             const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
             return (
               <Link

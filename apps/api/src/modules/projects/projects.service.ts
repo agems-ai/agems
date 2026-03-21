@@ -13,15 +13,15 @@ export class ProjectsService {
     const project = await this.prisma.project.create({
       data: {
         name: input.name,
-        description: input.description,
+        description: input.description || null,
         status: input.status ?? 'PLANNED',
         priority: input.priority ?? 'MEDIUM',
-        leadType: input.leadType,
-        leadId: input.leadId,
-        startDate: input.startDate ? new Date(input.startDate) : undefined,
-        targetDate: input.targetDate ? new Date(input.targetDate) : undefined,
+        leadType: input.leadType ?? 'HUMAN',
+        leadId: input.leadId || userId,
+        startDate: input.startDate ? new Date(input.startDate) : null,
+        targetDate: input.targetDate ? new Date(input.targetDate) : null,
         progress: input.progress ?? 0,
-        metadata: input.metadata as any,
+        metadata: input.metadata ?? null,
         orgId,
       },
     });

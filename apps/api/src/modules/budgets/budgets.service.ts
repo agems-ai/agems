@@ -13,8 +13,8 @@ export class BudgetsService {
     input: {
       agentId: string;
       monthlyLimitUsd: number;
-      periodStart: string;
-      periodEnd: string;
+      periodStart?: string;
+      periodEnd?: string;
       softAlertPercent?: number;
       hardStopEnabled?: boolean;
       metadata?: any;
@@ -26,16 +26,25 @@ export class BudgetsService {
     const agent = await this.prisma.agent.findUnique({ where: { id: input.agentId } });
     if (!agent || agent.orgId !== orgId) throw new NotFoundException('Agent not found');
 
+    // Default to current month if not provided
+    const now = new Date();
+    const periodStart = input.periodStart
+      ? new Date(input.periodStart)
+      : new Date(now.getFullYear(), now.getMonth(), 1);
+    const periodEnd = input.periodEnd
+      ? new Date(input.periodEnd)
+      : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+
     const budget = await this.prisma.agentBudget.create({
       data: {
         agentId: input.agentId,
         monthlyLimitUsd: input.monthlyLimitUsd,
         currentSpendUsd: 0,
-        periodStart: new Date(input.periodStart),
-        periodEnd: new Date(input.periodEnd),
+        periodStart,
+        periodEnd,
         softAlertPercent: input.softAlertPercent ?? 80,
         hardStopEnabled: input.hardStopEnabled ?? true,
-        metadata: input.metadata as any,
+        metadata: input.metadata ?? null,
       },
       include: { agent: { select: { id: true, name: true, slug: true } } },
     });

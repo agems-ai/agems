@@ -24,6 +24,9 @@ export class TasksService {
         assigneeType: input.assigneeType,
         assigneeId: input.assigneeId,
         parentTaskId: input.parentTaskId,
+        projectId: (input as any).projectId || null,
+        goalId: (input as any).goalId || null,
+        progress: (input as any).progress ?? 0,
         deadline: input.deadline ? new Date(input.deadline) : undefined,
         metadata: input.metadata as any,
         orgId,
@@ -49,7 +52,11 @@ export class TasksService {
     const [data, total] = await Promise.all([
       this.prisma.task.findMany({
         where,
-        include: { subtasks: { select: { id: true, title: true, status: true } } },
+        include: {
+          subtasks: { select: { id: true, title: true, status: true } },
+          project: { select: { id: true, name: true } },
+          goal: { select: { id: true, title: true } },
+        },
         skip: (page - 1) * pageSize,
         take: pageSize,
         orderBy: { createdAt: 'desc' },
@@ -66,6 +73,8 @@ export class TasksService {
       include: {
         subtasks: true,
         parentTask: { select: { id: true, title: true } },
+        project: { select: { id: true, name: true } },
+        goal: { select: { id: true, title: true } },
         comments: { orderBy: { createdAt: 'asc' } },
       },
     });
@@ -109,9 +118,12 @@ export class TasksService {
         ...(input.assigneeId && { assigneeId: input.assigneeId }),
         ...(input.type && { type: input.type }),
         ...(input.cronExpression !== undefined && { cronExpression: input.cronExpression || null }),
+        ...((input as any).projectId !== undefined && { projectId: (input as any).projectId || null }),
+        ...((input as any).goalId !== undefined && { goalId: (input as any).goalId || null }),
+        ...((input as any).progress !== undefined && { progress: (input as any).progress }),
         ...(input.deadline && { deadline: new Date(input.deadline) }),
         ...(input.result && { result: input.result as any }),
-        ...(input.status === 'COMPLETED' && { completedAt: new Date() }),
+        ...(input.status === 'COMPLETED' && { completedAt: new Date(), progress: 100 }),
       },
     });
 

@@ -34,7 +34,7 @@ const emptyForm = {
   description: '',
   status: 'PLANNED' as string,
   priority: 'MEDIUM' as string,
-  leadType: 'USER' as string,
+  leadType: 'HUMAN' as string,
   leadId: '',
   startDate: '',
   targetDate: '',
@@ -81,7 +81,7 @@ export default function ProjectsPage() {
       description: project.description || '',
       status: project.status || 'PLANNED',
       priority: project.priority || 'MEDIUM',
-      leadType: project.leadType || 'USER',
+      leadType: project.leadType || 'HUMAN',
       leadId: project.leadId || '',
       startDate: project.startDate ? project.startDate.substring(0, 10) : '',
       targetDate: project.targetDate ? project.targetDate.substring(0, 10) : '',
@@ -415,8 +415,9 @@ export default function ProjectsPage() {
                   onChange={(e) => setForm({ ...form, leadType: e.target.value, leadId: '' })}
                   className="w-full px-3 py-2 bg-transparent border border-[var(--border)] rounded-lg text-sm focus:outline-none focus:border-[var(--accent)]"
                 >
-                  <option value="USER">User</option>
+                  <option value="HUMAN">User</option>
                   <option value="AGENT">Agent</option>
+                  <option value="SYSTEM">System</option>
                 </select>
               </div>
               <div>

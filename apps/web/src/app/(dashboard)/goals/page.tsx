@@ -5,7 +5,7 @@ import { api } from '@/lib/api';
 
 const STATUSES = ['PLANNED', 'ACTIVE', 'ACHIEVED', 'CANCELLED', 'PAUSED'] as const;
 const PRIORITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
-const OWNER_TYPES = ['COMPANY', 'TEAM', 'AGENT', 'TASK'] as const;
+const OWNER_TYPES = ['HUMAN', 'AGENT', 'SYSTEM'] as const;
 
 const statusBadge: Record<string, string> = {
   PLANNED: 'bg-gray-500/20 text-gray-400',
@@ -53,7 +53,7 @@ const emptyForm = {
   status: 'PLANNED',
   priority: 'MEDIUM',
   parentId: '',
-  ownerType: 'COMPANY',
+  ownerType: 'HUMAN',
   ownerId: '',
   agentId: '',
   projectId: '',
@@ -63,6 +63,9 @@ const emptyForm = {
 
 export default function GoalsPage() {
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [agents, setAgents] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
+  const [projectsList, setProjectsList] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalMode, setModalMode] = useState<'view' | 'edit' | 'create' | null>(null);
   const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
@@ -90,6 +93,9 @@ export default function GoalsPage() {
 
   useEffect(() => {
     loadGoals();
+    api.getAgents({ pageSize: '200' }).then((res: any) => setAgents(res.data || [])).catch(() => {});
+    api.getUsers().then((res: any) => setUsers(Array.isArray(res) ? res : [])).catch(() => {});
+    api.getProjects({ pageSize: '200' }).then((res: any) => setProjectsList(res.data || [])).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -151,7 +157,7 @@ export default function GoalsPage() {
       status: selectedGoal.status || 'PLANNED',
       priority: selectedGoal.priority || 'MEDIUM',
       parentId: selectedGoal.parentId || '',
-      ownerType: selectedGoal.ownerType || 'COMPANY',
+      ownerType: selectedGoal.ownerType || 'HUMAN',
       ownerId: selectedGoal.ownerId || '',
       agentId: selectedGoal.agentId || '',
       projectId: selectedGoal.projectId || '',
@@ -626,35 +632,44 @@ export default function GoalsPage() {
                       </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium mb-1">Owner ID</label>
-                      <input
+                      <label className="block text-sm font-medium mb-1">Owner</label>
+                      <select
                         value={form.ownerId}
                         onChange={(e) => setForm({ ...form, ownerId: e.target.value })}
-                        placeholder="Owner identifier"
                         className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)]"
-                      />
+                      >
+                        <option value="">-- Auto (me) --</option>
+                        {form.ownerType === 'AGENT'
+                          ? agents.map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)
+                          : users.map((u: any) => <option key={u.id} value={u.id}>{u.name || u.email}</option>)
+                        }
+                      </select>
                     </div>
                   </div>
 
                   {/* Agent + Project */}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-sm font-medium mb-1">Agent ID</label>
-                      <input
+                      <label className="block text-sm font-medium mb-1">Agent</label>
+                      <select
                         value={form.agentId}
                         onChange={(e) => setForm({ ...form, agentId: e.target.value })}
-                        placeholder="Optional agent"
                         className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)]"
-                      />
+                      >
+                        <option value="">-- None --</option>
+                        {agents.map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                      </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium mb-1">Project ID</label>
-                      <input
+                      <label className="block text-sm font-medium mb-1">Project</label>
+                      <select
                         value={form.projectId}
                         onChange={(e) => setForm({ ...form, projectId: e.target.value })}
-                        placeholder="Optional project"
                         className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)]"
-                      />
+                      >
+                        <option value="">-- None --</option>
+                        {projectsList.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
                     </div>
                   </div>
 

@@ -16,7 +16,7 @@ function spendColor(percent: number): string {
 export default function BudgetsPage() {
   const [budgets, setBudgets] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [summary, setSummary] = useState<{ totalLimit: number; totalSpend: number; agentsOverBudget: number; utilization: number } | null>(null);
+  const [summary, setSummary] = useState<any>(null);
   const [modalMode, setModalMode] = useState<'create' | 'edit' | null>(null);
   const [selectedBudget, setSelectedBudget] = useState<any>(null);
   const [form, setForm] = useState({ agentId: '', monthlyLimitUsd: 100, softAlertPercent: 80, hardStopEnabled: true });
@@ -137,21 +137,21 @@ export default function BudgetsPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           <div className="p-5 bg-[var(--card)] border border-[var(--border)] rounded-xl">
             <p className="text-xs text-[var(--muted)] uppercase tracking-wide mb-1">Total Monthly Limit</p>
-            <p className="text-2xl font-bold">{formatUsd(summary.totalLimit)}</p>
+            <p className="text-2xl font-bold">{formatUsd(summary.totalLimitUsd ?? summary.totalLimit ?? 0)}</p>
           </div>
           <div className="p-5 bg-[var(--card)] border border-[var(--border)] rounded-xl">
             <p className="text-xs text-[var(--muted)] uppercase tracking-wide mb-1">Total Current Spend</p>
-            <p className="text-2xl font-bold">{formatUsd(summary.totalSpend)}</p>
+            <p className="text-2xl font-bold">{formatUsd(summary.totalSpendUsd ?? summary.totalSpend ?? 0)}</p>
           </div>
           <div className="p-5 bg-[var(--card)] border border-[var(--border)] rounded-xl">
             <p className="text-xs text-[var(--muted)] uppercase tracking-wide mb-1">Agents Over Budget</p>
-            <p className="text-2xl font-bold" style={{ color: summary.agentsOverBudget > 0 ? 'var(--danger)' : 'var(--success)' }}>
-              {summary.agentsOverBudget}
+            <p className="text-2xl font-bold" style={{ color: (Array.isArray(summary.agentsOverBudget) ? summary.agentsOverBudget.length : summary.agentsOverBudget) > 0 ? 'var(--danger)' : 'var(--success)' }}>
+              {Array.isArray(summary.agentsOverBudget) ? summary.agentsOverBudget.length : summary.agentsOverBudget}
             </p>
           </div>
           <div className="p-5 bg-[var(--card)] border border-[var(--border)] rounded-xl">
             <p className="text-xs text-[var(--muted)] uppercase tracking-wide mb-1">Budget Utilization</p>
-            <p className="text-2xl font-bold">{summary.utilization.toFixed(1)}%</p>
+            <p className="text-2xl font-bold">{(summary.utilizationPercent ?? summary.utilization ?? 0).toFixed(1)}%</p>
           </div>
         </div>
       )}

@@ -7,19 +7,25 @@ const sections = [
   { id: 'getting-started', title: 'Getting Started' },
   { id: 'dashboard', title: 'Dashboard' },
   { id: 'agents', title: 'Agents' },
+  { id: 'external-agents', title: 'External Agents & Adapters' },
   { id: 'tools', title: 'Tools' },
   { id: 'skills', title: 'Skills' },
   { id: 'employees', title: 'Employees' },
   { id: 'tasks', title: 'Tasks' },
+  { id: 'goals', title: 'Goals' },
+  { id: 'projects', title: 'Projects' },
+  { id: 'budgets', title: 'Budgets' },
   { id: 'approvals', title: 'Approvals' },
   { id: 'comms', title: 'Channels & Chat' },
   { id: 'meetings', title: 'Meetings' },
   { id: 'files', title: 'Files' },
   { id: 'company', title: 'Company Structure' },
+  { id: 'plugins', title: 'Plugins' },
   { id: 'n8n', title: 'N8N Integration' },
   { id: 'audit', title: 'Audit & Security' },
   { id: 'settings', title: 'Settings' },
   { id: 'organizations', title: 'Organizations' },
+  { id: 'entities', title: 'Data Model Reference' },
 ];
 
 function Section({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
@@ -230,7 +236,8 @@ export default function DocsPage() {
             <strong>AUTONOMOUS</strong> — works independently, picks up tasks;{' '}
             <strong>ASSISTANT</strong> — responds to user requests;{' '}
             <strong>META</strong> — manages other agents;{' '}
-            <strong>REACTIVE</strong> — responds to events/triggers.
+            <strong>REACTIVE</strong> — responds to events/triggers;{' '}
+            <strong>EXTERNAL</strong> — powered by an external runtime via adapters (see External Agents).
           </Field>
           <Field name="Provider">LLM provider: ANTHROPIC, OPENAI, GOOGLE, DEEPSEEK, MISTRAL, OLLAMA, or CUSTOM.</Field>
           <Field name="Model">Specific model ID (e.g., "claude-opus-4-6", "gpt-4o", "gemini-2.0-flash").</Field>
@@ -262,6 +269,46 @@ export default function DocsPage() {
           <Field name="Temperature">Controls randomness (0 = deterministic, 1 = creative). Default: 0.7.</Field>
           <Field name="Max Tokens">Maximum output length per response. Default: 4096.</Field>
           <Field name="Thinking Budget">Token budget for extended thinking/reasoning. Default: 4000. Used by models that support thinking (e.g., Claude).</Field>
+        </Section>
+
+        {/* ── External Agents & Adapters ── */}
+        <Section id="external-agents" title="External Agents & Adapters">
+          <P>
+            External agents run on external runtimes outside the built-in LLM engine. They connect to AGEMS via adapters — bridge layers that translate
+            between AGEMS task/message format and the external tool's protocol. Use external agents when you need specialized runtimes like Claude Code, Codex, or custom HTTP services.
+          </P>
+
+          <H3>Creating an External Agent</H3>
+          <P>
+            Go to <strong className="text-white">Agents &rarr; + New Agent &rarr; From Scratch</strong>. Set the type to <strong className="text-white">EXTERNAL</strong>.
+            An "Adapter" section will appear where you select the runtime and configure connection details.
+          </P>
+
+          <H3>Adapter Types</H3>
+          <Field name="CLAUDE_CODE">Anthropic Claude Code CLI. Runs the <code className="text-xs bg-[var(--background)] px-1.5 py-0.5 rounded font-mono">claude</code> CLI as a subprocess. Config: model, maxTokens, allowedTools.</Field>
+          <Field name="CODEX">OpenAI Codex CLI. Approval modes: suggest, auto-edit, full-auto. Config: model, approvalMode.</Field>
+          <Field name="CURSOR">Cursor IDE agent. Supports background mode for persistent sessions. Config: workspacePath, background.</Field>
+          <Field name="GEMINI_CLI">Google Gemini CLI. Supports sandbox mode and multimodal input. Config: model, sandbox.</Field>
+          <Field name="OPENCLAW">Docker-based agent via SSE gateway. Communicates via Server-Sent Events streaming. Config: gatewayUrl, containerName.</Field>
+          <Field name="OPENCODE">Multi-provider coding agent with automatic model detection. Config: model, provider.</Field>
+          <Field name="PI">Pi agent runtime. Config: model.</Field>
+          <Field name="HTTP">Generic HTTP webhook adapter. Fire-and-forget or wait-for-response. Supports Bearer, Basic, API Key auth. Config: url, method, headers, auth, waitForResponse, responseTimeoutMs.</Field>
+          <Field name="PROCESS">Generic shell command adapter. Runs any CLI tool or script as a subprocess. Config: command, args, shell.</Field>
+
+          <H3>Adapter Configuration</H3>
+          <P>
+            Each adapter has its own config JSON. When you select an adapter type, fill in the required fields. For example, OPENCLAW needs a <code className="text-xs bg-[var(--background)] px-1.5 py-0.5 rounded font-mono">gatewayUrl</code> pointing to the SSE gateway, while HTTP needs a <code className="text-xs bg-[var(--background)] px-1.5 py-0.5 rounded font-mono">url</code> endpoint.
+          </P>
+
+          <H3>How External Agents Work</H3>
+          <div className="pl-4 space-y-1">
+            <P>&bull; When a task or message is routed to an external agent, AGEMS serializes the input and sends it to the adapter.</P>
+            <P>&bull; The adapter translates the request into the external runtime's format (CLI args, HTTP payload, SSE stream).</P>
+            <P>&bull; Output is captured, parsed, and stored as an <strong className="text-white">AgentExecution</strong> record with tokens, cost, and duration.</P>
+            <P>&bull; External agents participate in the same task, approval, and communication systems as built-in agents.</P>
+          </div>
+
+          <Tip>The HTTP adapter is the most flexible — point it at any REST API that accepts a prompt and returns a response. Use it to integrate custom AI services or non-LLM automation endpoints.</Tip>
         </Section>
 
         {/* ── Tools ── */}
@@ -361,12 +408,11 @@ export default function DocsPage() {
             Tasks are work items that can be assigned to agents or humans. The task board uses a Kanban-style layout with drag-and-drop between columns.
           </P>
 
-          <H3>Task Columns (Statuses)</H3>
-          <Field name="PENDING">Waiting to be picked up. Agents automatically pick up pending tasks if the scheduler is enabled.</Field>
-          <Field name="IN_PROGRESS">Currently being worked on.</Field>
-          <Field name="REVIEW">Completed work awaiting review. Agents may move tasks here when they finish.</Field>
-          <Field name="COMPLETED">Successfully finished.</Field>
-          <Field name="FAILED / BLOCKED">Could not be completed or is blocked by a dependency.</Field>
+          <H3>Board Columns</H3>
+          <P>
+            The Kanban board groups the 10 task statuses into 5 visual columns: Pending, In Progress, Review (IN_REVIEW + IN_TESTING + VERIFIED), Completed, and Failed (FAILED + BLOCKED + CANCELLED).
+            You can also switch to a list view with sortable columns including a progress bar.
+          </P>
 
           <H3>Creating a Task</H3>
           <Field name="Title">Short description of what needs to be done.</Field>
@@ -378,8 +424,23 @@ export default function DocsPage() {
             <strong>CONTINUOUS</strong> — ongoing, never fully completes.
           </Field>
           <Field name="Cron Expression">For RECURRING tasks. Standard cron format (e.g., "0 9 * * *" for daily at 9 AM).</Field>
+          <Field name="Project">Optional — link the task to a project for grouping and tracking.</Field>
+          <Field name="Goal">Optional — link the task to a goal. Tasks linked to goals contribute to goal progress.</Field>
+          <Field name="Progress">0-100% slider. Auto-set to 100% when status changes to COMPLETED.</Field>
           <Field name="Assignee">Assign to an agent or a human team member.</Field>
           <Field name="Deadline">Optional due date.</Field>
+
+          <H3>Task Statuses</H3>
+          <Field name="PENDING">Waiting to be picked up.</Field>
+          <Field name="IN_PROGRESS">Currently being worked on.</Field>
+          <Field name="IN_REVIEW">Work completed, awaiting review.</Field>
+          <Field name="IN_TESTING">Being tested/verified.</Field>
+          <Field name="VERIFIED">Testing passed.</Field>
+          <Field name="AWAITING_APPROVAL">Needs approval before proceeding.</Field>
+          <Field name="COMPLETED">Successfully finished (progress auto-set to 100%).</Field>
+          <Field name="FAILED">Could not be completed.</Field>
+          <Field name="BLOCKED">Blocked by a dependency.</Field>
+          <Field name="CANCELLED">Cancelled.</Field>
 
           <H3>Task Details</H3>
           <P>
@@ -400,6 +461,84 @@ export default function DocsPage() {
           </P>
 
           <Tip>Agents can create tasks for other agents. When the autonomy level is high (see Settings &rarr; Task Agents), agents actively delegate work to specialists.</Tip>
+        </Section>
+
+        {/* ── Goals ── */}
+        <Section id="goals" title="Goals">
+          <P>
+            Goals are hierarchical objectives — from high-level company goals down to team and individual targets.
+            Goals can be linked to projects and broken down into sub-goals forming a tree structure.
+          </P>
+
+          <H3>Goal Properties</H3>
+          <Field name="Title">Goal name or objective statement.</Field>
+          <Field name="Description">Detailed description of the goal and success criteria.</Field>
+          <Field name="Status">PLANNED, ACTIVE, ACHIEVED, CANCELLED, or PAUSED.</Field>
+          <Field name="Priority">LOW, MEDIUM, HIGH, or CRITICAL.</Field>
+          <Field name="Owner Type">HUMAN, AGENT, or SYSTEM — who is responsible for achieving this goal.</Field>
+          <Field name="Owner">The specific employee or agent responsible.</Field>
+          <Field name="Agent">Optional — assign an AI agent to work towards this goal.</Field>
+          <Field name="Project">Optional — link to a project for organizational grouping.</Field>
+          <Field name="Progress">0-100% progress bar. Manually set or auto-calculated from sub-goals.</Field>
+          <Field name="Target Date">Optional deadline for achieving the goal.</Field>
+          <Field name="Parent Goal">Optional — create goal hierarchies by nesting under a parent goal.</Field>
+
+          <H3>Goal Hierarchy</H3>
+          <P>
+            Goals support parent-child relationships, enabling you to decompose large objectives into smaller, measurable targets.
+            Tasks can be linked to goals, contributing to their progress tracking.
+          </P>
+          <Tip>Link tasks to goals to track how individual work items contribute to broader objectives.</Tip>
+        </Section>
+
+        {/* ── Projects ── */}
+        <Section id="projects" title="Projects">
+          <P>
+            Projects group related tasks and goals under a single initiative. They provide high-level tracking with status, dates, and progress.
+          </P>
+
+          <H3>Project Properties</H3>
+          <Field name="Name">Project name.</Field>
+          <Field name="Description">Project overview, scope, and deliverables.</Field>
+          <Field name="Status">BACKLOG, PLANNED, IN_PROGRESS, COMPLETED, CANCELLED, or ON_HOLD.</Field>
+          <Field name="Priority">LOW, MEDIUM, HIGH, or CRITICAL.</Field>
+          <Field name="Lead Type">HUMAN, AGENT, or SYSTEM — who leads the project.</Field>
+          <Field name="Lead">The specific person or agent leading the project.</Field>
+          <Field name="Start Date">When the project begins.</Field>
+          <Field name="Target Date">Expected completion date.</Field>
+          <Field name="Progress">0-100% progress indicator.</Field>
+
+          <H3>Project Statistics</H3>
+          <P>
+            Each project shows aggregated statistics: tasks grouped by status and goals grouped by status.
+            This gives a quick overview of how much work is done vs. remaining.
+          </P>
+          <Tip>Create a project first, then link tasks and goals to it for organized tracking.</Tip>
+        </Section>
+
+        {/* ── Budgets ── */}
+        <Section id="budgets" title="Budgets">
+          <P>
+            Budgets control AI agent spending. Each budget defines a monthly USD limit for a specific agent,
+            with soft alerts and hard stops to prevent overspending.
+          </P>
+
+          <H3>Budget Properties</H3>
+          <Field name="Agent">Which agent this budget applies to.</Field>
+          <Field name="Monthly Limit (USD)">Maximum spending allowed per billing period.</Field>
+          <Field name="Current Spend">Running total of costs incurred in the current period.</Field>
+          <Field name="Soft Alert (%)">Percentage threshold that triggers a warning notification. Default: 80%.</Field>
+          <Field name="Hard Stop">When enabled, the agent is paused if it hits the monthly limit. Default: on.</Field>
+          <Field name="Period">Budget period (auto-defaults to current month if not specified).</Field>
+
+          <H3>Budget Incidents</H3>
+          <P>
+            The system automatically logs budget incidents:
+          </P>
+          <Field name="SOFT_ALERT">Agent spend exceeded the soft alert threshold.</Field>
+          <Field name="HARD_STOP">Agent was paused due to exceeding the hard limit.</Field>
+          <Field name="BUDGET_RESET">Budget period reset (new month).</Field>
+          <Field name="MANUAL_OVERRIDE">An admin manually adjusted the budget.</Field>
         </Section>
 
         {/* ── Approvals ── */}
@@ -554,6 +693,25 @@ export default function DocsPage() {
           <Field name="Parent">The position this one reports to in the hierarchy.</Field>
         </Section>
 
+        {/* ── Plugins ── */}
+        <Section id="plugins" title="Plugins">
+          <P>
+            Plugins extend the platform with custom functionality. They are installable modules that add new capabilities without modifying core code.
+          </P>
+
+          <H3>Plugin Properties</H3>
+          <Field name="Name">Plugin display name.</Field>
+          <Field name="Slug">Unique identifier for the plugin.</Field>
+          <Field name="Description">What the plugin does.</Field>
+          <Field name="Version">Semantic version (e.g., "1.0.0").</Field>
+          <Field name="Author">Plugin creator name.</Field>
+          <Field name="Entry Point">Main module path for the plugin.</Field>
+          <Field name="Config">JSON configuration object for plugin settings.</Field>
+          <Field name="Enabled">Toggle plugin on/off without uninstalling.</Field>
+
+          <Tip>Plugins are scoped to your organization — each org can install and configure plugins independently.</Tip>
+        </Section>
+
         {/* ── N8N ── */}
         <Section id="n8n" title="N8N Integration">
           <P>
@@ -699,6 +857,114 @@ export default function DocsPage() {
             When cloning, entity relationships are preserved. For example, cloned agents keep their tool/skill assignments,
             cloned channels keep their participants, and cloned tasks keep their parent-child hierarchy.
           </Tip>
+        </Section>
+
+        {/* ── Data Model Reference ── */}
+        <Section id="entities" title="Data Model Reference">
+          <P>
+            AGEMS uses a PostgreSQL database with the following core entities. This reference helps you understand the data model when building integrations, custom widgets, or external tools.
+          </P>
+
+          <H3>Core Entities (50 models)</H3>
+
+          <div className="space-y-4 mt-4">
+            <div>
+              <h4 className="text-sm font-semibold text-white mb-1">Organization & Users</h4>
+              <Field name="Organization">Multi-tenant container. Has name, slug, plan (FREE, STARTER, PRO, BUSINESS, ENTERPRISE).</Field>
+              <Field name="User">Platform user with email, password, name, role (ADMIN, MANAGER, MEMBER, VIEWER).</Field>
+              <Field name="OrgMember">Links users to organizations with a role.</Field>
+              <Field name="OrgPosition">Org chart position with title, department, holder (AGENT or HUMAN).</Field>
+            </div>
+
+            <div>
+              <h4 className="text-sm font-semibold text-white mb-1">Agents</h4>
+              <Field name="Agent">AI entity with type, status, LLM config, system prompt, adapter config, Telegram config.</Field>
+              <Field name="AgentSkill">Many-to-many: agent &harr; skill assignment with config and enabled flag.</Field>
+              <Field name="AgentTool">Many-to-many: agent &harr; tool assignment with permissions and approval mode.</Field>
+              <Field name="AgentMemory">Agent knowledge store. Types: CONTEXT, CONVERSATION, FILE, KNOWLEDGE.</Field>
+              <Field name="AgentMetric">Performance metrics: COST, LATENCY, QUALITY, ERROR_RATE, TASKS_DONE, TOKENS_USED.</Field>
+              <Field name="AgentExecution">Execution log with status, trigger, I/O, tool calls, tokens, cost.</Field>
+              <Field name="AgentConfigRevision">Version history of agent configuration changes.</Field>
+              <Field name="AgentApiKey">API keys for programmatic agent access.</Field>
+              <Field name="AgentBudget">Monthly spending limits with soft alerts and hard stops.</Field>
+              <Field name="BudgetIncident">Budget event log (SOFT_ALERT, HARD_STOP, BUDGET_RESET, MANUAL_OVERRIDE).</Field>
+              <Field name="Responsibility">Agent duties with title, description, KPI metrics, and priority.</Field>
+            </div>
+
+            <div>
+              <h4 className="text-sm font-semibold text-white mb-1">Work Management</h4>
+              <Field name="Task">Work item with status (10 states), priority, type, progress (0-100), project/goal linkage, subtask hierarchy.</Field>
+              <Field name="TaskComment">Comments on tasks by agents, humans, or system.</Field>
+              <Field name="TaskLabel">Tags/labels for task categorization.</Field>
+              <Field name="TaskAttachment">Files attached to tasks.</Field>
+              <Field name="TaskWorkProduct">Deliverables: ARTIFACT, DOCUMENT, CODE, REPORT, FILE.</Field>
+              <Field name="TaskReadState">Inbox tracking — marks tasks as read/unread per user.</Field>
+              <Field name="Goal">Hierarchical objective with status, progress, owner, project link.</Field>
+              <Field name="Project">Initiative grouping tasks and goals with lead, dates, progress.</Field>
+              <Field name="Label">Reusable color-coded labels scoped to organization.</Field>
+            </div>
+
+            <div>
+              <h4 className="text-sm font-semibold text-white mb-1">Communication</h4>
+              <Field name="Channel">Conversation container. Types: DIRECT, GROUP, BROADCAST, SYSTEM.</Field>
+              <Field name="ChannelParticipant">Channel membership with role (ADMIN, MEMBER, OBSERVER).</Field>
+              <Field name="Message">Chat message with sender, content type (TEXT, JSON, FILE, ACTION).</Field>
+              <Field name="TelegramChat">Links Telegram chats to agents and channels.</Field>
+            </div>
+
+            <div>
+              <h4 className="text-sm font-semibold text-white mb-1">Meetings</h4>
+              <Field name="Meeting">Structured discussion with agenda, participants, entries, decisions.</Field>
+              <Field name="MeetingParticipant">Attendee with role (CHAIR, MEMBER, OBSERVER).</Field>
+              <Field name="MeetingEntry">Ordered entry: SPEECH, VOTE_START, VOTE_RESULT, DECISION, TASK_ASSIGN, SYSTEM.</Field>
+              <Field name="MeetingDecision">Vote outcome: APPROVED, REJECTED, or TABLED with vote counts.</Field>
+              <Field name="MeetingTask">Links tasks to meetings as action items.</Field>
+            </div>
+
+            <div>
+              <h4 className="text-sm font-semibold text-white mb-1">Governance</h4>
+              <Field name="ApprovalPolicy">Per-agent approval configuration with preset (FULL_CONTROL, SUPERVISED, GUIDED, AUTOPILOT).</Field>
+              <Field name="ApprovalRequest">Pending action request with category, risk level, status.</Field>
+              <Field name="ApprovalComment">Discussion on approval requests.</Field>
+              <Field name="AccessRule">Explicit permission grants: READ, WRITE, EXECUTE, ADMIN per resource type.</Field>
+              <Field name="AuditLog">Activity log with actor, action (11 types), resource, IP address.</Field>
+            </div>
+
+            <div>
+              <h4 className="text-sm font-semibold text-white mb-1">Platform</h4>
+              <Field name="Tool">External integration with type (12 types), auth config.</Field>
+              <Field name="Skill">Reusable instruction module. Types: BUILTIN, PLUGIN, CUSTOM.</Field>
+              <Field name="Setting">Key-value configuration scoped to organization.</Field>
+              <Field name="FileRecord">Uploaded file with metadata, folder, uploader info.</Field>
+              <Field name="Folder">Hierarchical folder structure for file organization.</Field>
+              <Field name="Plugin">Installable extension module with config and versioning.</Field>
+              <Field name="Payment">Stripe payment records.</Field>
+              <Field name="Subscription">Stripe subscription with plan, hours, billing period.</Field>
+            </div>
+
+            <div>
+              <h4 className="text-sm font-semibold text-white mb-1">Catalog (Marketplace)</h4>
+              <Field name="CatalogAgent">Publishable agent template with tags, tool/skill slugs, download count.</Field>
+              <Field name="CatalogSkill">Publishable skill template.</Field>
+              <Field name="CatalogTool">Publishable tool template.</Field>
+            </div>
+          </div>
+
+          <H3>Key Enums</H3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 mt-2">
+            <Field name="ActorType">AGENT, HUMAN, SYSTEM</Field>
+            <Field name="AgentType">AUTONOMOUS, ASSISTANT, META, REACTIVE, EXTERNAL</Field>
+            <Field name="AdapterType">CLAUDE_CODE, CODEX, CURSOR, GEMINI_CLI, OPENCLAW, OPENCODE, PI, HTTP, PROCESS</Field>
+            <Field name="AgentStatus">DRAFT, ACTIVE, PAUSED, ERROR, ARCHIVED</Field>
+            <Field name="TaskStatus">PENDING, IN_PROGRESS, IN_REVIEW, IN_TESTING, VERIFIED, AWAITING_APPROVAL, COMPLETED, FAILED, BLOCKED, CANCELLED</Field>
+            <Field name="GoalStatus">PLANNED, ACTIVE, ACHIEVED, CANCELLED, PAUSED</Field>
+            <Field name="ProjectStatus">BACKLOG, PLANNED, IN_PROGRESS, COMPLETED, CANCELLED, ON_HOLD</Field>
+            <Field name="LLMProvider">ANTHROPIC, OPENAI, GOOGLE, DEEPSEEK, MISTRAL, OLLAMA, CUSTOM</Field>
+            <Field name="ToolType">MCP_SERVER, REST_API, GRAPHQL, DATABASE, WEBHOOK, WEBSOCKET, GRPC, S3_STORAGE, N8N, DIGITALOCEAN, SSH, FIRECRAWL</Field>
+            <Field name="Priority">LOW, MEDIUM, HIGH, CRITICAL</Field>
+            <Field name="ExecutionStatus">RUNNING, COMPLETED, FAILED, CANCELLED, WAITING_HITL</Field>
+            <Field name="TriggerType">TASK, MESSAGE, SCHEDULE, EVENT, MANUAL, MEETING, TELEGRAM, APPROVAL</Field>
+          </div>
         </Section>
 
         {/* Footer */}

@@ -64,6 +64,8 @@ export default function TasksPage() {
   const [quickFilter, setQuickFilter] = useState<QuickFilter>('all');
 
   // Create form
+  const [projects, setProjects] = useState<any[]>([]);
+  const [goals, setGoals] = useState<any[]>([]);
   const [form, setForm] = useState({
     title: '',
     description: '',
@@ -73,6 +75,9 @@ export default function TasksPage() {
     assigneeType: 'AGENT' as 'AGENT' | 'HUMAN',
     assigneeId: '',
     deadline: '',
+    projectId: '',
+    goalId: '',
+    progress: 0,
   });
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
@@ -83,10 +88,14 @@ export default function TasksPage() {
       api.getAgents().then((res: any) => res.data || res || []),
       api.getUsers().then((res: any) => res || []),
       api.fetch<any>('/auth/profile').catch(() => null),
-    ]).then(([t, a, u, profile]) => {
+      api.getProjects({ pageSize: '200' }).then((res: any) => res.data || []).catch(() => []),
+      api.getGoals({ pageSize: '200' }).then((res: any) => res.data || []).catch(() => []),
+    ]).then(([t, a, u, profile, p, g]) => {
       setTasks(t);
       setAgents(Array.isArray(a) ? a : []);
       setUsers(Array.isArray(u) ? u : []);
+      setProjects(Array.isArray(p) ? p : []);
+      setGoals(Array.isArray(g) ? g : []);
       if (profile) setCurrentUser(profile);
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
@@ -205,7 +214,7 @@ export default function TasksPage() {
 
   // ── Create Task ──
   const openCreate = () => {
-    setForm({ title: '', description: '', priority: 'MEDIUM', type: 'ONE_TIME', cronExpression: '', assigneeType: 'AGENT', assigneeId: agents[0]?.id || '', deadline: '' });
+    setForm({ title: '', description: '', priority: 'MEDIUM', type: 'ONE_TIME', cronExpression: '', assigneeType: 'AGENT', assigneeId: agents[0]?.id || '', deadline: '', projectId: '', goalId: '', progress: 0 });
     setFormError('');
     setModalMode('create');
     setEditTask(null);
@@ -221,6 +230,9 @@ export default function TasksPage() {
       assigneeType: task.assigneeType,
       assigneeId: task.assigneeId,
       deadline: task.deadline ? task.deadline.substring(0, 16) : '',
+      projectId: task.projectId || '',
+      goalId: task.goalId || '',
+      progress: task.progress ?? 0,
     });
     setFormError('');
     setEditTask(task);
@@ -243,7 +255,10 @@ export default function TasksPage() {
           assigneeType: form.assigneeType,
           assigneeId: form.assigneeId,
           deadline: form.deadline ? new Date(form.deadline).toISOString() : undefined,
-        });
+          projectId: form.projectId || undefined,
+          goalId: form.goalId || undefined,
+          progress: form.progress,
+        } as any);
         setTasks(prev => prev.map(t => t.id === editTask.id ? { ...t, ...(updated as Record<string, any>) } : t));
       } else {
         const created = await api.createTask({
@@ -255,7 +270,10 @@ export default function TasksPage() {
           assigneeType: form.assigneeType,
           assigneeId: form.assigneeId,
           deadline: form.deadline ? new Date(form.deadline).toISOString() : undefined,
-        });
+          projectId: form.projectId || undefined,
+          goalId: form.goalId || undefined,
+          progress: form.progress,
+        } as any);
         setTasks(prev => [created, ...prev]);
       }
       setModalMode(null);
@@ -372,6 +390,7 @@ export default function TasksPage() {
                 <th className="text-left px-4 py-3 font-medium text-[var(--muted)]">Title</th>
                 <th className="text-left px-4 py-3 font-medium text-[var(--muted)] hidden md:table-cell">Status</th>
                 <th className="text-left px-4 py-3 font-medium text-[var(--muted)] hidden md:table-cell">Priority</th>
+                <th className="text-left px-4 py-3 font-medium text-[var(--muted)] hidden md:table-cell w-32">Progress</th>
                 <th className="text-left px-4 py-3 font-medium text-[var(--muted)] hidden lg:table-cell">Assignee</th>
                 <th className="text-left px-4 py-3 font-medium text-[var(--muted)] hidden lg:table-cell">Deadline</th>
               </tr>
@@ -397,6 +416,14 @@ export default function TasksPage() {
                   <td className="px-4 py-3 hidden md:table-cell">
                     <span className={`font-mono font-bold text-xs ${priorityColors[task.priority]}`}>{priorityIcon[task.priority]} {task.priority}</span>
                   </td>
+                  <td className="px-4 py-3 hidden md:table-cell">
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-1.5 bg-[var(--border)] rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all" style={{ width: `${task.progress ?? 0}%`, backgroundColor: (task.progress ?? 0) === 100 ? 'var(--success, #10b981)' : 'var(--accent)' }} />
+                      </div>
+                      <span className="text-[10px] text-[var(--muted)] w-7 text-right">{task.progress ?? 0}%</span>
+                    </div>
+                  </td>
                   <td className="px-4 py-3 hidden lg:table-cell">
                     <AssigneeChip assigneeId={task.assigneeId} assigneeType={task.assigneeType} agents={agents} users={users} />
                   </td>
@@ -406,7 +433,7 @@ export default function TasksPage() {
                 </tr>
               ))}
               {filtered.length === 0 && (
-                <tr><td colSpan={5} className="text-center py-12 text-[var(--muted)]">No tasks match filters</td></tr>
+                <tr><td colSpan={6} className="text-center py-12 text-[var(--muted)]">No tasks match filters</td></tr>
               )}
             </tbody>
           </table>
@@ -451,6 +478,14 @@ export default function TasksPage() {
                     </div>
                     {task.description && (
                       <p className="text-xs text-[var(--muted)] line-clamp-2 mb-2">{task.description}</p>
+                    )}
+                    {(task.progress ?? 0) > 0 && (
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <div className="flex-1 h-1 bg-[var(--border)] rounded-full overflow-hidden">
+                          <div className="h-full rounded-full transition-all" style={{ width: `${task.progress}%`, backgroundColor: task.progress === 100 ? 'var(--success, #10b981)' : 'var(--accent)' }} />
+                        </div>
+                        <span className="text-[10px] text-[var(--muted)]">{task.progress}%</span>
+                      </div>
                     )}
                     <div className="flex items-center gap-2 text-xs">
                       <span className={`font-mono font-bold ${priorityColors[task.priority]}`}>
@@ -553,6 +588,17 @@ export default function TasksPage() {
                   <div className="flex items-center gap-2">
                     <AssigneeChip assigneeId={viewTask.assigneeId} assigneeType={viewTask.assigneeType} agents={agents} users={users} />
                   </div>
+                </div>
+              </div>
+
+              {/* Progress */}
+              <div className="bg-[var(--bg)] rounded-lg p-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="text-[10px] text-[var(--muted)] uppercase tracking-wider">Progress</div>
+                  <span className="text-sm font-medium">{viewTask.progress ?? 0}%</span>
+                </div>
+                <div className="h-2 bg-[var(--border)] rounded-full overflow-hidden">
+                  <div className="h-full rounded-full transition-all" style={{ width: `${viewTask.progress ?? 0}%`, backgroundColor: (viewTask.progress ?? 0) === 100 ? 'var(--success, #10b981)' : 'var(--accent)' }} />
                 </div>
               </div>
 
@@ -769,6 +815,49 @@ export default function TasksPage() {
                     onChange={(e) => setForm({ ...form, deadline: e.target.value })}
                     className="w-full px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
                   />
+                </div>
+              </div>
+
+              {/* Project & Goal */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Project</label>
+                  <select
+                    value={form.projectId}
+                    onChange={(e) => setForm({ ...form, projectId: e.target.value })}
+                    className="w-full px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
+                  >
+                    <option value="">-- None --</option>
+                    {projects.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Goal</label>
+                  <select
+                    value={form.goalId}
+                    onChange={(e) => setForm({ ...form, goalId: e.target.value })}
+                    className="w-full px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
+                  >
+                    <option value="">-- None --</option>
+                    {goals.map((g: any) => <option key={g.id} value={g.id}>{g.title}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Progress */}
+              <div>
+                <label className="block text-sm font-medium mb-1">Progress — {form.progress}%</label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={form.progress}
+                    onChange={(e) => setForm({ ...form, progress: Number(e.target.value) })}
+                    className="flex-1 accent-[var(--accent)]"
+                  />
+                  <div className="w-12 text-center text-sm font-mono text-[var(--muted)]">{form.progress}%</div>
                 </div>
               </div>
 
