@@ -34,38 +34,33 @@ import {
 import CommandPalette from '@/components/CommandPalette';
 import ThemeToggle from '@/components/ThemeToggle';
 
-type NavEntry =
-  | { type: 'link'; href: string; label: string; icon: any }
-  | { type: 'divider'; label: string };
-
-const navItems: NavEntry[] = [
-  { type: 'link', href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-
-  { type: 'divider', label: 'AI' },
-  { type: 'link', href: '/agents', label: 'Agents', icon: Bot },
-  { type: 'link', href: '/skills', label: 'Skills', icon: Sparkles },
-  { type: 'link', href: '/tools', label: 'Tools', icon: Wrench },
-  { type: 'link', href: '/catalog', label: 'Catalog', icon: Store },
-
-  { type: 'divider', label: 'Work' },
-  { type: 'link', href: '/tasks', label: 'Tasks', icon: ListChecks },
-  { type: 'link', href: '/goals', label: 'Goals', icon: Target },
-  { type: 'link', href: '/projects', label: 'Projects', icon: FolderKanban },
-  { type: 'link', href: '/budgets', label: 'Budgets', icon: DollarSign },
-  { type: 'link', href: '/inbox', label: 'Inbox', icon: Inbox },
-
-  { type: 'divider', label: 'Team' },
-  { type: 'link', href: '/comms', label: 'Comms', icon: MessageSquare },
-  { type: 'link', href: '/meetings', label: 'Meetings', icon: Video },
-  { type: 'link', href: '/employees', label: 'Employees', icon: Users },
-  { type: 'link', href: '/company', label: 'Company', icon: Building2 },
-
-  { type: 'divider', label: 'System' },
-  { type: 'link', href: '/approvals', label: 'Approvals', icon: ShieldAlert },
-  { type: 'link', href: '/files', label: 'Files', icon: FolderOpen },
-  { type: 'link', href: '/security', label: 'Audit', icon: ShieldCheck },
-  { type: 'link', href: '/docs', label: 'Docs', icon: BookOpen },
-  { type: 'link', href: '/settings', label: 'Settings', icon: Settings },
+const navItems = [
+  // Overview
+  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  // AI core
+  { href: '/agents', label: 'Agents', icon: Bot },
+  { href: '/skills', label: 'Skills', icon: Sparkles },
+  { href: '/tools', label: 'Tools', icon: Wrench },
+  { href: '/catalog', label: 'Catalog', icon: Store },
+  // Work management
+  { href: '/tasks', label: 'Tasks', icon: ListChecks },
+  { href: '/inbox', label: 'Inbox', icon: Inbox },
+  { href: '/goals', label: 'Goals', icon: Target },
+  { href: '/projects', label: 'Projects', icon: FolderKanban },
+  // Communication
+  { href: '/comms', label: 'Comms', icon: MessageSquare },
+  { href: '/meetings', label: 'Meetings', icon: Video },
+  // Organization
+  { href: '/employees', label: 'Employees', icon: Users },
+  { href: '/company', label: 'Company', icon: Building2 },
+  // Governance & resources
+  { href: '/approvals', label: 'Approvals', icon: ShieldAlert },
+  { href: '/budgets', label: 'Budgets', icon: DollarSign },
+  { href: '/files', label: 'Files', icon: FolderOpen },
+  { href: '/security', label: 'Audit', icon: ShieldCheck },
+  // System
+  { href: '/docs', label: 'Docs', icon: BookOpen },
+  { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
 const mobileNavItems = [
@@ -257,14 +252,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         )}
 
         <nav className="flex-1 p-2 overflow-y-auto">
-          {navItems.map((item, i) => {
-            if (item.type === 'divider') {
-              return (
-                <div key={item.label} className={`px-3 pt-4 pb-1 ${i > 0 ? 'mt-1' : ''}`}>
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)]/60">{item.label}</span>
-                </div>
-              );
-            }
+          {navItems.map((item) => {
             const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
             return (
               <Link
