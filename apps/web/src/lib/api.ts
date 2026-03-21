@@ -139,6 +139,22 @@ class ApiClient {
     return this.fetch<any>(`/tasks${query}`);
   }
 
+  getInbox() {
+    return this.fetch<any[]>('/tasks/inbox');
+  }
+
+  markTaskRead(taskId: string) {
+    return this.fetch(`/tasks/${taskId}/read`, { method: 'POST' });
+  }
+
+  markTaskUnread(taskId: string) {
+    return this.fetch(`/tasks/${taskId}/unread`, { method: 'POST' });
+  }
+
+  markAllTasksRead() {
+    return this.fetch('/tasks/read-all', { method: 'POST' });
+  }
+
   createTask(data: any) {
     return this.fetch('/tasks', { method: 'POST', body: JSON.stringify(data) });
   }
@@ -793,6 +809,32 @@ class ApiClient {
     return this.fetch<{ synced: number }>('/files/sync', { method: 'POST' });
   }
 
+  // Budgets
+  getBudgets(params?: Record<string, string>) {
+    const query = params ? '?' + new URLSearchParams(params).toString() : '';
+    return this.fetch<any>(`/budgets${query}`);
+  }
+
+  getBudgetSummary() {
+    return this.fetch<{ totalLimit: number; totalSpend: number; agentsOverBudget: number; utilization: number }>('/budgets/summary');
+  }
+
+  createBudget(data: any) {
+    return this.fetch('/budgets', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  updateBudget(id: string, data: any) {
+    return this.fetch(`/budgets/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+  }
+
+  getBudgetIncidents(id: string) {
+    return this.fetch<any[]>(`/budgets/${id}/incidents`);
+  }
+
+  resetBudget(id: string) {
+    return this.fetch(`/budgets/${id}/reset`, { method: 'POST' });
+  }
+
   // Approvals
   getApprovals(params?: Record<string, string>) {
     const query = params ? '?' + new URLSearchParams(params).toString() : '';
@@ -849,6 +891,7 @@ class ApiClient {
       body: JSON.stringify({ preset }),
     });
   }
+
   // Agents export/import
   exportAgents() {
     return this.fetch<any>('/agents/export');
@@ -943,6 +986,222 @@ class ApiClient {
   // Admin
   getAdminStats() {
     return this.fetch<any>('/admin/stats');
+  }
+
+  // Projects
+  getProjects(params?: Record<string, string>) {
+    const query = params ? '?' + new URLSearchParams(params).toString() : '';
+    return this.fetch<any>(`/projects${query}`);
+  }
+
+  getProject(id: string) {
+    return this.fetch<any>(`/projects/${id}`);
+  }
+
+  createProject(data: any) {
+    return this.fetch<any>('/projects', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  updateProject(id: string, data: any) {
+    return this.fetch<any>(`/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+  }
+
+  deleteProject(id: string) {
+    return this.fetch(`/projects/${id}`, { method: 'DELETE' });
+  }
+
+  getProjectStats(id: string) {
+    return this.fetch<any>(`/projects/${id}/stats`);
+  }
+
+  // Goals
+  getGoals(params?: Record<string, string>) {
+    const query = params ? '?' + new URLSearchParams(params).toString() : '';
+    return this.fetch<any>(`/goals${query}`);
+  }
+
+  getGoal(id: string) {
+    return this.fetch<any>(`/goals/${id}`);
+  }
+
+  createGoal(data: any) {
+    return this.fetch<any>('/goals', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  updateGoal(id: string, data: any) {
+    return this.fetch<any>(`/goals/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+  }
+
+  deleteGoal(id: string) {
+    return this.fetch(`/goals/${id}`, { method: 'DELETE' });
+  }
+
+  getGoalTree() {
+    return this.fetch<any[]>('/goals/tree');
+  }
+
+  // Agent Config Revisions
+  getAgentConfigRevisions(agentId: string) {
+    return this.fetch<any[]>(`/agents/${agentId}/config-revisions`);
+  }
+
+  rollbackAgentConfig(agentId: string, version: number) {
+    return this.fetch<any>(`/agents/${agentId}/config-revisions/rollback/${version}`, { method: 'POST' });
+  }
+
+  // Agent API Keys
+  getAgentApiKeys(agentId: string) {
+    return this.fetch<any[]>(`/agents/${agentId}/api-keys`);
+  }
+
+  createAgentApiKey(agentId: string, data: { name: string; expiresAt?: string }) {
+    return this.fetch<any>(`/agents/${agentId}/api-keys`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  revokeAgentApiKey(agentId: string, keyId: string) {
+    return this.fetch(`/agents/${agentId}/api-keys/${keyId}`, { method: 'DELETE' });
+  }
+
+  // Task Labels
+  getLabels() {
+    return this.fetch<any[]>('/tasks/labels');
+  }
+
+  createLabel(data: { name: string; color: string }) {
+    return this.fetch<any>('/tasks/labels', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  deleteLabel(labelId: string) {
+    return this.fetch(`/tasks/labels/${labelId}`, { method: 'DELETE' });
+  }
+
+  addTaskLabel(taskId: string, labelId: string) {
+    return this.fetch(`/tasks/${taskId}/labels/${labelId}`, { method: 'POST' });
+  }
+
+  removeTaskLabel(taskId: string, labelId: string) {
+    return this.fetch(`/tasks/${taskId}/labels/${labelId}`, { method: 'DELETE' });
+  }
+
+  // Task Attachments
+  getTaskAttachments(taskId: string) {
+    return this.fetch<any[]>(`/tasks/${taskId}/attachments`);
+  }
+
+  addTaskAttachment(taskId: string, data: { filename: string; originalName: string; mimetype: string; size: number; url: string }) {
+    return this.fetch<any>(`/tasks/${taskId}/attachments`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  removeTaskAttachment(taskId: string, attachmentId: string) {
+    return this.fetch(`/tasks/${taskId}/attachments/${attachmentId}`, { method: 'DELETE' });
+  }
+
+  // Task Work Products
+  getTaskWorkProducts(taskId: string) {
+    return this.fetch<any[]>(`/tasks/${taskId}/work-products`);
+  }
+
+  createTaskWorkProduct(taskId: string, data: { title: string; description?: string; type?: string; content?: string }) {
+    return this.fetch<any>(`/tasks/${taskId}/work-products`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  removeTaskWorkProduct(taskId: string, productId: string) {
+    return this.fetch(`/tasks/${taskId}/work-products/${productId}`, { method: 'DELETE' });
+  }
+
+  // Approval Comments
+  getApprovalComments(approvalId: string) {
+    return this.fetch<any[]>(`/approvals/${approvalId}/comments`);
+  }
+
+  addApprovalComment(approvalId: string, content: string) {
+    return this.fetch<any>(`/approvals/${approvalId}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    });
+  }
+
+  // Adapters (External Agents)
+  getAdapters() {
+    return this.fetch<any[]>('/adapters');
+  }
+
+  getAdapterAvailability() {
+    return this.fetch<Record<string, { available: boolean; version?: string; error?: string }>>('/adapters/availability');
+  }
+
+  checkAdapterAvailability(type: string) {
+    return this.fetch<{ available: boolean; version?: string; error?: string }>(`/adapters/${type}/availability`);
+  }
+
+  executeAdapter(type: string, data: { prompt: string; config?: any; taskId?: string; context?: string }) {
+    return this.fetch<any>(`/adapters/${type}/execute`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  executeAdapterForAgent(agentId: string, data: { prompt: string; taskId?: string; context?: string }) {
+    return this.fetch<any>(`/adapters/agents/${agentId}/execute`, { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  // Plugins
+  getPlugins(params?: Record<string, string>) {
+    const query = params ? '?' + new URLSearchParams(params).toString() : '';
+    return this.fetch<any>(`/plugins${query}`);
+  }
+
+  getPlugin(id: string) {
+    return this.fetch<any>(`/plugins/${id}`);
+  }
+
+  installPlugin(data: any) {
+    return this.fetch<any>('/plugins', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  updatePlugin(id: string, data: any) {
+    return this.fetch<any>(`/plugins/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+  }
+
+  removePlugin(id: string) {
+    return this.fetch(`/plugins/${id}`, { method: 'DELETE' });
+  }
+
+  enablePlugin(id: string) {
+    return this.fetch(`/plugins/${id}/enable`, { method: 'POST' });
+  }
+
+  disablePlugin(id: string) {
+    return this.fetch(`/plugins/${id}/disable`, { method: 'POST' });
+  }
+
+  // Org Export/Import
+  exportOrg() {
+    return this.fetch<any>('/org/export');
+  }
+
+  importOrg(data: any) {
+    return this.fetch<any>('/org/import', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  // Evals (Promptfoo)
+  runEval(data: { agentId: string; testCases: Array<{ input: string; expectedOutput: string }> }) {
+    return this.fetch<any>('/evals/run', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  getEvalHistory(params?: Record<string, string>) {
+    const query = params ? '?' + new URLSearchParams(params).toString() : '';
+    return this.fetch<any>(`/evals/history${query}`);
+  }
+
+  // Git Worktrees
+  getWorktrees() {
+    return this.fetch<any[]>('/worktrees');
+  }
+
+  createWorktree(data: { agentId: string; repoPath: string; branchName?: string }) {
+    return this.fetch<any>('/worktrees', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  removeWorktree(id: string) {
+    return this.fetch(`/worktrees/${id}`, { method: 'DELETE' });
   }
 }
 

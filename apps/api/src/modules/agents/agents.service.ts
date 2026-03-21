@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import * as crypto from 'crypto';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../config/prisma.service';
 import type { CreateAgentInput, UpdateAgentInput, AgentFilters } from '@agems/shared';
@@ -315,5 +316,133 @@ export class AgentsService {
       details: { delegatedTo: childId }, orgId,
     });
     return task;
+  }
+
+  // --- Config Revisions ---
+
+  async getConfigRevisions(agentId: string, orgId?: string) {
+    await this.findOne(agentId, orgId);
+    return this.prisma.agentConfigRevision.findMany({
+      where: { agentId },
+      orderBy: { version: 'desc' },
+      take: 50,
+    });
+  }
+
+  async rollbackConfig(agentId: string, version: number, userId: string, orgId?: string) {
+    await this.findOne(agentId, orgId);
+
+    const revision = await this.prisma.agentConfigRevision.findUnique({
+      where: { agentId_version: { agentId, version } },
+    });
+    if (!revision) throw new NotFoundException(`Config revision v${version} not found`);
+
+    const snapshot = revision.snapshot as Record<string, any>;
+    const agent = await this.prisma.agent.update({
+      where: { id: agentId },
+      data: {
+        name: snapshot.name,
+        systemPrompt: snapshot.systemPrompt,
+        mission: snapshot.mission,
+        llmProvider: snapshot.llmProvider,
+        llmModel: snapshot.llmModel,
+        llmConfig: snapshot.llmConfig ?? {},
+        runtimeConfig: snapshot.runtimeConfig ?? {},
+        values: snapshot.values ?? [],
+        metadata: snapshot.metadata ?? {},
+        version: { increment: 1 },
+      },
+      include: { owner: { select: { id: true, name: true, email: true } } },
+    });
+
+    this.events.emit('audit.create', {
+      actorType: 'HUMAN', actorId: userId, action: 'ROLLBACK',
+      resourceType: 'agent', resourceId: agentId,
+      details: { rolledBackToVersion: version }, orgId,
+    });
+
+    return agent;
+  }
+
+  // --- API Keys ---
+
+  async createApiKey(agentId: string, input: { name: string; expiresAt?: string }, userId: string, orgId?: string) {
+    await this.findOne(agentId, orgId);
+
+    const rawKey = crypto.randomBytes(32).toString('hex');
+    const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+    const keyPrefix = rawKey.substring(0, 8);
+
+    const apiKey = await this.prisma.agentApiKey.create({
+      data: {
+        agentId,
+        name: input.name,
+        keyHash,
+        keyPrefix,
+        expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
+      },
+    });
+
+    this.events.emit('audit.create', {
+      actorType: 'HUMAN', actorId: userId, action: 'CREATE',
+      resourceType: 'agent_api_key', resourceId: apiKey.id, orgId,
+    });
+
+    return {
+      id: apiKey.id,
+      agentId: apiKey.agentId,
+      name: apiKey.name,
+      key: rawKey,
+      keyPrefix: apiKey.keyPrefix,
+      expiresAt: apiKey.expiresAt,
+      createdAt: apiKey.createdAt,
+    };
+  }
+
+  async getApiKeys(agentId: string, orgId?: string) {
+    await this.findOne(agentId, orgId);
+    return this.prisma.agentApiKey.findMany({
+      where: { agentId },
+      select: {
+        id: true,
+        agentId: true,
+        name: true,
+        keyPrefix: true,
+        lastUsedAt: true,
+        expiresAt: true,
+        revokedAt: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async revokeApiKey(agentId: string, keyId: string, userId: string, orgId?: string) {
+    await this.findOne(agentId, orgId);
+
+    const apiKey = await this.prisma.agentApiKey.findFirst({
+      where: { id: keyId, agentId },
+    });
+    if (!apiKey) throw new NotFoundException('API key not found');
+    if (apiKey.revokedAt) throw new BadRequestException('API key is already revoked');
+
+    const revoked = await this.prisma.agentApiKey.update({
+      where: { id: keyId },
+      data: { revokedAt: new Date() },
+      select: {
+        id: true,
+        agentId: true,
+        name: true,
+        keyPrefix: true,
+        revokedAt: true,
+      },
+    });
+
+    this.events.emit('audit.create', {
+      actorType: 'HUMAN', actorId: userId, action: 'REVOKE',
+      resourceType: 'agent_api_key', resourceId: keyId, orgId,
+    });
+
+    return revoked;
   }
 }

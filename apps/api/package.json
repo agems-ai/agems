@@ -9,6 +9,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@agems/adapters": "workspace:*",
     "@agems/ai": "workspace:*",
     "@agems/db": "workspace:*",
     "@agems/shared": "workspace:*",

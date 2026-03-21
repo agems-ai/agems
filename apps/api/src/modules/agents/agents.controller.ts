@@ -151,4 +151,48 @@ export class AgentsController {
   ) {
     return this.agentsService.delegate(id, body.childId, body, req.user.id, req.user.orgId);
   }
+
+  // --- Config Revisions ---
+
+  @Get(':id/config-revisions')
+  getConfigRevisions(@Param('id') id: string, @Request() req: { user: RequestUser }) {
+    return this.agentsService.getConfigRevisions(id, req.user.orgId);
+  }
+
+  @Post(':id/config-revisions/rollback/:version')
+  @Roles('MANAGER')
+  rollbackConfig(
+    @Param('id') id: string,
+    @Param('version') version: string,
+    @Request() req: { user: RequestUser },
+  ) {
+    return this.agentsService.rollbackConfig(id, parseInt(version), req.user.id, req.user.orgId);
+  }
+
+  // --- API Keys ---
+
+  @Post(':id/api-keys')
+  @Roles('MANAGER')
+  createApiKey(
+    @Param('id') id: string,
+    @Body() body: { name: string; expiresAt?: string },
+    @Request() req: { user: RequestUser },
+  ) {
+    return this.agentsService.createApiKey(id, body, req.user.id, req.user.orgId);
+  }
+
+  @Get(':id/api-keys')
+  getApiKeys(@Param('id') id: string, @Request() req: { user: RequestUser }) {
+    return this.agentsService.getApiKeys(id, req.user.orgId);
+  }
+
+  @Delete(':id/api-keys/:keyId')
+  @Roles('MANAGER')
+  revokeApiKey(
+    @Param('id') id: string,
+    @Param('keyId') keyId: string,
+    @Request() req: { user: RequestUser },
+  ) {
+    return this.agentsService.revokeApiKey(id, keyId, req.user.id, req.user.orgId);
+  }
 }

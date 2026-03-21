@@ -27,7 +27,15 @@ import {
   Plus,
   Check,
   BookOpen,
+  Target,
+  FolderKanban,
+  DollarSign,
+  Inbox,
+  Puzzle,
+  Search,
 } from 'lucide-react';
+import CommandPalette from '@/components/CommandPalette';
+import ThemeToggle from '@/components/ThemeToggle';
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -39,13 +47,26 @@ const navItems = [
   { href: '/employees', label: 'Employees', icon: Users },
   { href: '/comms', label: 'Comms', icon: MessageSquare },
   { href: '/tasks', label: 'Tasks', icon: ListChecks },
+  { href: '/goals', label: 'Goals', icon: Target },
+  { href: '/projects', label: 'Projects', icon: FolderKanban },
+  { href: '/budgets', label: 'Budgets', icon: DollarSign },
+  { href: '/inbox', label: 'Inbox', icon: Inbox },
   { href: '/approvals', label: 'Approvals', icon: ShieldAlert },
   { href: '/meetings', label: 'Meetings', icon: Video },
   { href: '/files', label: 'Files', icon: FolderOpen },
+  { href: '/plugins', label: 'Plugins', icon: Puzzle },
   { href: '/security', label: 'Audit', icon: ShieldCheck },
   { href: '/n8n', label: 'N8N', icon: Workflow },
   { href: '/docs', label: 'Docs', icon: BookOpen },
   { href: '/settings', label: 'Settings', icon: Settings },
+];
+
+const mobileNavItems = [
+  { href: '/dashboard', label: 'Home', icon: LayoutDashboard },
+  { href: '/agents', label: 'Agents', icon: Bot },
+  { href: '/tasks', label: 'Tasks', icon: ListChecks },
+  { href: '/inbox', label: 'Inbox', icon: Inbox },
+  { href: '/comms', label: 'Chat', icon: MessageSquare },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -225,6 +246,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         )}
 
+        {/* Search + Theme */}
+        <div className="px-2 pt-2 flex items-center gap-1">
+          <button
+            onClick={() => { const e = new KeyboardEvent('keydown', { key: 'k', metaKey: true }); document.dispatchEvent(e); }}
+            className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[var(--background)] border border-[var(--border)] text-[var(--muted)] text-xs hover:border-[var(--accent)]/50 transition-colors"
+          >
+            <Search size={13} />
+            <span className="flex-1 text-left">Search...</span>
+            <kbd className="text-[10px] bg-[var(--card)] px-1.5 py-0.5 rounded border border-[var(--border)]">⌘K</kbd>
+          </button>
+          <ThemeToggle />
+        </div>
+
         <nav className="flex-1 p-2 overflow-y-auto">
           {navItems.map((item) => {
             const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
@@ -271,9 +305,25 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-auto pt-14 lg:pt-0">
+      <main className="flex-1 overflow-auto pt-14 lg:pt-0 main-content-mobile-pad">
         {children}
       </main>
+
+      {/* Mobile bottom nav */}
+      <div className="mobile-bottom-nav lg:hidden">
+        {mobileNavItems.map((item) => {
+          const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
+          return (
+            <Link key={item.href} href={item.href} data-active={isActive}>
+              <item.icon size={20} strokeWidth={1.5} />
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
+      </div>
+
+      {/* Command Palette (Cmd+K) */}
+      <CommandPalette />
     </div>
   );
 }

@@ -588,4 +588,271 @@ export class OrgService {
       include: { agent: { select: { id: true, name: true } }, user: { select: { id: true, name: true, avatarUrl: true } } },
     });
   }
+
+  // ── Export / Import ──
+
+  private readonly SECRET_FIELDS = [
+    'passwordHash', 'password_hash', 'keyHash', 'key_hash',
+    'authConfig', 'auth_config', 'telegramConfig', 'telegram_config',
+    'botToken', 'apiKey', 'apiSecret', 'sessionString',
+  ];
+
+  private scrubSecrets(obj: any): any {
+    if (obj === null || obj === undefined) return obj;
+    if (Array.isArray(obj)) return obj.map(item => this.scrubSecrets(item));
+    if (typeof obj === 'object') {
+      const cleaned: any = {};
+      for (const [key, value] of Object.entries(obj)) {
+        if (this.SECRET_FIELDS.includes(key)) {
+          cleaned[key] = '[REDACTED]';
+        } else {
+          cleaned[key] = this.scrubSecrets(value);
+        }
+      }
+      return cleaned;
+    }
+    return obj;
+  }
+
+  async exportOrg(orgId: string) {
+    const org = await this.prisma.organization.findUnique({ where: { id: orgId } });
+    if (!org) throw new NotFoundException('Organization not found');
+
+    const [agents, tools, skills, goals, projects, tasks, settings, positions] = await Promise.all([
+      this.prisma.agent.findMany({
+        where: { orgId },
+        include: { tools: true, skills: true },
+      }),
+      this.prisma.tool.findMany({ where: { orgId } }),
+      this.prisma.skill.findMany({ where: { orgId } }),
+      this.prisma.goal.findMany({ where: { orgId } }),
+      this.prisma.project.findMany({ where: { orgId } }),
+      this.prisma.task.findMany({ where: { orgId } }),
+      this.prisma.setting.findMany({ where: { orgId } }),
+      this.prisma.orgPosition.findMany({ where: { orgId } }),
+    ]);
+
+    const exportData = {
+      exportVersion: '1.0',
+      exportedAt: new Date().toISOString(),
+      organization: { name: org.name, slug: org.slug, plan: org.plan, metadata: org.metadata },
+      agents: this.scrubSecrets(agents),
+      tools: this.scrubSecrets(tools),
+      skills,
+      goals,
+      projects,
+      tasks,
+      settings,
+      positions,
+    };
+
+    return exportData;
+  }
+
+  async importOrg(orgId: string, data: any) {
+    const org = await this.prisma.organization.findUnique({ where: { id: orgId } });
+    if (!org) throw new NotFoundException('Organization not found');
+
+    if (!data || !data.exportVersion) {
+      throw new ConflictException('Invalid import data: missing exportVersion');
+    }
+
+    const idMap = new Map<string, string>();
+    const stats = { settings: 0, tools: 0, skills: 0, agents: 0, goals: 0, projects: 0, tasks: 0, positions: 0, skipped: 0 };
+
+    // Import settings (skip duplicates by key)
+    if (data.settings?.length) {
+      for (const s of data.settings) {
+        const existing = await this.prisma.setting.findFirst({
+          where: { orgId, key: s.key },
+        });
+        if (existing) { stats.skipped++; continue; }
+        await this.prisma.setting.create({
+          data: { orgId, key: s.key, value: s.value },
+        });
+        stats.settings++;
+      }
+    }
+
+    // Import tools (skip duplicates by name)
+    if (data.tools?.length) {
+      for (const t of data.tools) {
+        const existing = await this.prisma.tool.findFirst({
+          where: { orgId, name: t.name },
+        });
+        if (existing) { idMap.set(t.id, existing.id); stats.skipped++; continue; }
+        const newTool = await this.prisma.tool.create({
+          data: {
+            orgId, name: t.name, type: t.type,
+            config: t.config ?? {},
+            authType: t.authType,
+            authConfig: t.authConfig === '[REDACTED]' ? {} : t.authConfig,
+          },
+        });
+        idMap.set(t.id, newTool.id);
+        stats.tools++;
+      }
+    }
+
+    // Import skills (skip duplicates by name)
+    if (data.skills?.length) {
+      for (const s of data.skills) {
+        const existing = await this.prisma.skill.findFirst({
+          where: { orgId, name: s.name },
+        });
+        if (existing) { idMap.set(s.id, existing.id); stats.skipped++; continue; }
+        const newSkill = await this.prisma.skill.create({
+          data: {
+            orgId, name: s.name,
+            slug: `${s.slug}-${Date.now().toString(36)}`,
+            description: s.description ?? '',
+            content: s.content ?? '',
+            version: s.version ?? '1.0',
+            type: s.type ?? 'CUSTOM',
+            entryPoint: s.entryPoint ?? 'index',
+            configSchema: s.configSchema,
+          },
+        });
+        idMap.set(s.id, newSkill.id);
+        stats.skills++;
+      }
+    }
+
+    // Import agents (skip duplicates by name)
+    if (data.agents?.length) {
+      for (const a of data.agents) {
+        const existing = await this.prisma.agent.findFirst({
+          where: { orgId, name: a.name },
+        });
+        if (existing) { idMap.set(a.id, existing.id); stats.skipped++; continue; }
+
+        // Find an owner for the agent (first admin member of the org)
+        const adminMember = await this.prisma.orgMember.findFirst({
+          where: { orgId, role: 'ADMIN' },
+        });
+        if (!adminMember) continue;
+
+        const newAgent = await this.prisma.agent.create({
+          data: {
+            orgId, name: a.name,
+            slug: `${a.slug}-${Date.now().toString(36)}`,
+            avatar: a.avatar, type: a.type ?? 'AUTONOMOUS',
+            status: 'DRAFT',
+            llmProvider: a.llmProvider, llmModel: a.llmModel,
+            llmConfig: a.llmConfig ?? {},
+            systemPrompt: a.systemPrompt ?? '',
+            mission: a.mission, values: a.values,
+            runtimeConfig: a.runtimeConfig ?? {},
+            ownerId: adminMember.userId,
+            metadata: a.metadata,
+          },
+        });
+        idMap.set(a.id, newAgent.id);
+        stats.agents++;
+
+        // Re-link tools
+        if (a.tools?.length) {
+          for (const at of a.tools) {
+            const newToolId = idMap.get(at.toolId);
+            if (newToolId) {
+              const existing = await this.prisma.agentTool.findFirst({
+                where: { agentId: newAgent.id, toolId: newToolId },
+              });
+              if (!existing) {
+                await this.prisma.agentTool.create({
+                  data: { agentId: newAgent.id, toolId: newToolId, permissions: at.permissions ?? {}, enabled: at.enabled ?? true },
+                });
+              }
+            }
+          }
+        }
+
+        // Re-link skills
+        if (a.skills?.length) {
+          for (const as_ of a.skills) {
+            const newSkillId = idMap.get(as_.skillId);
+            if (newSkillId) {
+              const existing = await this.prisma.agentSkill.findFirst({
+                where: { agentId: newAgent.id, skillId: newSkillId },
+              });
+              if (!existing) {
+                await this.prisma.agentSkill.create({
+                  data: { agentId: newAgent.id, skillId: newSkillId, enabled: as_.enabled ?? true },
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Import goals (skip duplicates by title)
+    if (data.goals?.length) {
+      for (const g of data.goals) {
+        const existing = await this.prisma.goal.findFirst({
+          where: { orgId, title: g.title },
+        });
+        if (existing) { stats.skipped++; continue; }
+        await this.prisma.goal.create({
+          data: {
+            orgId, title: g.title, description: g.description,
+            status: g.status ?? 'PLANNED', priority: g.priority ?? 'MEDIUM',
+            ownerType: g.ownerType ?? 'HUMAN', ownerId: g.ownerId,
+            agentId: g.agentId ? idMap.get(g.agentId) : undefined,
+          },
+        });
+        stats.goals++;
+      }
+    }
+
+    // Import projects (skip duplicates by name)
+    if (data.projects?.length) {
+      for (const p of data.projects) {
+        const existing = await this.prisma.project.findFirst({
+          where: { orgId, name: p.name },
+        });
+        if (existing) { stats.skipped++; continue; }
+        await this.prisma.project.create({
+          data: {
+            orgId, name: p.name, description: p.description,
+            status: p.status ?? 'PLANNED', priority: p.priority ?? 'MEDIUM',
+            leadType: p.leadType ?? 'HUMAN', leadId: p.leadId,
+            progress: p.progress ?? 0,
+          },
+        });
+        stats.projects++;
+      }
+    }
+
+    // Import positions (skip duplicates by title)
+    if (data.positions?.length) {
+      for (const p of data.positions) {
+        const existing = await this.prisma.orgPosition.findFirst({
+          where: { orgId, title: p.title },
+        });
+        if (existing) { idMap.set(p.id, existing.id); stats.skipped++; continue; }
+        const newPos = await this.prisma.orgPosition.create({
+          data: {
+            orgId, title: p.title, department: p.department,
+            holderType: p.holderType ?? 'HUMAN',
+            agentId: p.agentId ? idMap.get(p.agentId) : undefined,
+          },
+        });
+        idMap.set(p.id, newPos.id);
+        stats.positions++;
+      }
+      // Second pass: set parent references
+      for (const p of data.positions) {
+        if (p.parentId && idMap.has(p.id) && idMap.has(p.parentId)) {
+          await this.prisma.orgPosition.update({
+            where: { id: idMap.get(p.id)! },
+            data: { parentId: idMap.get(p.parentId) },
+          });
+        }
+      }
+    }
+
+    this.logger.log(`Import complete: ${JSON.stringify(stats)}`);
+    return { message: 'Import complete', stats };
+  }
 }

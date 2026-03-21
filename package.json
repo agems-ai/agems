@@ -5,7 +5,15 @@
   "description": "AGEMS — Agent Management System. Operating system for AI-native businesses.",
   "license": "SEE LICENSE IN LICENSE",
   "pnpm": {
-    "onlyBuiltDependencies": ["bcrypt", "prisma", "@prisma/client", "@prisma/engines", "@nestjs/core", "sharp", "msgpackr-extract"]
+    "onlyBuiltDependencies": [
+      "bcrypt",
+      "prisma",
+      "@prisma/client",
+      "@prisma/engines",
+      "@nestjs/core",
+      "sharp",
+      "msgpackr-extract"
+    ]
   },
   "scripts": {
     "dev": "turbo dev",
@@ -20,5 +28,8 @@
   "packageManager": "pnpm@10.30.3",
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "turbo": "^2.8.14"
   }
 }

@@ -182,4 +182,159 @@ export class TasksService {
       `Review & finalize: ${prefix}`,
     ];
   }
+
+  // ── Labels ──────────────────────────────────────────────────────────
+
+  async createLabel(name: string, color: string, orgId: string) {
+    return this.prisma.label.create({
+      data: { name, color, orgId },
+    });
+  }
+
+  async listLabels(orgId: string) {
+    return this.prisma.label.findMany({
+      where: { orgId },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async deleteLabel(labelId: string, orgId: string) {
+    const label = await this.prisma.label.findUnique({ where: { id: labelId } });
+    if (!label) throw new NotFoundException('Label not found');
+    if (label.orgId !== orgId) throw new ForbiddenException('Label belongs to another organization');
+    await this.prisma.taskLabel.deleteMany({ where: { labelId } });
+    return this.prisma.label.delete({ where: { id: labelId } });
+  }
+
+  async addLabelToTask(taskId: string, labelId: string, orgId: string) {
+    await this.findOne(taskId, orgId);
+    return this.prisma.taskLabel.create({
+      data: { taskId, labelId },
+    });
+  }
+
+  async removeLabelFromTask(taskId: string, labelId: string, orgId: string) {
+    await this.findOne(taskId, orgId);
+    return this.prisma.taskLabel.delete({
+      where: { taskId_labelId: { taskId, labelId } },
+    });
+  }
+
+  // ── Attachments ─────────────────────────────────────────────────────
+
+  async addAttachment(
+    taskId: string,
+    input: { filename: string; originalName: string; mimetype: string; size: number; url: string },
+    uploadedBy: string,
+    uploaderId: string,
+    orgId: string,
+  ) {
+    await this.findOne(taskId, orgId);
+    return this.prisma.taskAttachment.create({
+      data: {
+        taskId,
+        filename: input.filename,
+        originalName: input.originalName,
+        mimetype: input.mimetype,
+        size: input.size,
+        url: input.url,
+        uploadedBy: uploadedBy as any,
+        uploaderId,
+      },
+    });
+  }
+
+  async listAttachments(taskId: string, orgId: string) {
+    await this.findOne(taskId, orgId);
+    return this.prisma.taskAttachment.findMany({
+      where: { taskId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async removeAttachment(taskId: string, attachmentId: string, orgId: string) {
+    await this.findOne(taskId, orgId);
+    const attachment = await this.prisma.taskAttachment.findUnique({ where: { id: attachmentId } });
+    if (!attachment) throw new NotFoundException('Attachment not found');
+    if (attachment.taskId !== taskId) throw new ForbiddenException('Attachment does not belong to this task');
+    return this.prisma.taskAttachment.delete({ where: { id: attachmentId } });
+  }
+
+  // ── Work Products ──────────────────────────────────────────────────
+
+  async createWorkProduct(
+    taskId: string,
+    input: { title: string; description?: string; type: string; content?: string; metadata?: any },
+    createdBy: string,
+    createdById: string,
+    orgId: string,
+  ) {
+    await this.findOne(taskId, orgId);
+    return this.prisma.taskWorkProduct.create({
+      data: {
+        taskId,
+        title: input.title,
+        description: input.description,
+        type: input.type as any,
+        content: input.content,
+        metadata: input.metadata as any,
+        createdBy: createdBy as any,
+        createdById,
+      },
+    });
+  }
+
+  async listWorkProducts(taskId: string, orgId: string) {
+    await this.findOne(taskId, orgId);
+    return this.prisma.taskWorkProduct.findMany({
+      where: { taskId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async removeWorkProduct(taskId: string, productId: string, orgId: string) {
+    await this.findOne(taskId, orgId);
+    const product = await this.prisma.taskWorkProduct.findUnique({ where: { id: productId } });
+    if (!product) throw new NotFoundException('Work product not found');
+    if (product.taskId !== taskId) throw new ForbiddenException('Work product does not belong to this task');
+    return this.prisma.taskWorkProduct.delete({ where: { id: productId } });
+  }
+
+  // ── Read States (Inbox) ─────────────────────────────────────────────
+
+  async markAsRead(taskId: string, userId: string, orgId: string) {
+    await this.findOne(taskId, orgId);
+    return this.prisma.taskReadState.upsert({
+      where: { taskId_userId: { taskId, userId } },
+      create: { taskId, userId, readAt: new Date() },
+      update: { readAt: new Date() },
+    });
+  }
+
+  async markAsUnread(taskId: string, userId: string, orgId: string) {
+    await this.findOne(taskId, orgId);
+    return this.prisma.taskReadState.delete({
+      where: { taskId_userId: { taskId, userId } },
+    }).catch(() => {
+      // Already unread, no-op
+      return { taskId, userId, deleted: true };
+    });
+  }
+
+  async getUnreadTasks(userId: string, orgId: string) {
+    const tasks = await this.prisma.task.findMany({
+      where: {
+        orgId,
+        OR: [
+          { assigneeId: userId },
+          { creatorId: userId },
+        ],
+        readStates: {
+          none: { userId },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return tasks;
+  }
 }

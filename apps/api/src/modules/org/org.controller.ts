@@ -87,4 +87,18 @@ export class OrgController {
   assignHolder(@Param('id') id: string, @Body() body: { holderType: string; agentId?: string; userId?: string }, @Request() req: { user: RequestUser }) {
     return this.orgService.assignHolder(id, body.holderType, body.agentId, body.userId, req.user.orgId);
   }
+
+  // ── Export / Import ──
+
+  @Get('export')
+  @Roles('ADMIN')
+  exportOrg(@Request() req: { user: RequestUser }) {
+    return this.orgService.exportOrg(req.user.orgId);
+  }
+
+  @Post('import')
+  @Roles('ADMIN')
+  importOrg(@Request() req: { user: RequestUser }, @Body() body: any) {
+    return this.orgService.importOrg(req.user.orgId, body);
+  }
 }

@@ -1,7 +1,11 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
-:root {
+/* ═══════════════════════════════════════════
+   DARK THEME (default)
+   ═══════════════════════════════════════════ */
+:root,
+[data-theme="dark"] {
   --background: #0a0a0f;
   --foreground: #ffffff;
   --card: #12121a;
@@ -13,17 +17,48 @@
   --warning: #fdcb6e;
   --danger: #e84393;
   --muted: #8585a8;
+  --sidebar: #0d0d14;
+  --input: #1a1a28;
+  --overlay: rgba(0, 0, 0, 0.6);
+  --shadow: rgba(0, 0, 0, 0.3);
+}
+
+/* ═══════════════════════════════════════════
+   LIGHT THEME
+   ═══════════════════════════════════════════ */
+[data-theme="light"] {
+  --background: #f5f5f7;
+  --foreground: #1a1a2e;
+  --card: #ffffff;
+  --card-hover: #f0f0f5;
+  --border: #e0e0e8;
+  --accent: #6c5ce7;
+  --accent-hover: #5b4bd6;
+  --success: #00a89d;
+  --warning: #e6a817;
+  --danger: #d63384;
+  --muted: #6e6e8a;
+  --sidebar: #ffffff;
+  --input: #f0f0f5;
+  --overlay: rgba(0, 0, 0, 0.3);
+  --shadow: rgba(0, 0, 0, 0.1);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: system-ui, -apple-system, sans-serif;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 select,
 select option {
   background: var(--card);
+  color: var(--foreground);
+}
+
+input, textarea {
+  background: var(--input);
   color: var(--foreground);
 }
 
@@ -33,4 +68,197 @@ select option {
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/* ═══════════════════════════════════════════
+   COMMAND PALETTE OVERLAY
+   ═══════════════════════════════════════════ */
+.command-palette-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 20vh;
+  backdrop-filter: blur(4px);
+}
+
+.command-palette {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 560px;
+  box-shadow: 0 20px 60px var(--shadow);
+  overflow: hidden;
+}
+
+.command-palette input {
+  width: 100%;
+  padding: 16px 20px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--foreground);
+  font-size: 16px;
+  outline: none;
+}
+
+.command-palette-results {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.command-palette-item {
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.command-palette-item:hover,
+.command-palette-item[data-selected="true"] {
+  background: var(--card-hover);
+}
+
+.command-palette-item .label {
+  flex: 1;
+  color: var(--foreground);
+}
+
+.command-palette-item .shortcut {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* ═══════════════════════════════════════════
+   MOBILE BOTTOM NAV
+   ═══════════════════════════════════════════ */
+@media (max-width: 768px) {
+  .mobile-bottom-nav {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 40;
+    background: var(--sidebar);
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-around;
+    padding: 6px 0;
+    padding-bottom: env(safe-area-inset-bottom, 6px);
+  }
+
+  .mobile-bottom-nav a {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 4px 8px;
+    font-size: 10px;
+    color: var(--muted);
+    text-decoration: none;
+    transition: color 0.15s;
+  }
+
+  .mobile-bottom-nav a[data-active="true"] {
+    color: var(--accent);
+  }
+
+  .mobile-bottom-nav a svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  /* Add bottom padding when mobile nav is visible */
+  .main-content-mobile-pad {
+    padding-bottom: 70px;
+  }
+}
+
+/* ═══════════════════════════════════════════
+   KANBAN BOARD
+   ═══════════════════════════════════════════ */
+.kanban-board {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 16px;
+  min-height: 400px;
+}
+
+.kanban-column {
+  min-width: 280px;
+  max-width: 320px;
+  flex-shrink: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+}
+
+.kanban-column-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.kanban-column-body {
+  padding: 8px;
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kanban-card {
+  padding: 10px 12px;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.kanban-card:hover {
+  border-color: var(--accent);
+  background: var(--card-hover);
+}
+
+/* ═══════════════════════════════════════════
+   PROGRESS BAR
+   ═══════════════════════════════════════════ */
+.progress-bar {
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+/* ═══════════════════════════════════════════
+   TRANSITIONS
+   ═══════════════════════════════════════════ */
+* {
+  transition-property: background-color, border-color, color;
+  transition-duration: 0s;
+}
+
+[data-theme] * {
+  transition-duration: 0.15s;
 }

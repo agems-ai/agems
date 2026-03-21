@@ -19,6 +19,16 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { ApprovalsModule } from './modules/approvals/approvals.module';
 import { StripeModule } from './modules/stripe/stripe.module';
 import { CatalogModule } from './modules/catalog/catalog.module';
+
+// New modules (Paperclip-inspired features)
+import { GoalsModule } from './modules/goals/goals.module';
+import { ProjectsModule } from './modules/projects/projects.module';
+import { BudgetsModule } from './modules/budgets/budgets.module';
+import { AdaptersModule } from './modules/adapters/adapters.module';
+import { PluginsModule } from './modules/plugins/plugins.module';
+import { EvalsModule } from './modules/evals/evals.module';
+import { WorktreesModule } from './modules/worktrees/worktrees.module';
+
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -43,6 +53,15 @@ import { RolesGuard } from './common/guards/roles.guard';
     ApprovalsModule,
     StripeModule,
     CatalogModule,
+
+    // New modules
+    GoalsModule,
+    ProjectsModule,
+    BudgetsModule,
+    AdaptersModule,
+    PluginsModule,
+    EvalsModule,
+    WorktreesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

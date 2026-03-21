@@ -58,6 +58,7 @@ export default function TasksPage() {
   const [editTask, setEditTask] = useState<any>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'board' | 'list'>('board');
   const [filterAssignee, setFilterAssignee] = useState('');
   const [filterCreator, setFilterCreator] = useState('');
   const [quickFilter, setQuickFilter] = useState<QuickFilter>('all');
@@ -284,9 +285,21 @@ export default function TasksPage() {
           <h1 className="text-2xl md:text-3xl font-bold">Tasks</h1>
           <p className="text-[var(--muted)] mt-1 text-sm md:text-base hidden md:block">Drag tasks between columns to change status</p>
         </div>
-        <button onClick={openCreate} className="px-4 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90">
-          + New Task
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-lg border border-[var(--border)] overflow-hidden">
+            <button
+              onClick={() => setViewMode('board')}
+              className={`px-3 py-1.5 text-xs font-medium transition-colors ${viewMode === 'board' ? 'bg-[var(--accent)] text-white' : 'text-[var(--muted)] hover:text-white'}`}
+            >Board</button>
+            <button
+              onClick={() => setViewMode('list')}
+              className={`px-3 py-1.5 text-xs font-medium transition-colors ${viewMode === 'list' ? 'bg-[var(--accent)] text-white' : 'text-[var(--muted)] hover:text-white'}`}
+            >List</button>
+          </div>
+          <button onClick={openCreate} className="px-4 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90">
+            + New Task
+          </button>
+        </div>
       </div>
 
       {/* Quick filters */}
@@ -350,7 +363,56 @@ export default function TasksPage() {
 
       {loading ? (
         <div className="text-center text-[var(--muted)] py-20">Loading tasks...</div>
+      ) : viewMode === 'list' ? (
+        /* ── List View ── */
+        <div className="border border-[var(--border)] rounded-xl overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[var(--border)] bg-[var(--card)]">
+                <th className="text-left px-4 py-3 font-medium text-[var(--muted)]">Title</th>
+                <th className="text-left px-4 py-3 font-medium text-[var(--muted)] hidden md:table-cell">Status</th>
+                <th className="text-left px-4 py-3 font-medium text-[var(--muted)] hidden md:table-cell">Priority</th>
+                <th className="text-left px-4 py-3 font-medium text-[var(--muted)] hidden lg:table-cell">Assignee</th>
+                <th className="text-left px-4 py-3 font-medium text-[var(--muted)] hidden lg:table-cell">Deadline</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((task) => (
+                <tr
+                  key={task.id}
+                  onClick={() => openView(task)}
+                  className="border-b border-[var(--border)] hover:bg-[var(--card-hover)] cursor-pointer transition-colors"
+                >
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{task.title}</span>
+                      {taskTypeBadge[task.type] && <span className="text-xs">{taskTypeBadge[task.type]}</span>}
+                      <span className={`md:hidden px-1.5 py-0.5 rounded text-[10px] ${statusColors[task.status]}`}>{task.status}</span>
+                    </div>
+                    {task.description && <p className="text-xs text-[var(--muted)] mt-0.5 line-clamp-1">{task.description}</p>}
+                  </td>
+                  <td className="px-4 py-3 hidden md:table-cell">
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${statusColors[task.status]}`}>{task.status}</span>
+                  </td>
+                  <td className="px-4 py-3 hidden md:table-cell">
+                    <span className={`font-mono font-bold text-xs ${priorityColors[task.priority]}`}>{priorityIcon[task.priority]} {task.priority}</span>
+                  </td>
+                  <td className="px-4 py-3 hidden lg:table-cell">
+                    <AssigneeChip assigneeId={task.assigneeId} assigneeType={task.assigneeType} agents={agents} users={users} />
+                  </td>
+                  <td className="px-4 py-3 hidden lg:table-cell text-[var(--muted)] text-xs">
+                    {task.deadline ? new Date(task.deadline).toLocaleDateString() : '-'}
+                  </td>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr><td colSpan={5} className="text-center py-12 text-[var(--muted)]">No tasks match filters</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       ) : (
+        /* ── Board View (Kanban) ── */
         <div className="flex md:grid md:grid-cols-5 gap-4 overflow-x-auto pb-4 md:pb-0 snap-x snap-mandatory md:snap-none" style={{ minHeight: 400 }}>
           {COLUMNS.map((col) => (
             <div

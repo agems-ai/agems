@@ -32,6 +32,10 @@ model Organization {
   auditLogs    AuditLog[]
   payments     Payment[]
   subscription Subscription?
+  goals        Goal[]
+  projects     Project[]
+  labels       Label[]
+  plugins      Plugin[]
 
   @@map("organizations")
 }
@@ -112,6 +116,10 @@ model Agent {
   // Runtime Configuration (Eden-like execution)
   runtimeConfig Json @default("{}") @map("runtime_config")
 
+  // External Agent Adapter (null = built-in LLM agent)
+  adapterType   AdapterType? @map("adapter_type")
+  adapterConfig Json?        @map("adapter_config") // Adapter-specific settings
+
   // Telegram Integration (each agent can have its own bot/account)
   telegramConfig Json? @map("telegram_config") // { botToken?, apiId?, apiHash?, sessionString? }
 
@@ -139,6 +147,10 @@ model Agent {
   telegramChats    TelegramChat[]
   approvalPolicy   ApprovalPolicy?
   approvalRequests ApprovalRequest[]
+  configRevisions  AgentConfigRevision[]
+  apiKeys          AgentApiKey[]
+  budgets          AgentBudget[]
+  ownedGoals       Goal[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -151,6 +163,19 @@ enum AgentType {
   ASSISTANT
   META
   REACTIVE
+  EXTERNAL    // External agent via adapter
+}
+
+enum AdapterType {
+  CLAUDE_CODE   // Anthropic Claude Code CLI
+  CODEX         // OpenAI Codex CLI
+  CURSOR        // Cursor IDE agent
+  GEMINI_CLI    // Google Gemini CLI
+  OPENCLAW      // OpenClaw agent (Docker/SSE gateway)
+  OPENCODE      // OpenCode AI agent
+  PI            // Pi agent
+  HTTP          // Generic HTTP webhook adapter
+  PROCESS       // Generic shell command adapter
 }
 
 enum AgentStatus {
@@ -456,17 +481,29 @@ model Task {
   parentTask   Task?   @relation("TaskTree", fields: [parentTaskId], references: [id])
   subtasks     Task[]  @relation("TaskTree")
 
+  // Project & Goal linkage
+  projectId  String?  @map("project_id")
+  project    Project? @relation(fields: [projectId], references: [id])
+  goalId     String?  @map("goal_id")
+  goal       Goal?    @relation(fields: [goalId], references: [id])
+
   result      Json?
   deadline    DateTime?
   completedAt DateTime?    @map("completed_at")
   meetingTasks MeetingTask[]
   comments    TaskComment[]
+  labels      TaskLabel[]
+  attachments TaskAttachment[]
+  workProducts TaskWorkProduct[]
+  readStates  TaskReadState[]
   metadata    Json?
   createdAt   DateTime     @default(now()) @map("created_at")
   updatedAt   DateTime     @updatedAt @map("updated_at")
 
   @@index([assigneeType, assigneeId, status])
   @@index([creatorType, creatorId])
+  @@index([projectId])
+  @@index([goalId])
   @@map("tasks")
 }
 
@@ -885,6 +922,8 @@ model ApprovalRequest {
   // Chat message where approval card was posted
   messageId String? @map("message_id")
 
+  comments  ApprovalComment[]
+
   expiresAt DateTime? @map("expires_at")
   createdAt DateTime  @default(now()) @map("created_at")
 
@@ -1021,4 +1060,330 @@ model Setting {
 
   @@unique([orgId, key])
   @@map("settings")
+}
+
+// ═══════════════════════════════════════════════════
+// GOALS (Hierarchical Goal System)
+// ═══════════════════════════════════════════════════
+
+model Goal {
+  id          String       @id @default(uuid())
+  orgId       String       @map("org_id")
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  title       String
+  description String?      @db.Text
+  status      GoalStatus   @default(PLANNED)
+  priority    Priority     @default(MEDIUM)
+
+  // Hierarchy
+  parentId String? @map("parent_id")
+  parent   Goal?   @relation("GoalTree", fields: [parentId], references: [id])
+  children Goal[]  @relation("GoalTree")
+
+  // Ownership
+  ownerType ActorType @map("owner_type")
+  ownerId   String    @map("owner_id")
+  agentId   String?   @map("agent_id")
+  agent     Agent?    @relation(fields: [agentId], references: [id])
+
+  // Project linkage
+  projectId String?  @map("project_id")
+  project   Project? @relation(fields: [projectId], references: [id])
+
+  // Progress
+  progress   Int       @default(0) // 0-100
+  targetDate DateTime? @map("target_date")
+  achievedAt DateTime? @map("achieved_at")
+
+  tasks     Task[]
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([orgId, status])
+  @@index([parentId])
+  @@index([ownerType, ownerId])
+  @@map("goals")
+}
+
+enum GoalStatus {
+  PLANNED
+  ACTIVE
+  ACHIEVED
+  CANCELLED
+  PAUSED
+}
+
+// ═══════════════════════════════════════════════════
+// PROJECTS
+// ═══════════════════════════════════════════════════
+
+model Project {
+  id          String        @id @default(uuid())
+  orgId       String        @map("org_id")
+  org         Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  name        String
+  description String?       @db.Text
+  status      ProjectStatus @default(PLANNED)
+  priority    Priority      @default(MEDIUM)
+
+  // Lead
+  leadType ActorType @map("lead_type")
+  leadId   String    @map("lead_id")
+
+  // Dates
+  startDate  DateTime? @map("start_date")
+  targetDate DateTime? @map("target_date")
+  completedAt DateTime? @map("completed_at")
+
+  // Progress
+  progress Int @default(0) // 0-100
+
+  tasks    Task[]
+  goals    Goal[]
+  metadata Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([orgId, status])
+  @@map("projects")
+}
+
+enum ProjectStatus {
+  BACKLOG
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  ON_HOLD
+}
+
+// ═══════════════════════════════════════════════════
+// AGENT BUDGETS & COST CONTROL
+// ═══════════════════════════════════════════════════
+
+model AgentBudget {
+  id      String @id @default(uuid())
+  agentId String @map("agent_id")
+  agent   Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  // Monthly budget (USD)
+  monthlyLimitUsd Float  @map("monthly_limit_usd")
+  currentSpendUsd Float  @default(0) @map("current_spend_usd")
+  periodStart     DateTime @map("period_start")
+  periodEnd       DateTime @map("period_end")
+
+  // Alerts
+  softAlertPercent  Int     @default(80) @map("soft_alert_percent")  // Alert at 80% spend
+  hardStopEnabled   Boolean @default(true) @map("hard_stop_enabled") // Auto-pause at 100%
+  alertSent         Boolean @default(false) @map("alert_sent")
+  hardStopTriggered Boolean @default(false) @map("hard_stop_triggered")
+
+  incidents BudgetIncident[]
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([agentId])
+  @@index([periodStart, periodEnd])
+  @@map("agent_budgets")
+}
+
+model BudgetIncident {
+  id       String @id @default(uuid())
+  budgetId String @map("budget_id")
+  budget   AgentBudget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+
+  type     BudgetIncidentType
+  message  String    @db.Text
+  spendUsd Float     @map("spend_usd")
+  limitUsd Float     @map("limit_usd")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([budgetId])
+  @@map("budget_incidents")
+}
+
+enum BudgetIncidentType {
+  SOFT_ALERT
+  HARD_STOP
+  BUDGET_RESET
+  MANUAL_OVERRIDE
+}
+
+// ═══════════════════════════════════════════════════
+// AGENT CONFIG REVISIONS
+// ═══════════════════════════════════════════════════
+
+model AgentConfigRevision {
+  id      String @id @default(uuid())
+  agentId String @map("agent_id")
+  agent   Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  version     Int
+  changeset   Json       // { field: { old: value, new: value } }
+  snapshot    Json       // Full config snapshot at this version
+  changedBy   ActorType  @map("changed_by")
+  changedById String     @map("changed_by_id")
+  changeNote  String?    @map("change_note") @db.Text
+  createdAt   DateTime   @default(now()) @map("created_at")
+
+  @@unique([agentId, version])
+  @@index([agentId])
+  @@map("agent_config_revisions")
+}
+
+// ═══════════════════════════════════════════════════
+// TASK LABELS
+// ═══════════════════════════════════════════════════
+
+model Label {
+  id    String       @id @default(uuid())
+  orgId String       @map("org_id")
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  name  String
+  color String       @default("#6c5ce7") // Hex color
+  tasks TaskLabel[]
+
+  @@unique([orgId, name])
+  @@map("labels")
+}
+
+model TaskLabel {
+  id      String @id @default(uuid())
+  taskId  String @map("task_id")
+  task    Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  labelId String @map("label_id")
+  label   Label  @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, labelId])
+  @@map("task_labels")
+}
+
+// ═══════════════════════════════════════════════════
+// TASK ATTACHMENTS
+// ═══════════════════════════════════════════════════
+
+model TaskAttachment {
+  id           String    @id @default(uuid())
+  taskId       String    @map("task_id")
+  task         Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  filename     String
+  originalName String    @map("original_name")
+  mimetype     String
+  size         Int
+  url          String
+  uploadedBy   ActorType @map("uploaded_by")
+  uploaderId   String    @map("uploader_id")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@index([taskId])
+  @@map("task_attachments")
+}
+
+// ═══════════════════════════════════════════════════
+// TASK WORK PRODUCTS
+// ═══════════════════════════════════════════════════
+
+model TaskWorkProduct {
+  id          String   @id @default(uuid())
+  taskId      String   @map("task_id")
+  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  title       String
+  description String?  @db.Text
+  type        WorkProductType @default(ARTIFACT)
+  content     String?  @db.Text  // Text content or URL
+  metadata    Json?
+  createdBy   ActorType @map("created_by")
+  createdById String    @map("created_by_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([taskId])
+  @@map("task_work_products")
+}
+
+enum WorkProductType {
+  ARTIFACT
+  DOCUMENT
+  CODE
+  REPORT
+  FILE
+}
+
+// ═══════════════════════════════════════════════════
+// TASK READ STATES (Inbox)
+// ═══════════════════════════════════════════════════
+
+model TaskReadState {
+  id     String @id @default(uuid())
+  taskId String @map("task_id")
+  task   Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId String @map("user_id")
+  readAt DateTime @default(now()) @map("read_at")
+
+  @@unique([taskId, userId])
+  @@index([userId])
+  @@map("task_read_states")
+}
+
+// ═══════════════════════════════════════════════════
+// APPROVAL COMMENTS
+// ═══════════════════════════════════════════════════
+
+model ApprovalComment {
+  id         String          @id @default(uuid())
+  requestId  String          @map("request_id")
+  request    ApprovalRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  authorType ActorType       @map("author_type")
+  authorId   String          @map("author_id")
+  content    String          @db.Text
+  createdAt  DateTime        @default(now()) @map("created_at")
+
+  @@index([requestId])
+  @@map("approval_comments")
+}
+
+// ═══════════════════════════════════════════════════
+// AGENT API KEYS
+// ═══════════════════════════════════════════════════
+
+model AgentApiKey {
+  id        String   @id @default(uuid())
+  agentId   String   @map("agent_id")
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  name      String
+  keyHash   String   @map("key_hash")     // bcrypt hash of key
+  keyPrefix String   @map("key_prefix")   // First 8 chars for identification
+  lastUsedAt DateTime? @map("last_used_at")
+  expiresAt  DateTime? @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([agentId])
+  @@index([keyPrefix])
+  @@map("agent_api_keys")
+}
+
+// ═══════════════════════════════════════════════════
+// PLUGIN SYSTEM
+// ═══════════════════════════════════════════════════
+
+model Plugin {
+  id          String       @id @default(uuid())
+  orgId       String       @map("org_id")
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  name        String
+  slug        String       @unique
+  description String?      @db.Text
+  version     String
+  author      String?
+  homepage    String?
+  entryPoint  String       @map("entry_point")
+  config      Json?
+  enabled     Boolean      @default(true)
+  installedAt DateTime     @default(now()) @map("installed_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  @@index([orgId])
+  @@map("plugins")
 }

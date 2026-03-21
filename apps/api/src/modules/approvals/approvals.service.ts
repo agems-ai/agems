@@ -396,7 +396,10 @@ export class ApprovalsService {
   async findOne(id: string) {
     const request = await this.prisma.approvalRequest.findUnique({
       where: { id },
-      include: { agent: { select: { id: true, name: true, avatar: true } } },
+      include: {
+        agent: { select: { id: true, name: true, avatar: true } },
+        comments: { orderBy: { createdAt: 'asc' } },
+      },
     });
     if (!request) throw new NotFoundException('Approval request not found');
     return request;
@@ -426,5 +429,36 @@ export class ApprovalsService {
       }
     }
     return count;
+  }
+
+  // ── Comments ──
+
+  async addComment(requestId: string, authorType: string, authorId: string, content: string) {
+    // Verify the request exists
+    const request = await this.prisma.approvalRequest.findUnique({ where: { id: requestId } });
+    if (!request) throw new NotFoundException('Approval request not found');
+
+    const comment = await this.prisma.approvalComment.create({
+      data: {
+        requestId,
+        authorType: authorType as any,
+        authorId,
+        content,
+      },
+    });
+
+    this.events.emit('approval.commented', { requestId, comment });
+
+    return comment;
+  }
+
+  async listComments(requestId: string) {
+    const request = await this.prisma.approvalRequest.findUnique({ where: { id: requestId } });
+    if (!request) throw new NotFoundException('Approval request not found');
+
+    return this.prisma.approvalComment.findMany({
+      where: { requestId },
+      orderBy: { createdAt: 'asc' },
+    });
   }
 }

@@ -45,6 +45,22 @@ export class ApprovalsController {
     return { rejected };
   }
 
+  // ── Comments ──
+
+  @Post(':id/comments')
+  addComment(
+    @Param('id') id: string,
+    @Body() body: { content: string },
+    @Request() req: any,
+  ) {
+    return this.approvalsService.addComment(id, 'HUMAN', req.user.id, body.content);
+  }
+
+  @Get(':id/comments')
+  listComments(@Param('id') id: string) {
+    return this.approvalsService.listComments(id);
+  }
+
   // ── Policies ──
 
   @Get('policies/:agentId')

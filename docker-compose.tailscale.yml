@@ -1,0 +1,32 @@
+# Docker Compose override for Tailscale integration
+# Usage: docker compose -f docker-compose.yml -f docker-compose.tailscale.yml up -d
+#
+# Required env vars:
+#   TS_AUTHKEY - Tailscale auth key (get from https://login.tailscale.com/admin/settings/keys)
+#
+# Optional env vars:
+#   TS_HOSTNAME - Hostname on your tailnet (default: agems)
+#   TS_EXTRA_ARGS - Additional tailscale up arguments
+
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    hostname: ${TS_HOSTNAME:-agems}
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=true
+      - TS_EXTRA_ARGS=${TS_EXTRA_ARGS:-}
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    network_mode: "service:web"
+    restart: unless-stopped
+    depends_on:
+      - web
+
+volumes:
+  tailscale-state:

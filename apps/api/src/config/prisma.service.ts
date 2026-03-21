@@ -4,7 +4,7 @@ import { PrismaClient } from '@agems/db';
 // Models that have orgId field and need tenant filtering
 const TENANT_MODELS = [
   'agent', 'tool', 'channel', 'task', 'meeting',
-  'orgPosition', 'setting', 'auditLog',
+  'orgPosition', 'setting', 'auditLog', 'plugin',
 ];
 
 @Injectable()
