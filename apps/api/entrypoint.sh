@@ -10,7 +10,7 @@ if npx prisma migrate deploy 2>&1; then
   echo "Migrations applied successfully."
 else
   echo "migrate deploy failed, falling back to db push..."
-  npx prisma db push --skip-generate
+  npx prisma db push --skip-generate --accept-data-loss
   echo "Database schema pushed successfully."
 fi
 
