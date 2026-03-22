@@ -8,6 +8,8 @@ COPY apps/api/package.json apps/api/
 COPY packages/ai/package.json packages/ai/
 COPY packages/db/package.json packages/db/
 COPY packages/shared/package.json packages/shared/
+COPY packages/adapters/package.json packages/adapters/
+COPY packages/plugins/package.json packages/plugins/
 RUN pnpm install --frozen-lockfile
 
 FROM base AS build
