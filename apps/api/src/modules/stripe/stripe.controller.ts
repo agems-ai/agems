@@ -4,8 +4,10 @@ import { Public } from '../../common/decorators/roles.decorator';
 import { StripeService } from './stripe.service';
 import type { RawBodyRequest } from '@nestjs/common';
 import type { Request } from 'express';
+import { SkipThrottle } from '@nestjs/throttler';
 
 @Controller('stripe')
+@SkipThrottle()
 export class StripeController {
   private readonly logger = new Logger(StripeController.name);
 

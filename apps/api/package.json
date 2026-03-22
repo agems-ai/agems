@@ -38,7 +38,9 @@
     "ssh2": "^1.17.0",
     "stripe": "^20.4.1",
     "telegram": "^2.26.22",
-    "zod": "^3.24.0"
+    "zod": "^3.24.0",
+    "@nestjs/throttler": "^6.0.0",
+    "ioredis": "^5.4.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.0",

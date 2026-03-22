@@ -14,16 +14,18 @@ import { z } from 'zod';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { join } from 'path';
+import { decryptJson } from '../../common/crypto.util';
+import { RedisLockService } from '../../common/redis-lock.service';
 
 @Injectable()
 export class RuntimeService {
   private readonly logger = new Logger(RuntimeService.name);
-  /** Per-channel execution locks: prevents duplicate agent runs when messages arrive during execution */
-  private readonly executionLocks = new Map<string, Promise<void>>();
-  /** Queued messages: stores the latest message received while a channel is locked */
+  /** Queued messages: stores the latest message received while a channel is locked (local fallback for pending queue) */
   private readonly pendingMessages = new Map<string, { channelId: string; message: any }>();
   /** Abort controllers for running executions — keyed by executionId */
   private readonly abortControllers = new Map<string, AbortController>();
+  /** Maps channelId → Set of executionIds for targeted channel stopping */
+  private readonly channelExecutionMap = new Map<string, Set<string>>();
 
   constructor(
     private prisma: PrismaService,
@@ -37,6 +39,7 @@ export class RuntimeService {
     @Inject(forwardRef(() => ApprovalsService))
     private approvals: ApprovalsService,
     private dashboard: DashboardService,
+    private redisLock: RedisLockService,
   ) {}
 
   /** Handle stop execution request from UI */
@@ -51,8 +54,6 @@ export class RuntimeService {
     }
   }
 
-  /** Track recent agent-to-agent exchanges per channel to prevent infinite loops */
-  private readonly agentExchangeCount = new Map<string, { count: number; resetAt: number }>();
   private readonly MAX_AGENT_EXCHANGES = 4; // max agent-to-agent rounds per channel per window
   private readonly AGENT_EXCHANGE_WINDOW_MS = 5 * 60 * 1000; // 5 minute window
 
@@ -64,26 +65,20 @@ export class RuntimeService {
     // SYSTEM messages never trigger agents
     if (message.senderType === 'SYSTEM') return;
 
-    // Agent-to-agent loop prevention
+    // Agent-to-agent loop prevention (Redis-backed for multi-instance support)
     if (message.senderType === 'AGENT') {
       const exchKey = `a2a:${channelId}`;
-      const now = Date.now();
-      const exch = this.agentExchangeCount.get(exchKey);
-      if (exch && now < exch.resetAt) {
-        if (exch.count >= this.MAX_AGENT_EXCHANGES) {
-          this.logger.debug(`Agent-to-agent limit reached in channel ${channelId}, skipping`);
-          return;
-        }
-        exch.count++;
-      } else {
-        this.agentExchangeCount.set(exchKey, { count: 1, resetAt: now + this.AGENT_EXCHANGE_WINDOW_MS });
+      const count = await this.redisLock.incrementWithTtl(exchKey, this.AGENT_EXCHANGE_WINDOW_MS);
+      if (count > this.MAX_AGENT_EXCHANGES) {
+        this.logger.debug(`Agent-to-agent limit reached in channel ${channelId}, skipping`);
+        return;
       }
     }
 
-    // Execution queue guard: if agents are already executing in this channel,
-    // queue the latest message so it's processed after the current execution finishes
+    // Execution queue guard: use Redis distributed lock for multi-instance support
     const lockKey = `channel:${channelId}`;
-    if (this.executionLocks.has(lockKey)) {
+    const releaseLock = await this.redisLock.tryAcquire(lockKey, 5 * 60 * 1000); // 5 min TTL
+    if (!releaseLock) {
       this.logger.log(`Queuing message in channel ${channelId} — agents are already executing`);
       this.pendingMessages.set(lockKey, { channelId, message });
       return;
@@ -93,7 +88,7 @@ export class RuntimeService {
     const participants = await this.prisma.channelParticipant.findMany({
       where: { channelId, participantType: 'AGENT' },
     });
-    if (participants.length === 0) return;
+    if (participants.length === 0) { await releaseLock(); return; }
 
     const agents: any[] = [];
     for (const p of participants) {
@@ -104,12 +99,7 @@ export class RuntimeService {
         if (agent.status === 'ACTIVE') agents.push(agent);
       } catch {}
     }
-    if (agents.length === 0) return;
-
-    // Acquire the lock for this channel
-    let releaseLock: () => void;
-    const lockPromise = new Promise<void>(resolve => { releaseLock = resolve; });
-    this.executionLocks.set(lockKey, lockPromise);
+    if (agents.length === 0) { await releaseLock(); return; }
 
     try {
       // Sequential dialogue: each agent sees previous agents' replies
@@ -202,8 +192,7 @@ export class RuntimeService {
         }
       }
     } finally {
-      this.executionLocks.delete(lockKey);
-      releaseLock!();
+      await releaseLock();
 
       // Process the latest queued message if any arrived during execution
       const pending = this.pendingMessages.get(lockKey);
@@ -571,6 +560,13 @@ export class RuntimeService {
       // Create abort controller for this execution with 30-minute timeout
       const abortController = new AbortController();
       this.abortControllers.set(execution.id, abortController);
+      // Track execution → channel mapping for targeted stopChannel()
+      if (context?.channelId) {
+        if (!this.channelExecutionMap.has(context.channelId)) {
+          this.channelExecutionMap.set(context.channelId, new Set());
+        }
+        this.channelExecutionMap.get(context.channelId)!.add(execution.id);
+      }
       executionTimeout = setTimeout(() => {
         this.logger.warn(`Agent ${agent.name}: execution timeout (30 min) — aborting`);
         abortController.abort();
@@ -635,8 +631,11 @@ export class RuntimeService {
 
       this.logger.log(`Agent ${agent.name}: ${result.toolCalls?.length || 0} tool calls, ${result.iterations} iterations, text=${result.text?.substring(0, 80)}...`);
 
-      // Clean up abort controller
+      // Clean up abort controller and channel mapping
       this.abortControllers.delete(execution.id);
+      if (context?.channelId) {
+        this.channelExecutionMap.get(context.channelId)?.delete(execution.id);
+      }
 
       // Emit execution done for real-time UI
       if (context?.channelId) {
@@ -690,6 +689,9 @@ export class RuntimeService {
     } catch (error) {
       clearTimeout(executionTimeout);
       this.abortControllers.delete(execution.id);
+      if (context?.channelId) {
+        this.channelExecutionMap.get(context.channelId)?.delete(execution.id);
+      }
       const isAborted = error instanceof Error && (error.name === 'AbortError' || error.message.includes('aborted'));
       const errorMessage = isAborted ? 'Execution timed out or stopped' : (error instanceof Error ? error.message : String(error));
       this.logger.log(isAborted ? `Agent ${agentId} execution stopped by user` : `Agent ${agentId} execution failed: ${errorMessage}`);
@@ -724,12 +726,19 @@ export class RuntimeService {
 
   /** Stop all running executions in a channel */
   stopChannel(channelId: string): number {
-    // We need to find executions by channel — check running executions
+    // Find executions belonging to this specific channel and stop only those
     let stopped = 0;
-    for (const [execId, controller] of this.abortControllers) {
-      controller.abort();
-      this.abortControllers.delete(execId);
-      stopped++;
+    const channelExecIds = this.channelExecutionMap.get(channelId);
+    if (channelExecIds) {
+      for (const execId of channelExecIds) {
+        const controller = this.abortControllers.get(execId);
+        if (controller) {
+          controller.abort();
+          this.abortControllers.delete(execId);
+          stopped++;
+        }
+      }
+      this.channelExecutionMap.delete(channelId);
     }
     return stopped;
   }
@@ -1942,7 +1951,9 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
             include: { tool: { select: { authConfig: true, config: true } } },
           });
           if (geminiTool?.tool?.authConfig) {
-            geminiApiKey = (geminiTool.tool.authConfig as any).apiKey;
+            const gAuth = geminiTool.tool.authConfig as any;
+            const decryptedAuth = gAuth._enc ? decryptJson(gAuth._enc) as any : gAuth;
+            geminiApiKey = decryptedAuth.apiKey;
           }
           if (!geminiApiKey) {
             geminiApiKey = await this.getApiKey('GOOGLE', agent.orgId);
@@ -2068,7 +2079,9 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     for (const at of agentTools) {
       const tool = at.tool;
       const config = tool.config as Record<string, any>;
-      const authConfig = (tool.authConfig as Record<string, any>) ?? {};
+      // Decrypt authConfig if encrypted (backward compatible with plain JSON)
+      const rawAuth = (tool.authConfig as any) ?? {};
+      const authConfig = (rawAuth._enc ? decryptJson(rawAuth._enc) : rawAuth) as Record<string, any>;
       const perms = at.permissions as Record<string, boolean>;
 
       try {
@@ -2297,7 +2310,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
         ...(body ? { body: JSON.stringify(body) } : {}),
       });
       if (!res.ok) {
-        const text = await res.text();
+        const text = (await res.text()).replace(/\u0000/g, "");
         return { error: `DO API ${res.status}: ${text}` };
       }
       if (res.status === 204) return { success: true };
@@ -2779,7 +2792,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
         const jwtHeader = Buffer.from(JSON.stringify({ alg: 'ES256', kid: authConfig.keyId, typ: 'JWT' })).toString('base64url');
         const jwtPayload = Buffer.from(JSON.stringify({ iss: authConfig.issuerId, iat: now, exp: now + 1200, aud: 'appstoreconnect-v1' })).toString('base64url');
         const signingInput = jwtHeader + '.' + jwtPayload;
-        const pk = crypto.createPrivateKey({ key: authConfig.privateKey, format: 'pem', type: 'pkcs8' });
+        const pk = crypto.createPrivateKey({ key: authConfig.privateKey.replace(/ -----END/g, "-----END").trim(), format: 'pem', type: 'pkcs8' });
         const sig = crypto.sign('sha256', Buffer.from(signingInput), { key: pk, dsaEncoding: 'ieee-p1363' });
         const jwtToken = signingInput + '.' + sig.toString('base64url');
         headers['Authorization'] = `Bearer ${jwtToken}`;
@@ -2843,7 +2856,22 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
       }
 
       const res = await fetch(url, fetchOpts);
-      const text = await res.text();
+
+      // Handle gzip responses (e.g. Apple Sales Reports returns application/a-gzip)
+      let text: string;
+      const respCt = res.headers.get("content-type") || "";
+      if (respCt.includes("gzip") || respCt.includes("octet-stream")) {
+        try {
+          const zlib = require("zlib");
+          const buf = Buffer.from(await res.arrayBuffer());
+          const decompressed = zlib.gunzipSync(buf);
+          text = decompressed.toString("utf-8").replace(/\u0000/g, "");
+        } catch {
+          text = (await res.text()).replace(/\u0000/g, "");
+        }
+      } else {
+        text = (await res.text()).replace(/\u0000/g, "");
+      }
 
       let data: any;
       try { data = JSON.parse(text); } catch { data = text.substring(0, 10000); }
@@ -2945,6 +2973,14 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     const blocked = blockedCommands ?? ['rm', 'rmdir', 'dd', 'mkfs', 'shutdown', 'reboot', 'kill', 'killall'];
     if (blocked.includes(firstWord)) return { error: `Command '${firstWord}' is blocked` };
     if (allowedCommands && !allowedCommands.includes(firstWord)) return { error: `Command '${firstWord}' not allowed` };
+
+    // Prevent agents from accessing Docker socket or host repo (admin-only resources)
+    const sensitivePatterns = ['docker.sock', 'host-repo', '/app/host-repo', '.env'];
+    const cmdLower = command.toLowerCase();
+    for (const pattern of sensitivePatterns) {
+      if (cmdLower.includes(pattern)) return { error: `Access to '${pattern}' is blocked for security` };
+    }
+    if (firstWord === 'docker') return { error: `Command 'docker' is blocked for agents` };
 
     try {
       const output = execSync(command, { timeout: timeout * 1000, cwd, maxBuffer: 1024 * 1024, encoding: 'utf-8' });

@@ -98,7 +98,7 @@ model Agent {
   orgId  String      @map("org_id")
   org    Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
   name   String
-  slug   String      @unique
+  slug   String
   avatar String?
   type   AgentType   @default(AUTONOMOUS)
   status AgentStatus @default(DRAFT)
@@ -155,6 +155,8 @@ model Agent {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  @@unique([orgId, slug])
+  @@index([orgId])
   @@map("agents")
 }
 
@@ -250,6 +252,7 @@ model Tool {
   agents     AgentTool[]
   createdAt  DateTime  @default(now()) @map("created_at")
 
+  @@index([orgId])
   @@map("tools")
 }
 
@@ -400,6 +403,7 @@ model Channel {
   metadata     Json?
   createdAt    DateTime             @default(now()) @map("created_at")
 
+  @@index([orgId])
   @@map("channels")
 }
 
@@ -420,6 +424,7 @@ model ChannelParticipant {
   joinedAt        DateTime        @default(now()) @map("joined_at")
 
   @@unique([channelId, participantType, participantId])
+  @@index([participantType, participantId])
   @@map("channel_participants")
 }
 

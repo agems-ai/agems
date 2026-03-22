@@ -36,14 +36,37 @@ export interface AgentTemplate {
  * Tools without credentials are highlighted in red in the UI.
  */
 export const TOOL_TEMPLATES: ToolTemplate[] = [
+  // Core tools
   { name: 'Database', type: 'DATABASE', authType: 'BASIC', description: 'SQL database for queries and data operations' },
   { name: 'AI Provider', type: 'REST_API', authType: 'API_KEY', description: 'AI/LLM provider (Anthropic, OpenAI, Google, etc.)' },
-  { name: 'Meta Ads API', type: 'REST_API', authType: 'BEARER_TOKEN', description: 'Facebook/Meta Ads API for ad campaign management' },
+  { name: 'N8N Automation', type: 'N8N', authType: 'BEARER_TOKEN', description: 'N8N workflow automation API' },
+  { name: 'Cloud Infrastructure', type: 'REST_API', authType: 'BEARER_TOKEN', description: 'Cloud provider API (DigitalOcean, AWS, etc.)' },
+
+  // Communication
   { name: 'Email API', type: 'REST_API', authType: 'API_KEY', description: 'Email sending service (SendGrid, Mailgun, etc.)' },
   { name: 'WhatsApp API', type: 'REST_API', authType: 'BEARER_TOKEN', description: 'WhatsApp Business Cloud API for messaging' },
   { name: 'Telegram Bot API', type: 'REST_API', authType: 'API_KEY', description: 'Telegram Bot API for messaging and notifications' },
-  { name: 'N8N Automation', type: 'N8N', authType: 'BEARER_TOKEN', description: 'N8N workflow automation API' },
-  { name: 'Cloud Infrastructure', type: 'REST_API', authType: 'BEARER_TOKEN', description: 'Cloud provider API (DigitalOcean, AWS, etc.)' },
+
+  // Advertising & Analytics
+  { name: 'Meta Ads API', type: 'REST_API', authType: 'BEARER_TOKEN', description: 'Facebook/Meta Ads API for ad campaign management' },
+  { name: 'Google Ads API', type: 'REST_API', authType: 'BEARER_TOKEN', description: 'Google Ads API for search/display ad campaign management, keyword research, and bid optimization' },
+  { name: 'Google Analytics API', type: 'REST_API', authType: 'BEARER_TOKEN', description: 'Google Analytics Data API for traffic, audience, and conversion reporting' },
+  { name: 'Google AdSense API', type: 'REST_API', authType: 'BEARER_TOKEN', description: 'Google AdSense Management API for earnings reports and ad unit management' },
+
+  // Domain & Hosting
+  { name: 'GoDaddy API', type: 'REST_API', authType: 'API_KEY', description: 'GoDaddy Domain API for domain search, registration, DNS management, and WHOIS' },
+  { name: 'Cloudflare API', type: 'REST_API', authType: 'BEARER_TOKEN', description: 'Cloudflare API for DNS management, CDN, SSL, and domain registration' },
+
+  // Development & Deployment
+  { name: 'GitHub API', type: 'REST_API', authType: 'BEARER_TOKEN', description: 'GitHub API for repository management, file editing, deployments, and GitHub Pages' },
+
+  // Finance
+  { name: 'Stripe API', type: 'REST_API', authType: 'BEARER_TOKEN', description: 'Stripe API for payments, balance, transactions, and financial operations' },
+  { name: 'Bank API', type: 'REST_API', authType: 'BEARER_TOKEN', description: 'Banking API for balance checks, transfers, and transaction history' },
+
+  // Content & SEO
+  { name: 'Firecrawl', type: 'FIRECRAWL', authType: 'API_KEY', description: 'Web scraping and content extraction for competitor research and SEO analysis' },
+  { name: 'Google Search Console API', type: 'REST_API', authType: 'BEARER_TOKEN', description: 'Google Search Console API for search performance, indexing status, and SEO insights' },
 ];
 
 export const AGENT_TEMPLATES: AgentTemplate[] = [
@@ -85,7 +108,7 @@ You are the strategic leader of the organization. You set the vision, make final
     llmModel: 'claude-sonnet-4-5-20250929',
     tags: ['executive', 'strategy', 'leadership'],
     isStartupEssential: true,
-    tools: ['Database'],
+    tools: ['Database', 'Bank API', 'Stripe API', 'GoDaddy API'],
     skills: ['strategic-planning', 'leadership-delegation', 'financial-analysis', 'communication-mgmt', 'report-generation'],
   },
   {
@@ -119,7 +142,7 @@ You manage all financial aspects of the company: budgets, revenue tracking, cost
     llmModel: 'claude-sonnet-4-5-20250929',
     tags: ['finance', 'budget', 'executive'],
     isStartupEssential: false,
-    tools: ['Database'],
+    tools: ['Database', 'Stripe API', 'Bank API', 'Google AdSense API'],
     skills: ['financial-analysis', 'data-analysis', 'report-generation', 'strategic-planning', 'communication-mgmt'],
   },
   {
@@ -192,7 +215,7 @@ You lead the technology team and make architectural decisions. You manage infras
     llmModel: 'claude-sonnet-4-5-20250929',
     tags: ['technology', 'engineering', 'architecture', 'executive'],
     isStartupEssential: true,
-    tools: ['Database', 'N8N Automation', 'Cloud Infrastructure', 'AI Provider'],
+    tools: ['Database', 'N8N Automation', 'Cloud Infrastructure', 'AI Provider', 'GitHub API', 'Cloudflare API', 'GoDaddy API'],
     skills: ['api-integration', 'n8n-workflows', 'n8n-mcp-tools-expert', 'n8n-workflow-patterns', 'n8n-node-configuration', 'n8n-code-javascript', 'n8n-code-python', 'n8n-expression-syntax', 'n8n-validation-expert', 'strategic-planning', 'leadership-delegation', 'process-optimization', 'data-analysis', 'ai-prompt-engineering'],
   },
   {
@@ -227,7 +250,7 @@ You develop and maintain server-side applications, APIs, databases, and integrat
     llmModel: 'claude-sonnet-4-5-20250929',
     tags: ['backend', 'development', 'api', 'database'],
     isStartupEssential: true,
-    tools: ['Database', 'N8N Automation', 'AI Provider'],
+    tools: ['Database', 'N8N Automation', 'AI Provider', 'GitHub API', 'Cloudflare API', 'GoDaddy API', 'Cloud Infrastructure', 'Firecrawl'],
     skills: ['api-integration', 'n8n-workflows', 'n8n-code-javascript', 'n8n-expression-syntax', 'n8n-node-configuration', 'n8n-validation-expert', 'data-analysis', 'process-optimization'],
   },
   {
@@ -297,7 +320,7 @@ You manage infrastructure, deployments, monitoring, and development operations.
     llmModel: 'claude-sonnet-4-5-20250929',
     tags: ['devops', 'infrastructure', 'deployment', 'monitoring'],
     isStartupEssential: false,
-    tools: ['Cloud Infrastructure', 'Database', 'N8N Automation'],
+    tools: ['Cloud Infrastructure', 'Database', 'N8N Automation', 'GitHub API', 'Cloudflare API'],
     skills: ['api-integration', 'n8n-workflows', 'n8n-code-javascript', 'process-optimization', 'report-generation', 'communication-mgmt'],
   },
   {
@@ -444,7 +467,7 @@ You lead all marketing efforts: strategy, paid advertising, brand positioning, a
     llmModel: 'claude-sonnet-4-5-20250929',
     tags: ['marketing', 'advertising', 'growth', 'executive'],
     isStartupEssential: true,
-    tools: ['Meta Ads API', 'AI Provider', 'Database'],
+    tools: ['Google Ads API', 'Meta Ads API', 'Google Analytics API', 'Google AdSense API', 'Google Search Console API', 'Email API', 'AI Provider', 'Database'],
     skills: ['marketing-strategy', 'ad-campaign-mgmt', 'marketing-analytics', 'marketing-funnels', 'ad-copywriting', 'data-analysis', 'leadership-delegation', 'ai-image-generation'],
   },
   {
@@ -620,7 +643,7 @@ You write compelling copy for all channels and manage multilingual content and t
     llmModel: 'claude-sonnet-4-5-20250929',
     tags: ['copywriting', 'translation', 'content', 'multilingual'],
     isStartupEssential: true,
-    tools: ['AI Provider'],
+    tools: ['AI Provider', 'GitHub API', 'Firecrawl'],
     skills: ['content-creation', 'localization', 'ad-copywriting', 'communication-mgmt', 'ai-prompt-engineering'],
   },
 
@@ -1016,7 +1039,7 @@ You transform data into actionable insights that drive business decisions across
     llmModel: 'claude-sonnet-4-5-20250929',
     tags: ['analytics', 'data', 'dashboards', 'insights'],
     isStartupEssential: true,
-    tools: ['Database', 'AI Provider'],
+    tools: ['Database', 'AI Provider', 'Google Analytics API', 'Google AdSense API', 'Google Search Console API', 'Stripe API', 'Bank API'],
     skills: ['data-analysis', 'marketing-analytics', 'cohort-funnel-analysis', 'report-generation', 'financial-analysis'],
   },
 

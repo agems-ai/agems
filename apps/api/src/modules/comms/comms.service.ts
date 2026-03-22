@@ -122,7 +122,7 @@ export class CommsService {
         channelId,
         senderType: senderType as any,
         senderId,
-        content: input.content,
+        content: typeof input.content === "string" ? input.content.replace(/\u0000/g, "") : input.content,
         contentType: (input.contentType ?? 'TEXT') as any,
         metadata: input.metadata as any,
       },

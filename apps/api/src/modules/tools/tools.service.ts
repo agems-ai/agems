@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../config/prisma.service';
+import { encryptJson, decryptJson } from '../../common/crypto.util';
 
 @Injectable()
 export class ToolsService {
@@ -9,6 +10,26 @@ export class ToolsService {
     private events: EventEmitter2,
   ) {}
 
+  /** Encrypt authConfig for storage */
+  private encryptAuthForStorage(authConfig: any): any {
+    if (!authConfig || Object.keys(authConfig).length === 0) return {};
+    return { _enc: encryptJson(authConfig) };
+  }
+
+  /** Decrypt authConfig when reading a tool */
+  private decryptAuthFromStorage(tool: any): any {
+    if (!tool?.authConfig) return tool;
+    const ac = tool.authConfig as any;
+    if (ac._enc) {
+      try {
+        return { ...tool, authConfig: decryptJson(ac._enc) };
+      } catch {
+        return tool;
+      }
+    }
+    return tool; // backward compatible: plain JSON without _enc
+  }
+
   async createTool(input: any, userId: string, orgId: string) {
     const tool = await this.prisma.tool.create({
       data: {
@@ -16,7 +37,7 @@ export class ToolsService {
         type: input.type,
         config: input.config ?? {},
         authType: input.authType,
-        authConfig: input.authConfig ?? {},
+        authConfig: this.encryptAuthForStorage(input.authConfig ?? {}),
         orgId,
       },
     });
@@ -45,12 +66,20 @@ export class ToolsService {
   async findOneTool(id: string, orgId: string) {
     const tool = await this.prisma.tool.findUnique({ where: { id }, include: { agents: { include: { agent: { select: { id: true, name: true, slug: true } } } } } });
     if (!tool || tool.orgId !== orgId) throw new NotFoundException('Tool not found');
-    return tool;
+    return this.decryptAuthFromStorage(tool);
   }
 
   async updateTool(id: string, input: any, orgId: string) {
     await this.findOneTool(id, orgId);
-    return this.prisma.tool.update({ where: { id }, data: input });
+    // Whitelist allowed fields to prevent overwriting orgId, createdAt etc.
+    const allowed = ['name', 'type', 'config', 'authType', 'authConfig'];
+    const safeInput: any = {};
+    for (const key of allowed) {
+      if (key in input) {
+        safeInput[key] = key === 'authConfig' ? this.encryptAuthForStorage(input[key]) : input[key];
+      }
+    }
+    return this.prisma.tool.update({ where: { id }, data: safeInput });
   }
 
   async deleteTool(id: string, orgId: string) {
@@ -59,7 +88,7 @@ export class ToolsService {
   }
 
   async testConnection(id: string, orgId: string) {
-    const tool = await this.findOneTool(id, orgId);
+    const tool = this.decryptAuthFromStorage(await this.findOneTool(id, orgId));
     const start = Date.now();
     try {
       const config = tool.config as any;

@@ -1,7 +1,10 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { PrismaModule } from './config/prisma.module';
+import { RedisModule } from './config/redis.module';
+import { RedisLockService } from './common/redis-lock.service';
 import { AuthModule } from './modules/auth/auth.module';
 import { AgentsModule } from './modules/agents/agents.module';
 import { TasksModule } from './modules/tasks/tasks.module';
@@ -31,11 +34,25 @@ import { WorktreesModule } from './modules/worktrees/worktrees.module';
 
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
+import { HealthController } from './health.controller';
 
 @Module({
   imports: [
     EventEmitterModule.forRoot(),
+    ThrottlerModule.forRoot([
+      {
+        name: 'short',
+        ttl: 1000,   // 1 second window
+        limit: 10,   // 10 requests per second
+      },
+      {
+        name: 'medium',
+        ttl: 60000,  // 1 minute window
+        limit: 200,  // 200 requests per minute
+      },
+    ]),
     PrismaModule,
+    RedisModule,
     AuthModule,
     AgentsModule,
     TasksModule,
@@ -63,9 +80,12 @@ import { RolesGuard } from './common/guards/roles.guard';
     EvalsModule,
     WorktreesModule,
   ],
+  controllers: [HealthController],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    RedisLockService,
   ],
 })
 export class AppModule {}
