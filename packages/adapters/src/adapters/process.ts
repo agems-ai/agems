@@ -20,26 +20,53 @@ export class ProcessAdapter extends BaseAdapter {
     return 'Process';
   }
 
-  async checkAvailability(): Promise<{ available: boolean; version?: string; error?: string }> {
+  private getCommandParts() {
     if (!this.config.command) {
-      return { available: false, error: 'Command not configured' };
+      throw new Error('Command not configured');
     }
 
-    return new Promise((resolve) => {
-      const proc = spawn('which', [this.config.command.split(' ')[0]], { shell: true });
-      let output = '';
-      proc.stdout.on('data', (data) => { output += data.toString(); });
-      proc.on('close', (code) => {
-        if (code === 0) {
-          resolve({ available: true, version: output.trim() });
-        } else {
-          resolve({ available: false, error: `Command not found: ${this.config.command}` });
-        }
+    const parts = this.config.command.split(' ').filter(Boolean);
+    const cmd = parts[0];
+    const baseArgs = parts.slice(1);
+
+    // 🔒 Whitelist (можно расширить при необходимости)
+    const allowedCommands = ['node', 'python', 'bash', 'sh'];
+
+    if (!allowedCommands.includes(cmd)) {
+      throw new Error(`Command not allowed: ${cmd}`);
+    }
+
+    return { cmd, baseArgs };
+  }
+
+  async checkAvailability(): Promise<{ available: boolean; version?: string; error?: string }> {
+    try {
+      const { cmd } = this.getCommandParts();
+
+      return new Promise((resolve) => {
+        const proc = spawn('which', [cmd]);
+
+        let output = '';
+
+        proc.stdout.on('data', (data) => {
+          output += data.toString();
+        });
+
+        proc.on('close', (code) => {
+          if (code === 0) {
+            resolve({ available: true, version: output.trim() });
+          } else {
+            resolve({ available: false, error: `Command not found: ${cmd}` });
+          }
+        });
+
+        proc.on('error', () => {
+          resolve({ available: false, error: `Cannot check command: ${cmd}` });
+        });
       });
-      proc.on('error', () => {
-        resolve({ available: false, error: `Cannot check command: ${this.config.command}` });
-      });
-    });
+    } catch (err: any) {
+      return { available: false, error: err.message };
+    }
   }
 
   async execute(input: {
@@ -54,9 +81,19 @@ export class ProcessAdapter extends BaseAdapter {
     const abort = this.createAbortController();
 
     return new Promise((resolve) => {
-      const cmdParts = this.config.command.split(' ');
-      const cmd = cmdParts[0];
-      const baseArgs = cmdParts.slice(1);
+      let cmd: string;
+      let baseArgs: string[];
+
+      try {
+        const parts = this.getCommandParts();
+        cmd = parts.cmd;
+        baseArgs = parts.baseArgs;
+      } catch (err: any) {
+        this.setStatus('failed');
+        resolve(this.buildResult({ success: false, error: err.message }));
+        return;
+      }
+
       const args = [...baseArgs, ...(this.config.args || [])];
 
       const proc = spawn(cmd, args, {
@@ -69,7 +106,6 @@ export class ProcessAdapter extends BaseAdapter {
           AGEMS_TASK_ID: input.taskId || '',
           AGEMS_CHANNEL_ID: input.channelId || '',
         },
-        shell: this.config.shell || '/bin/bash',
         signal: abort.signal,
       });
 
@@ -88,14 +124,18 @@ export class ProcessAdapter extends BaseAdapter {
         this.emit('output', chunk);
       });
 
-      proc.stderr.on('data', (data) => { stderr += data.toString(); });
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
 
       proc.on('close', (code) => {
         if (this.status === 'cancelled' || this.status === 'timed_out') {
           resolve(this.buildResult({ success: false, error: this.status, rawOutput: stdout }));
           return;
         }
+
         this.setStatus(code === 0 ? 'succeeded' : 'failed');
+
         resolve(this.buildResult({
           success: code === 0,
           output: stdout,
