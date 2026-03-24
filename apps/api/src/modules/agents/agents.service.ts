@@ -40,12 +40,12 @@ export class AgentsService {
     return agent;
   }
 
-  async findAll(filters: AgentFilters, orgId?: string) {
+  async findAll(filters: AgentFilters, orgId: string) {
     const { status, type, llmProvider, search } = filters;
     const page = Number(filters.page) || 1;
     const pageSize = Number(filters.pageSize) || 100;
     const where = {
-      ...(orgId && { orgId }),
+      orgId,
       ...(status && { status }),
       ...(type && { type }),
       ...(llmProvider && { llmProvider }),
@@ -76,7 +76,7 @@ export class AgentsService {
     return { data, total, page, pageSize, totalPages: Math.ceil(total / pageSize) };
   }
 
-  async findOne(id: string, orgId?: string) {
+  async findOne(id: string, orgId: string) {
     const agent = await this.prisma.agent.findUnique({
       where: { id },
       include: {
@@ -90,12 +90,11 @@ export class AgentsService {
         _count: { select: { memory: true, executions: true, metrics: true } },
       },
     });
-    if (!agent) throw new NotFoundException('Agent not found');
-    if (orgId && agent.orgId !== orgId) throw new NotFoundException('Agent not found');
+    if (!agent || agent.orgId !== orgId) throw new NotFoundException('Agent not found');
     return agent;
   }
 
-  async update(id: string, input: UpdateAgentInput, userId: string, orgId?: string) {
+  async update(id: string, input: UpdateAgentInput, userId: string, orgId: string) {
     await this.findOne(id, orgId);
 
     const agent = await this.prisma.agent.update({
@@ -129,49 +128,55 @@ export class AgentsService {
     return agent;
   }
 
-  async activate(id: string, userId: string, orgId?: string) {
+  async activate(id: string, userId: string, orgId: string) {
     await this.findOne(id, orgId);
     const agent = await this.prisma.agent.update({ where: { id }, data: { status: 'ACTIVE' } });
     this.events.emit('agent.status-changed', { id, status: 'ACTIVE' });
     return agent;
   }
 
-  async pause(id: string, userId: string, orgId?: string) {
+  async pause(id: string, userId: string, orgId: string) {
     await this.findOne(id, orgId);
     const agent = await this.prisma.agent.update({ where: { id }, data: { status: 'PAUSED' } });
     this.events.emit('agent.status-changed', { id, status: 'PAUSED' });
     return agent;
   }
 
-  async archive(id: string, userId: string, orgId?: string) {
+  async archive(id: string, userId: string, orgId: string) {
     await this.findOne(id, orgId);
     const agent = await this.prisma.agent.update({ where: { id }, data: { status: 'ARCHIVED' } });
     this.events.emit('agent.status-changed', { id, status: 'ARCHIVED' });
     return agent;
   }
 
-  async unarchive(id: string, userId: string, orgId?: string) {
+  async unarchive(id: string, userId: string, orgId: string) {
     await this.findOne(id, orgId);
     const agent = await this.prisma.agent.update({ where: { id }, data: { status: 'PAUSED' } });
     this.events.emit('agent.status-changed', { id, status: 'PAUSED' });
     return agent;
   }
 
-  async getMetrics(id: string) {
+  async getMetrics(id: string, orgId: string) {
+    await this.findOne(id, orgId);
     return this.prisma.agentMetric.findMany({ where: { agentId: id }, orderBy: { periodEnd: 'desc' }, take: 100 });
   }
 
-  async getMemory(id: string) {
+  async getMemory(id: string, orgId: string) {
+    await this.findOne(id, orgId);
     return this.prisma.agentMemory.findMany({ where: { agentId: id }, orderBy: { createdAt: 'desc' }, take: 200 });
   }
 
-  async createMemory(agentId: string, input: { content: string; type?: string; metadata?: any }) {
+  async createMemory(agentId: string, input: { content: string; type?: string; metadata?: any }, orgId: string) {
+    await this.findOne(agentId, orgId);
     return this.prisma.agentMemory.create({
       data: { agentId, type: (input.type as any) ?? 'KNOWLEDGE', content: input.content, metadata: input.metadata },
     });
   }
 
-  async updateMemory(memoryId: string, input: { content?: string; type?: string; metadata?: any }) {
+  async updateMemory(memoryId: string, input: { content?: string; type?: string; metadata?: any }, orgId: string) {
+    const memory = await this.prisma.agentMemory.findUnique({ where: { id: memoryId } });
+    if (!memory) throw new NotFoundException('Memory not found');
+    await this.findOne(memory.agentId, orgId);
     return this.prisma.agentMemory.update({
       where: { id: memoryId },
       data: {
@@ -182,15 +187,19 @@ export class AgentsService {
     });
   }
 
-  async deleteMemory(memoryId: string) {
+  async deleteMemory(memoryId: string, orgId: string) {
+    const memory = await this.prisma.agentMemory.findUnique({ where: { id: memoryId } });
+    if (!memory) throw new NotFoundException('Memory not found');
+    await this.findOne(memory.agentId, orgId);
     return this.prisma.agentMemory.delete({ where: { id: memoryId } });
   }
 
-  async getExecutions(id: string, limit = 20) {
+  async getExecutions(id: string, orgId: string, limit = 20) {
+    await this.findOne(id, orgId);
     return this.prisma.agentExecution.findMany({ where: { agentId: id }, orderBy: { startedAt: 'desc' }, take: limit });
   }
 
-  async spawn(parentId: string, input: any, ownerId: string, orgId?: string) {
+  async spawn(parentId: string, input: any, ownerId: string, orgId: string) {
     const parent = await this.findOne(parentId, orgId);
     const child = await this.prisma.agent.create({
       data: {
@@ -219,82 +228,7 @@ export class AgentsService {
     return child;
   }
 
-  async getHierarchy(id: string, orgId?: string) {
-    const agent = await this.findOne(id, orgId);
-    const parentChain: any[] = [];
-    let current = agent;
-    while (current.parentAgent) {
-      parentChain.unshift(current.parentAgent);
-      const parent = await this.prisma.agent.findUnique({
-        where: { id: current.parentAgent.id },
-        include: { parentAgent: { select: { id: true, name: true, slug: true } } },
-      });
-      if (!parent) break;
-      current = parent as any;
-    }
-
-    const descendants = await this.prisma.agent.findMany({
-      where: { parentAgentId: id, ...(orgId && { orgId }) },
-      select: { id: true, name: true, slug: true, status: true, type: true },
-    });
-
-    return { agent: { id: agent.id, name: agent.name, slug: agent.slug }, parentChain, children: descendants };
-  }
-
-  async exportAgents(orgId: string) {
-    const agents = await this.prisma.agent.findMany({
-      where: { orgId },
-      orderBy: { createdAt: 'desc' },
-    });
-    return {
-      version: '1.0.0',
-      exportedAt: new Date().toISOString(),
-      agents: agents.map(({ id, orgId: _org, ownerId: _o, createdAt: _c, ...rest }) => rest),
-    };
-  }
-
-  async importAgents(input: any, userId: string, orgId: string) {
-    const items = Array.isArray(input) ? input : input.agents ?? [input];
-    const results: { created: number; skipped: number; errors: string[] } = { created: 0, skipped: 0, errors: [] };
-
-    for (const item of items) {
-      if (!item.name || !item.slug) {
-        results.errors.push(`Missing name or slug: ${JSON.stringify(item).slice(0, 80)}`);
-        continue;
-      }
-      const existing = await this.prisma.agent.findFirst({ where: { slug: item.slug, orgId } });
-      if (existing) {
-        results.skipped++;
-        continue;
-      }
-      try {
-        await this.prisma.agent.create({
-          data: {
-            name: item.name,
-            slug: item.slug,
-            avatar: item.avatar,
-            type: item.type ?? 'AUTONOMOUS',
-            llmProvider: item.llmProvider ?? 'ANTHROPIC',
-            llmModel: item.llmModel ?? 'claude-sonnet-4-20250514',
-            llmConfig: item.llmConfig ?? {},
-            systemPrompt: item.systemPrompt ?? '',
-            mission: item.mission,
-            values: item.values ?? [],
-            runtimeConfig: item.runtimeConfig ?? {},
-            metadata: item.metadata,
-            orgId,
-            ownerId: userId,
-          },
-        });
-        results.created++;
-      } catch (e: any) {
-        results.errors.push(`Failed to create "${item.name}": ${e.message}`);
-      }
-    }
-    return results;
-  }
-
-  async delegate(parentId: string, childId: string, taskInput: any, userId: string, orgId?: string) {
+  async delegate(parentId: string, childId: string, taskInput: any, userId: string, orgId: string) {
     const parent = await this.findOne(parentId, orgId);
     const task = await this.prisma.task.create({
       data: {
@@ -318,9 +252,7 @@ export class AgentsService {
     return task;
   }
 
-  // --- Config Revisions ---
-
-  async getConfigRevisions(agentId: string, orgId?: string) {
+  async getConfigRevisions(agentId: string, orgId: string) {
     await this.findOne(agentId, orgId);
     return this.prisma.agentConfigRevision.findMany({
       where: { agentId },
@@ -329,7 +261,7 @@ export class AgentsService {
     });
   }
 
-  async rollbackConfig(agentId: string, version: number, userId: string, orgId?: string) {
+  async rollbackConfig(agentId: string, version: number, userId: string, orgId: string) {
     await this.findOne(agentId, orgId);
 
     const revision = await this.prisma.agentConfigRevision.findUnique({
@@ -364,9 +296,7 @@ export class AgentsService {
     return agent;
   }
 
-  // --- API Keys ---
-
-  async createApiKey(agentId: string, input: { name: string; expiresAt?: string }, userId: string, orgId?: string) {
+  async createApiKey(agentId: string, input: { name: string; expiresAt?: string }, userId: string, orgId: string) {
     await this.findOne(agentId, orgId);
 
     const rawKey = crypto.randomBytes(32).toString('hex');
@@ -399,7 +329,7 @@ export class AgentsService {
     };
   }
 
-  async getApiKeys(agentId: string, orgId?: string) {
+  async getApiKeys(agentId: string, orgId: string) {
     await this.findOne(agentId, orgId);
     return this.prisma.agentApiKey.findMany({
       where: { agentId },
@@ -417,7 +347,7 @@ export class AgentsService {
     });
   }
 
-  async revokeApiKey(agentId: string, keyId: string, userId: string, orgId?: string) {
+  async revokeApiKey(agentId: string, keyId: string, userId: string, orgId: string) {
     await this.findOne(agentId, orgId);
 
     const apiKey = await this.prisma.agentApiKey.findFirst({
