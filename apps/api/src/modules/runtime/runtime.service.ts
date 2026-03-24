@@ -20,12 +20,13 @@ import { RedisLockService } from '../../common/redis-lock.service';
 @Injectable()
 export class RuntimeService {
   private readonly logger = new Logger(RuntimeService.name);
-  /** Queued messages: stores the latest message received while a channel is locked (local fallback for pending queue) */
-  private readonly pendingMessages = new Map<string, { channelId: string; message: any }>();
   /** Abort controllers for running executions — keyed by executionId */
   private readonly abortControllers = new Map<string, AbortController>();
   /** Maps channelId → Set of executionIds for targeted channel stopping */
   private readonly channelExecutionMap = new Map<string, Set<string>>();
+
+  // Redis queue TTL (seconds)
+  private readonly QUEUE_TTL_SECONDS = 5 * 60; // 5 minutes
 
   constructor(
     private prisma: PrismaService,
@@ -41,6 +42,27 @@ export class RuntimeService {
     private dashboard: DashboardService,
     private redisLock: RedisLockService,
   ) {}
+
+  // ========== Redis queue helpers ==========
+  private async enqueueMessage(channelId: string, message: any): Promise<void> {
+    const queueKey = `channel:${channelId}:queue`;
+    const serialized = JSON.stringify({ channelId, message });
+    const client = this.redisLock.getClient(); // предполагаем, что RedisLockService предоставляет клиент
+    await client.lpush(queueKey, serialized);
+    await client.expire(queueKey, this.QUEUE_TTL_SECONDS);
+  }
+
+  private async dequeueLastMessage(channelId: string): Promise<{ channelId: string; message: any } | null> {
+    const queueKey = `channel:${channelId}:queue`;
+    const client = this.redisLock.getClient();
+    const raw = await client.lpop(queueKey);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
 
   /** Handle stop execution request from UI */
   @OnEvent('agent.execution.stop')
@@ -80,7 +102,7 @@ export class RuntimeService {
     const releaseLock = await this.redisLock.tryAcquire(lockKey, 5 * 60 * 1000); // 5 min TTL
     if (!releaseLock) {
       this.logger.log(`Queuing message in channel ${channelId} — agents are already executing`);
-      this.pendingMessages.set(lockKey, { channelId, message });
+      await this.enqueueMessage(channelId, message);
       return;
     }
 
@@ -195,9 +217,8 @@ export class RuntimeService {
       await releaseLock();
 
       // Process the latest queued message if any arrived during execution
-      const pending = this.pendingMessages.get(lockKey);
+      const pending = await this.dequeueLastMessage(channelId);
       if (pending) {
-        this.pendingMessages.delete(lockKey);
         this.logger.log(`Processing queued message in channel ${channelId}`);
         // Use setImmediate to avoid deep recursion
         setImmediate(() => this.handleChannelMessage(pending));
