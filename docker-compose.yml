@@ -30,7 +30,7 @@ services:
     environment:
       DATABASE_URL: postgresql://agems:${POSTGRES_PASSWORD:-agems}@postgres:5432/agems?schema=public
       REDIS_URL: redis://redis:6379
-      JWT_SECRET: ${JWT_SECRET:-agems-dev-secret}
+      JWT_SECRET: ${JWT_SECRET}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
