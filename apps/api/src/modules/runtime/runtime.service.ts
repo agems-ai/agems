@@ -2168,56 +2168,12 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
 
   /** Add SQL query tools for a DATABASE tool */
   private addDatabaseTools(tools: any[], toolName: string, config: Record<string, any>, authConfig: Record<string, any>, perms: Record<string, boolean>) {
-    const safeName = toolName.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-    const desc = config.description || toolName;
-
-    // sql_query tool (read)
-    if (perms.read !== false) {
-      tools.push({
-        name: `db_query_${safeName}`,
-        description: `Execute a READ-ONLY SQL query on ${desc}. Returns up to 100 rows. Use this to get business data, statistics, user info, orders, lessons, etc.`,
-        parameters: z.object({
-          query: z.string().describe('SQL SELECT query to execute. Only SELECT queries allowed.'),
-        }),
-        execute: async (params: { query: string }) => {
-          return this.executeSqlQuery(config, authConfig, params.query, false);
-        },
-      });
-    }
-
-    // sql_execute tool (write)
-    if (perms.write === true) {
-      tools.push({
-        name: `db_execute_${safeName}`,
-        description: `Execute a write SQL statement (INSERT/UPDATE/DELETE) on ${desc}.`,
-        parameters: z.object({
-          query: z.string().describe('SQL statement to execute (INSERT, UPDATE, DELETE).'),
-        }),
-        execute: async (params: { query: string }) => {
-          return this.executeSqlQuery(config, authConfig, params.query, true);
-        },
-      });
-    }
-
-    // db_tables tool (always available if read)
-    if (perms.read !== false) {
-      tools.push({
-        name: `db_tables_${safeName}`,
-        description: `List all tables and their columns in ${desc}. Use this first to understand the database structure before writing queries.`,
-        parameters: z.object({
-          tableFilter: z.string().optional().describe('Optional table name filter (SQL LIKE pattern, e.g. "%user%")'),
-        }),
-        execute: async (params: { tableFilter?: string }) => {
-          const db = config.database || 'db_prod_guru';
-          let query = `SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '${db}'`;
-          if (params.tableFilter) {
-            query += ` AND TABLE_NAME LIKE '${params.tableFilter.replace(/'/g, "''")}'`;
-          }
-          query += ' ORDER BY TABLE_NAME, ORDINAL_POSITION LIMIT 500';
-          return this.executeSqlQuery(config, authConfig, query, false);
-        },
-      });
-    }
+    void tools;
+    void toolName;
+    void config;
+    void authConfig;
+    void perms;
+    this.logger.warn('DATABASE tools are disabled in runtime service to enforce tenant boundaries');
   }
 
   /** Add HTTP request tool for a REST_API tool */
