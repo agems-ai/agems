@@ -107,9 +107,25 @@ export class AgentRunner {
       }
     }
 
+    // For Anthropic: wrap system prompt with cacheControl to enable prompt caching.
+    // The provider must be created with cacheControl: true (see provider.ts).
+    // Other providers receive the plain string — they ignore the structured format.
+    const isAnthropic = this.config.provider.provider === 'ANTHROPIC';
+    const system = isAnthropic
+      ? [
+          {
+            type: 'text' as const,
+            text: this.config.systemPrompt,
+            providerOptions: {
+              anthropic: { cacheControl: { type: 'ephemeral' } },
+            },
+          },
+        ]
+      : this.config.systemPrompt;
+
     return {
       model: this.model,
-      system: this.config.systemPrompt,
+      system,
       tools: toolsMap,
       stopWhen: stepCountIs(maxSteps),
       maxTokens: this.config.maxTokens ?? 4096,
