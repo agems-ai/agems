@@ -50,6 +50,8 @@ model OrgMember {
   joinedAt  DateTime      @default(now()) @map("joined_at")
 
   @@unique([orgId, userId])
+  @@index([orgId])
+  @@index([userId])
   @@map("org_members")
 }
 
