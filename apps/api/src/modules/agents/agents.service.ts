@@ -76,7 +76,7 @@ export class AgentsService {
     return { data, total, page, pageSize, totalPages: Math.ceil(total / pageSize) };
   }
 
-  async findOne(id: string, orgId: string) {
+  async findOne(id: string, orgId?: string) {
     const agent = await this.prisma.agent.findUnique({
       where: { id },
       include: {
@@ -90,7 +90,8 @@ export class AgentsService {
         _count: { select: { memory: true, executions: true, metrics: true } },
       },
     });
-    if (!agent || agent.orgId !== orgId) throw new NotFoundException('Agent not found');
+    if (!agent) throw new NotFoundException('Agent not found');
+    if (orgId && agent.orgId !== orgId) throw new NotFoundException('Agent not found');
     return agent;
   }
 
@@ -374,5 +375,64 @@ export class AgentsService {
     });
 
     return revoked;
+  }
+
+  async exportAgents(orgId: string) {
+    const agents = await this.prisma.agent.findMany({
+      where: { orgId },
+      orderBy: { createdAt: 'asc' },
+    });
+    return {
+      version: '1.0.0',
+      exportedAt: new Date().toISOString(),
+      agents,
+    };
+  }
+
+  async importAgents(payload: { agents?: Array<Record<string, any>> }, userId: string, orgId: string) {
+    const agents = payload?.agents ?? [];
+    if (!Array.isArray(agents) || agents.length === 0) {
+      return { imported: 0 };
+    }
+
+    let imported = 0;
+    for (const item of agents) {
+      if (!item.name || !item.slug) continue;
+      await this.prisma.agent.create({
+        data: {
+          orgId,
+          ownerId: userId,
+          name: item.name,
+          slug: item.slug,
+          avatar: item.avatar,
+          type: item.type ?? 'AUTONOMOUS',
+          llmProvider: item.llmProvider,
+          llmModel: item.llmModel,
+          llmConfig: (item.llmConfig ?? {}) as any,
+          systemPrompt: item.systemPrompt,
+          mission: item.mission,
+          values: (item.values ?? []) as any,
+          runtimeConfig: (item.runtimeConfig ?? {}) as any,
+          metadata: item.metadata as any,
+        },
+      });
+      imported += 1;
+    }
+
+    return { imported };
+  }
+
+  async getHierarchy(agentId: string, orgId: string) {
+    const root = await this.findOne(agentId, orgId);
+    const children = await this.prisma.agent.findMany({
+      where: { parentAgentId: agentId, orgId },
+      select: { id: true, name: true, slug: true, status: true, parentAgentId: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return {
+      agent: { id: root.id, name: root.name, slug: root.slug, status: root.status, parentAgentId: root.parentAgentId },
+      children,
+    };
   }
 }

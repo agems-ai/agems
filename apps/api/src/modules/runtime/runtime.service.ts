@@ -1555,7 +1555,7 @@ Your agent ID: ${agent.id} | Your name: ${agent.name}`,
               select: { id: true, senderType: true, senderId: true, content: true, contentType: true, createdAt: true },
             });
             // Resolve sender names
-            const resolved = [];
+            const resolved: Array<{ id: string; sender: string; senderType: string; content: string; createdAt: Date }> = [];
             for (const m of messages.reverse()) {
               let senderName = m.senderId;
               if (m.senderType === 'AGENT') {
