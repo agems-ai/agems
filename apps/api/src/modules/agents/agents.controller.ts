@@ -103,33 +103,41 @@ export class AgentsController {
   }
 
   @Get(':id/metrics')
-  getMetrics(@Param('id') id: string) {
-    return this.agentsService.getMetrics(id);
+  getMetrics(@Param('id') id: string, @Request() req: { user: RequestUser }) {
+    return this.agentsService.getMetrics(id, req.user.orgId);
   }
 
   @Get(':id/memory')
-  getMemory(@Param('id') id: string) {
-    return this.agentsService.getMemory(id);
+  getMemory(@Param('id') id: string, @Request() req: { user: RequestUser }) {
+    return this.agentsService.getMemory(id, req.user.orgId);
   }
 
   @Post(':id/memory')
-  createMemory(@Param('id') id: string, @Body() body: { content: string; type?: string; metadata?: any }) {
-    return this.agentsService.createMemory(id, body);
+  createMemory(
+    @Param('id') id: string,
+    @Body() body: { content: string; type?: string; metadata?: any },
+    @Request() req: { user: RequestUser },
+  ) {
+    return this.agentsService.createMemory(id, body, req.user.orgId);
   }
 
   @Patch('memory/:memoryId')
-  updateMemory(@Param('memoryId') memoryId: string, @Body() body: { content?: string; type?: string; metadata?: any }) {
-    return this.agentsService.updateMemory(memoryId, body);
+  updateMemory(
+    @Param('memoryId') memoryId: string,
+    @Body() body: { content?: string; type?: string; metadata?: any },
+    @Request() req: { user: RequestUser },
+  ) {
+    return this.agentsService.updateMemory(memoryId, body, req.user.orgId);
   }
 
   @Delete('memory/:memoryId')
-  deleteMemory(@Param('memoryId') memoryId: string) {
-    return this.agentsService.deleteMemory(memoryId);
+  deleteMemory(@Param('memoryId') memoryId: string, @Request() req: { user: RequestUser }) {
+    return this.agentsService.deleteMemory(memoryId, req.user.orgId);
   }
 
   @Get(':id/executions')
-  getExecutions(@Param('id') id: string, @Query('limit') limit?: string) {
-    return this.agentsService.getExecutions(id, limit ? parseInt(limit) : 20);
+  getExecutions(@Param('id') id: string, @Query('limit') limit: string | undefined, @Request() req: { user: RequestUser }) {
+    return this.agentsService.getExecutions(id, req.user.orgId, limit ? parseInt(limit, 10) : 20);
   }
 
   @Post(':id/spawn')

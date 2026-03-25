@@ -43,7 +43,7 @@ services:
     volumes:
       - web_uploads:/app/apps/web/public/uploads
       - web_avatars:/app/apps/web/public/avatars
-      - .:/app/host-repo:rw
+      - .:/app/host-repo:ro
 
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:3001/api/health || exit 1"]
@@ -81,6 +81,3 @@ volumes:
   pgdata:
   web_avatars:
   web_uploads:
-
-  
-fix: remove docker.sock and improve healthcheck

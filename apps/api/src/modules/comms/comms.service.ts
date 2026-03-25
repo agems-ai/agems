@@ -108,6 +108,10 @@ export class CommsService {
     return channel;
   }
 
+  async findChannelById(channelId: string, orgId?: string) {
+    return this.findOneChannel(channelId, orgId);
+  }
+
   async sendMessage(
     channelId: string,
     input: SendMessageInput,
