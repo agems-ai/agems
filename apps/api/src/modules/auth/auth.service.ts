@@ -1,47 +1,73 @@
-import { Controller, Post, Body, BadRequestException, Req } from '@nestjs/common';
-import { AuthService } from './auth.service';
-import type { Request } from 'express';
+import { Injectable, UnauthorizedException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
+import * as bcrypt from 'bcrypt';
+import { PrismaService } from '../../config/prisma.service';
 
-const MIN_PASSWORD_LENGTH = 8;
+@Injectable()
+export class AuthService {
+  constructor(
+    private prisma: PrismaService,
+    private jwt: JwtService,
+  ) {}
 
-@Controller('auth')
-export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  async register(email: string, password: string, name: string, orgName?: string) {
+    const existing = await this.prisma.user.findUnique({ where: { email } });
+    if (existing) throw new BadRequestException('Email already registered');
 
-  @Post('register')
-  async register(
-    @Body('email') email: string,
-    @Body('password') password: string,
-    @Body('name') name: string,
-    @Body('orgName') orgName?: string,
-  ) {
-    if (!password || password.length < MIN_PASSWORD_LENGTH) {
-      throw new BadRequestException(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
-    }
-    return this.authService.register(email, password, name, orgName);
+    const passwordHash = await bcrypt.hash(password, 10);
+    const org = await this.prisma.org.create({
+      data: {
+        name: orgName || `${name}'s Organization`,
+        slug: `org-${Date.now()}`,
+        ownerEmail: email,
+      },
+    });
+
+    const user = await this.prisma.user.create({
+      data: {
+        email,
+        name,
+        passwordHash,
+        role: 'ADMIN',
+        orgId: org.id,
+      },
+    });
+
+    return this.buildAuthResponse(user.id, user.email, user.role, user.orgId);
   }
 
-  @Post('login')
-  async login(
-    @Body('email') email: string,
-    @Body('password') password: string,
-    @Body('orgId') orgId?: string,
-  ) {
-    return this.authService.login(email, password, orgId);
+  async login(email: string, password: string, orgId?: string) {
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user || !user.passwordHash) throw new UnauthorizedException('Invalid credentials');
+
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) throw new UnauthorizedException('Invalid credentials');
+
+    return this.buildAuthResponse(user.id, user.email, user.role, orgId || user.orgId);
   }
 
-  @Post('switch-org')
-  async switchOrg(
-    @Req() req: { user: { id: string } } & Request,
-    @Body('orgId') orgId: string,
-  ) {
-    if (!req.user?.id) throw new BadRequestException('User not authenticated');
-    return this.authService.switchOrg(req.user.id, orgId);
+  async switchOrg(userId: string, orgId: string) {
+    const membership = await this.prisma.orgMember.findFirst({ where: { userId, orgId } });
+    if (!membership) throw new UnauthorizedException('You are not a member of this organization');
+
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: { orgId },
+    });
+    return this.buildAuthResponse(user.id, user.email, user.role, orgId);
   }
 
-  @Post('profile')
-  async getProfile(@Req() req: { user: { id: string } } & Request) {
-    if (!req.user?.id) throw new BadRequestException('User not authenticated');
-    return this.authService.getProfile(req.user.id);
+  async getProfile(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, email: true, name: true, role: true, orgId: true, avatarUrl: true, createdAt: true },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    return user;
+  }
+
+  private buildAuthResponse(userId: string, email: string, role: string, orgId: string) {
+    const token = this.jwt.sign({ sub: userId, email, role, orgId });
+    return { accessToken: token, user: { id: userId, email, role, orgId } };
   }
 }

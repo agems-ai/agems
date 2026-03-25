@@ -152,6 +152,10 @@ export class ApprovalsService {
     return request;
   }
 
+  async findById(requestId: string) {
+    return this.prisma.approvalRequest.findUnique({ where: { id: requestId } });
+  }
+
   async resolveRequest(
     requestId: string,
     status: 'APPROVED' | 'REJECTED',

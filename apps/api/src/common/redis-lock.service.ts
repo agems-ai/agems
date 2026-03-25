@@ -92,4 +92,8 @@ export class RedisLockService {
     const val = await this.redis.get(`counter:${key}`);
     return val ? parseInt(val, 10) : 0;
   }
+
+  getClient(): Redis {
+    return this.redis;
+  }
 }

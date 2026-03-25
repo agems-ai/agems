@@ -13,7 +13,7 @@ import { Inject, forwardRef, ForbiddenException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { CommsService } from './comms.service';
 import { ApprovalsService } from '../approvals/approvals.service';
-import { UsersService } from '../users/users.service';
+import { PrismaService } from '../../config/prisma.service';
 
 @WebSocketGateway({ cors: { origin: process.env.WEB_URL || 'http://localhost:3000', credentials: true }, namespace: '/comms' })
 export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
@@ -28,7 +28,7 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @Inject(forwardRef(() => ApprovalsService))
     private approvalsService: ApprovalsService,
     private events: EventEmitter2,
-    private usersService: UsersService,
+    private prisma: PrismaService,
   ) {}
 
   async handleConnection(client: Socket) {
@@ -39,7 +39,7 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
       const payload = this.jwtService.verify(token);
-      const user = await this.usersService.findById(payload.sub);
+      const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
       if (!user) {
         client.disconnect();
         return;
