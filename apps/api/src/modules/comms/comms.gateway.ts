@@ -13,13 +13,14 @@ import { Inject, forwardRef } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { CommsService } from './comms.service';
 import { ApprovalsService } from '../approvals/approvals.service';
+import { PrismaService } from '../../config/prisma.service';
 
 @WebSocketGateway({ cors: { origin: process.env.WEB_URL || 'http://localhost:3000', credentials: true }, namespace: '/comms' })
 export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
-  private clients = new Map<string, { userId: string; socket: Socket }>();
+  private clients = new Map<string, { userId: string; orgId: string; socket: Socket }>();
 
   constructor(
     private jwtService: JwtService,
@@ -27,6 +28,7 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @Inject(forwardRef(() => ApprovalsService))
     private approvalsService: ApprovalsService,
     private events: EventEmitter2,
+    private prisma: PrismaService,
   ) {}
 
   async handleConnection(client: Socket) {
@@ -37,7 +39,7 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
       const payload = this.jwtService.verify(token);
-      this.clients.set(client.id, { userId: payload.sub, socket: client });
+      this.clients.set(client.id, { userId: payload.sub, orgId: payload.orgId, socket: client });
     } catch {
       client.disconnect();
     }
@@ -48,7 +50,11 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('join_channel')
-  handleJoinChannel(@ConnectedSocket() client: Socket, @MessageBody() data: { channelId: string }) {
+  async handleJoinChannel(@ConnectedSocket() client: Socket, @MessageBody() data: { channelId: string }) {
+    const clientInfo = this.clients.get(client.id);
+    if (!clientInfo) return;
+    const channel = await this.prisma.channel.findUnique({ where: { id: data.channelId }, select: { orgId: true } });
+    if (!channel || channel.orgId !== clientInfo.orgId) return;
     client.join(`channel:${data.channelId}`);
     return { event: 'joined', channelId: data.channelId };
   }
@@ -62,6 +68,9 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleSendMessage(@ConnectedSocket() client: Socket, @MessageBody() data: { channelId: string; content: string; contentType?: string }) {
     const clientInfo = this.clients.get(client.id);
     if (!clientInfo) return;
+
+    const channel = await this.prisma.channel.findUnique({ where: { id: data.channelId }, select: { orgId: true } });
+    if (!channel || channel.orgId !== clientInfo.orgId) return;
 
     const message = await this.commsService.sendMessage(
       data.channelId,
@@ -88,6 +97,10 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const clientInfo = this.clients.get(client.id);
     if (!clientInfo) return;
 
+    // Verify approval belongs to user's org
+    const approval = await this.approvalsService.findById(data.approvalId);
+    if (!approval || approval.orgId !== clientInfo.orgId) return;
+
     if (data.action === 'approve') {
       await this.approvalsService.resolveRequest(data.approvalId, 'APPROVED', 'HUMAN', clientInfo.userId);
     } else {
@@ -98,12 +111,16 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // ── Stop Agent Execution ──
 
   @SubscribeMessage('stop_execution')
-  handleStopExecution(
+  async handleStopExecution(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { channelId: string; executionId?: string },
   ) {
     const clientInfo = this.clients.get(client.id);
     if (!clientInfo) return;
+    if (data.channelId) {
+      const channel = await this.prisma.channel.findUnique({ where: { id: data.channelId }, select: { orgId: true } });
+      if (!channel || channel.orgId !== clientInfo.orgId) return;
+    }
     this.events.emit('agent.execution.stop', { channelId: data.channelId, executionId: data.executionId });
   }
 

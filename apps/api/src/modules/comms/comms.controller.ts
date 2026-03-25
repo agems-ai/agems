@@ -1,15 +1,23 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, Query, Req, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, Req, UseInterceptors, UploadedFile, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import { extname, join } from 'path';
 import { randomUUID } from 'crypto';
 import { CommsService } from './comms.service';
+import { PrismaService } from '../../config/prisma.service';
+import { Roles } from '../../common/decorators/roles.decorator';
 import type { CreateChannelInput, SendMessageInput } from '@agems/shared';
 import type { RequestUser } from '../../common/types';
 
 @Controller('channels')
 export class CommsController {
-  constructor(private commsService: CommsService) {}
+  constructor(private commsService: CommsService, private prisma: PrismaService) {}
+
+  /** Verify channel belongs to user's org */
+  private async verifyChannelAccess(channelId: string, orgId: string) {
+    const channel = await this.prisma.channel.findUnique({ where: { id: channelId }, select: { orgId: true } });
+    if (!channel || channel.orgId !== orgId) throw new ForbiddenException('Access denied');
+  }
 
   @Post()
   create(@Body() body: any, @Req() req: { user: RequestUser }) {
@@ -46,7 +54,7 @@ export class CommsController {
       }
     },
   }))
-  async uploadFile(@Param('id') channelId: string, @UploadedFile() file: any) {
+  async uploadFile(@Param('id') channelId: string, @UploadedFile() file: any, @Req() req: { user: RequestUser }) {
     if (!file) throw new BadRequestException('No file provided');
     const ext = extname(file.originalname).toLowerCase() || '.bin';
     const filename = `${randomUUID()}${ext}`;
@@ -58,8 +66,25 @@ export class CommsController {
       : join(cwd, '..', 'web', 'public', 'uploads');
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, filename), file.buffer);
+
+    const url = `/uploads/${filename}`;
+
+    // Register in fileRecord so file appears on /files page
+    await this.prisma.fileRecord.create({
+      data: {
+        orgId: req.user.orgId,
+        filename,
+        originalName: file.originalname,
+        mimetype: file.mimetype,
+        size: file.size,
+        url,
+        uploadedBy: 'HUMAN',
+        uploaderId: req.user.id,
+      },
+    }).catch(() => {}); // non-blocking — chat upload still works even if DB insert fails
+
     return {
-      url: `/uploads/${filename}`,
+      url,
       filename,
       originalName: file.originalname,
       size: file.size,
@@ -77,30 +102,37 @@ export class CommsController {
   }
 
   @Get(':id/messages')
-  getMessages(@Param('id') channelId: string, @Query() filters: any) {
+  async getMessages(@Param('id') channelId: string, @Query() filters: any, @Req() req: { user: RequestUser }) {
+    await this.verifyChannelAccess(channelId, req.user.orgId);
     return this.commsService.getMessages(channelId, filters);
   }
 
   @Post(':id/participants')
-  addParticipant(
+  async addParticipant(
     @Param('id') channelId: string,
     @Body() body: { participantType: string; participantId: string; role?: string },
+    @Req() req: { user: RequestUser },
   ) {
+    await this.verifyChannelAccess(channelId, req.user.orgId);
     return this.commsService.addParticipant(channelId, body.participantType, body.participantId, body.role);
   }
 
   @Delete(':id/participants/:pid')
-  removeParticipant(@Param('id') channelId: string, @Param('pid') participantId: string) {
+  async removeParticipant(@Param('id') channelId: string, @Param('pid') participantId: string, @Req() req: { user: RequestUser }) {
+    await this.verifyChannelAccess(channelId, req.user.orgId);
     return this.commsService.removeParticipant(channelId, participantId);
   }
 
   @Patch(':id')
-  updateChannel(@Param('id') id: string, @Body() body: { name?: string; metadata?: any }) {
+  async updateChannel(@Param('id') id: string, @Body() body: { name?: string; metadata?: any }, @Req() req: { user: RequestUser }) {
+    await this.verifyChannelAccess(id, req.user.orgId);
     return this.commsService.updateChannel(id, body);
   }
 
   @Delete(':id')
-  deleteChannel(@Param('id') id: string) {
+  @Roles('ADMIN')
+  async deleteChannel(@Param('id') id: string, @Req() req: { user: RequestUser }) {
+    await this.verifyChannelAccess(id, req.user.orgId);
     return this.commsService.deleteChannel(id);
   }
 
