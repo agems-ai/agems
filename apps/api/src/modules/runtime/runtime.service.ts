@@ -20,12 +20,15 @@ import { RedisLockService } from '../../common/redis-lock.service';
 @Injectable()
 export class RuntimeService {
   private readonly logger = new Logger(RuntimeService.name);
-  /** Queued messages: stores the latest message received while a channel is locked (local fallback for pending queue) */
-  private readonly pendingMessages = new Map<string, { channelId: string; message: any }>();
   /** Abort controllers for running executions — keyed by executionId */
   private readonly abortControllers = new Map<string, AbortController>();
   /** Maps channelId → Set of executionIds for targeted channel stopping */
   private readonly channelExecutionMap = new Map<string, Set<string>>();
+
+  // Redis queue TTL (seconds)
+  private readonly QUEUE_TTL_SECONDS = 5 * 60; // 5 minutes
+  private readonly EXECUTION_STOP_TTL_SECONDS = 10 * 60; // 10 minutes
+  private readonly STOP_POLL_INTERVAL_MS = 1000;
 
   constructor(
     private prisma: PrismaService,
@@ -42,14 +45,43 @@ export class RuntimeService {
     private redisLock: RedisLockService,
   ) {}
 
+  // ========== Redis queue helpers ==========
+  private async enqueueMessage(channelId: string, message: any): Promise<void> {
+    const queueKey = `channel:${channelId}:queue`;
+    const serialized = JSON.stringify({ channelId, message });
+    const client = this.redisLock.getClient();
+    await client.lpush(queueKey, serialized);
+    await client.expire(queueKey, this.QUEUE_TTL_SECONDS);
+  }
+
+  private async dequeueLastMessage(channelId: string): Promise<{ channelId: string; message: any } | null> {
+    const queueKey = `channel:${channelId}:queue`;
+    const client = this.redisLock.getClient();
+    const raw = await client.lpop(queueKey);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  private getExecutionStopKey(executionId: string): string {
+    return `execution:${executionId}:stop`;
+  }
+
+  private getChannelStopKey(channelId: string): string {
+    return `channel:${channelId}:stop`;
+  }
+
   /** Handle stop execution request from UI */
   @OnEvent('agent.execution.stop')
-  handleStopExecution(payload: { channelId?: string; executionId?: string }) {
+  async handleStopExecution(payload: { channelId?: string; executionId?: string }) {
     if (payload.executionId) {
-      const stopped = this.stopExecution(payload.executionId);
+      const stopped = await this.stopExecution(payload.executionId);
       this.logger.log(`Stop execution ${payload.executionId}: ${stopped ? 'stopped' : 'not found'}`);
     } else {
-      const stopped = this.stopChannel(payload.channelId || '');
+      const stopped = await this.stopChannel(payload.channelId || '');
       this.logger.log(`Stop all executions in channel ${payload.channelId}: ${stopped} stopped`);
     }
   }
@@ -80,7 +112,7 @@ export class RuntimeService {
     const releaseLock = await this.redisLock.tryAcquire(lockKey, 5 * 60 * 1000); // 5 min TTL
     if (!releaseLock) {
       this.logger.log(`Queuing message in channel ${channelId} — agents are already executing`);
-      this.pendingMessages.set(lockKey, { channelId, message });
+      await this.enqueueMessage(channelId, message);
       return;
     }
 
@@ -195,9 +227,8 @@ export class RuntimeService {
       await releaseLock();
 
       // Process the latest queued message if any arrived during execution
-      const pending = this.pendingMessages.get(lockKey);
+      const pending = await this.dequeueLastMessage(channelId);
       if (pending) {
-        this.pendingMessages.delete(lockKey);
         this.logger.log(`Processing queued message in channel ${channelId}`);
         // Use setImmediate to avoid deep recursion
         setImmediate(() => this.handleChannelMessage(pending));
@@ -484,6 +515,7 @@ export class RuntimeService {
     });
 
     let executionTimeout: ReturnType<typeof setTimeout> | undefined;
+    let stopPollTimer: ReturnType<typeof setInterval> | undefined;
     try {
       const tools = await this.buildTools(agent, context);
 
@@ -571,6 +603,20 @@ export class RuntimeService {
         this.logger.warn(`Agent ${agent.name}: execution timeout (30 min) — aborting`);
         abortController.abort();
       }, 30 * 60 * 1000);
+      stopPollTimer = setInterval(async () => {
+        try {
+          const client = this.redisLock.getClient();
+          const keys = [this.getExecutionStopKey(execution.id)];
+          if (context?.channelId) keys.push(this.getChannelStopKey(context.channelId));
+          const stopFlags = await client.mget(keys);
+          if (stopFlags.includes('1')) {
+            this.logger.log(`Execution ${execution.id} stopped via distributed stop signal`);
+            abortController.abort();
+          }
+        } catch (err) {
+          this.logger.warn(`Failed to poll distributed stop signal for ${execution.id}: ${err}`);
+        }
+      }, this.STOP_POLL_INTERVAL_MS);
 
       const runner = new AgentRunner({
         provider: {
@@ -626,8 +672,9 @@ export class RuntimeService {
         }
       }
 
-      // Clear execution timeout
+      // Clear execution timeout and stop poll timer
       clearTimeout(executionTimeout);
+      if (stopPollTimer) clearInterval(stopPollTimer);
 
       this.logger.log(`Agent ${agent.name}: ${result.toolCalls?.length || 0} tool calls, ${result.iterations} iterations, text=${result.text?.substring(0, 80)}...`);
 
@@ -688,6 +735,7 @@ export class RuntimeService {
       return { executionId: execution.id, ...result, waitingForApproval: false };
     } catch (error) {
       clearTimeout(executionTimeout);
+      if (stopPollTimer) clearInterval(stopPollTimer);
       this.abortControllers.delete(execution.id);
       if (context?.channelId) {
         this.channelExecutionMap.get(context.channelId)?.delete(execution.id);
@@ -714,18 +762,25 @@ export class RuntimeService {
   }
 
   /** Stop a running agent execution */
-  stopExecution(executionId: string): boolean {
+  async stopExecution(executionId: string): Promise<boolean> {
+    const client = this.redisLock.getClient();
+    await client.set(this.getExecutionStopKey(executionId), '1', 'EX', this.EXECUTION_STOP_TTL_SECONDS);
+
     const controller = this.abortControllers.get(executionId);
     if (controller) {
       controller.abort();
       this.abortControllers.delete(executionId);
       return true;
     }
-    return false;
+    return true; // may be running on another pod and will be stopped via Redis flag
   }
 
   /** Stop all running executions in a channel */
-  stopChannel(channelId: string): number {
+  async stopChannel(channelId: string): Promise<number> {
+    if (!channelId) return 0;
+    const client = this.redisLock.getClient();
+    await client.set(this.getChannelStopKey(channelId), '1', 'EX', this.EXECUTION_STOP_TTL_SECONDS);
+
     // Find executions belonging to this specific channel and stop only those
     let stopped = 0;
     const channelExecIds = this.channelExecutionMap.get(channelId);
@@ -952,13 +1007,56 @@ export class RuntimeService {
 
       tools.push({
         name: 'write_file',
-        description: 'Write content to a file (creates or overwrites).',
+        description: 'Write content to a file (creates or overwrites). Set saveToFiles=true to also register the file in the organisation Files library so users can find and download it from the /files page.',
         parameters: z.object({
           path: z.string().describe('Absolute path to the file'),
           content: z.string().describe('Content to write'),
+          saveToFiles: z.boolean().optional().describe('If true, also copy file to /uploads/ and register in Files library (default: false)'),
         }),
-        execute: async (params: { path: string; content: string }) => {
-          return this.writeFile(params.path, params.content);
+        execute: async (params: { path: string; content: string; saveToFiles?: boolean }) => {
+          const writeResult = await this.writeFile(params.path, params.content);
+          if ('error' in writeResult || !params.saveToFiles) return writeResult;
+
+          // Also register in Files library
+          try {
+            const { copyFileSync, statSync } = await import('fs');
+            const { basename, extname: pathExtname } = await import('path');
+            const origName = basename(params.path);
+            const ext = pathExtname(origName).toLowerCase() || '.bin';
+            const filename = `${randomUUID()}${ext}`;
+
+            const cwd = process.cwd();
+            const isMonorepoRoot = existsSync(join(cwd, 'apps', 'api')) && existsSync(join(cwd, 'apps', 'web'));
+            const uploadsDir = isMonorepoRoot
+              ? join(cwd, 'apps', 'web', 'public', 'uploads')
+              : join(cwd, '..', 'web', 'public', 'uploads');
+            if (!existsSync(uploadsDir)) mkdirSync(uploadsDir, { recursive: true });
+
+            copyFileSync(params.path, join(uploadsDir, filename));
+            const stat = statSync(params.path);
+            const mimeMap: Record<string, string> = {
+              '.pdf': 'application/pdf', '.txt': 'text/plain', '.csv': 'text/csv',
+              '.json': 'application/json', '.md': 'text/markdown',
+              '.html': 'text/html', '.xml': 'application/xml',
+            };
+            const url = `/uploads/${filename}`;
+            const record = await this.prisma.fileRecord.create({
+              data: {
+                orgId: agent.orgId,
+                filename,
+                originalName: origName,
+                mimetype: mimeMap[ext] || 'application/octet-stream',
+                size: stat.size,
+                url,
+                uploadedBy: 'AGENT',
+                uploaderId: agent.id,
+              },
+            });
+            return { success: true, path: params.path, savedToFiles: true, fileUrl: url, fileId: record.id };
+          } catch (err: any) {
+            // File was written successfully, just Files registration failed
+            return { success: true, path: params.path, savedToFiles: false, filesError: err.message };
+          }
         },
       });
     }
@@ -1903,6 +2001,76 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
           return { ok: true, sentTo: 'chat', imageUrl: url };
         },
       });
+
+      // ── Send any file to chat as downloadable attachment ──
+      tools.push({
+        name: 'agems_send_file',
+        description: 'Send a file to the chat as a downloadable attachment. The file appears as a clickable card with filename, size and download link. Use this after save_to_files or html_to_pdf to deliver reports, PDFs, CSVs, and other documents directly in the chat. The fileUrl must be a /uploads/ path (returned by save_to_files or html_to_pdf).',
+        parameters: z.object({
+          fileUrl: z.string().describe('File URL path from /uploads/, e.g. /uploads/abc123.pdf'),
+          fileName: z.string().optional().describe('Display name for the file, e.g. "Weekly Report.pdf"'),
+          message: z.string().optional().describe('Optional message text to show alongside the file'),
+        }),
+        execute: async (params: { fileUrl: string; fileName?: string; message?: string }) => {
+          const url = params.fileUrl;
+          const filename = url.split('/').pop() || 'file';
+          const ext = ('.' + (filename.split('.').pop()?.toLowerCase() || 'bin'));
+
+          // Verify file exists
+          const cwd = process.cwd();
+          const isMonorepoRoot = existsSync(join(cwd, 'apps', 'api')) && existsSync(join(cwd, 'apps', 'web'));
+          const uploadsBase = isMonorepoRoot ? join(cwd, 'apps', 'web', 'public') : join(cwd, '..', 'web', 'public');
+          const filePath = join(uploadsBase, url);
+          if (!existsSync(filePath)) {
+            return { error: `File not found: ${url}. Use save_to_files or html_to_pdf first to create the file.` };
+          }
+
+          const { statSync } = await import('fs');
+          const size = statSync(filePath).size;
+          const mimeMap: Record<string, string> = {
+            '.pdf': 'application/pdf', '.txt': 'text/plain', '.csv': 'text/csv',
+            '.json': 'application/json', '.md': 'text/markdown', '.html': 'text/html',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+            '.gif': 'image/gif', '.webp': 'image/webp',
+          };
+          const mimetype = mimeMap[ext] || 'application/octet-stream';
+          const displayName = params.fileName || filename;
+
+          // Ensure file is registered in DB
+          const existingRecord = await this.prisma.fileRecord.findFirst({ where: { filename } });
+          if (!existingRecord) {
+            await this.prisma.fileRecord.create({
+              data: {
+                orgId: agent.orgId,
+                filename,
+                originalName: displayName,
+                mimetype,
+                size,
+                url,
+                uploadedBy: 'AGENT',
+                uploaderId: agent.id,
+              },
+            }).catch(() => {});
+          }
+
+          await this.comms.sendMessage(
+            context.channelId!,
+            {
+              content: params.message || displayName,
+              contentType: 'FILE',
+              metadata: {
+                files: [{ url, filename, mimetype, size, originalName: displayName }],
+                text: params.message || undefined,
+              },
+            },
+            'AGENT',
+            agent.id,
+          );
+          return { ok: true, sentTo: 'chat', fileUrl: url, fileName: displayName };
+        },
+      });
     }
 
     // ── List organisation files ──
@@ -1926,6 +2094,147 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
           select: { id: true, originalName: true, url: true, mimetype: true, size: true, createdAt: true },
         });
         return { count: files.length, files };
+      },
+    });
+
+    // ── Save file to organisation Files (copies to /uploads/ + registers in DB) ──
+    tools.push({
+      name: 'save_to_files',
+      description: 'Save a file to the organisation Files library so it appears on the /files page and is downloadable by users. Use this after write_file to make reports, PDFs, CSVs etc. accessible. Copies the file from its current path into /uploads/ and registers it in the database.',
+      parameters: z.object({
+        sourcePath: z.string().describe('Absolute path to the file to save, e.g. /tmp/report.pdf'),
+        name: z.string().optional().describe('Display name for the file (default: original filename)'),
+        folderId: z.string().optional().describe('Folder ID to place the file in (default: root)'),
+      }),
+      execute: async (params: { sourcePath: string; name?: string; folderId?: string }) => {
+        try {
+          const { copyFileSync, statSync } = await import('fs');
+          const { basename, extname: pathExtname } = await import('path');
+
+          if (!existsSync(params.sourcePath)) {
+            return { error: `File not found: ${params.sourcePath}` };
+          }
+
+          const stat = statSync(params.sourcePath);
+          if (stat.size > 10 * 1024 * 1024) {
+            return { error: 'File too large (max 10MB)' };
+          }
+
+          const origName = basename(params.sourcePath);
+          const ext = pathExtname(origName).toLowerCase() || '.bin';
+          const filename = `${randomUUID()}${ext}`;
+
+          const cwd = process.cwd();
+          const isMonorepoRoot = existsSync(join(cwd, 'apps', 'api')) && existsSync(join(cwd, 'apps', 'web'));
+          const uploadsDir = isMonorepoRoot
+            ? join(cwd, 'apps', 'web', 'public', 'uploads')
+            : join(cwd, '..', 'web', 'public', 'uploads');
+          if (!existsSync(uploadsDir)) mkdirSync(uploadsDir, { recursive: true });
+
+          copyFileSync(params.sourcePath, join(uploadsDir, filename));
+
+          const mimeMap: Record<string, string> = {
+            '.pdf': 'application/pdf', '.txt': 'text/plain', '.csv': 'text/csv',
+            '.json': 'application/json', '.md': 'text/markdown',
+            '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+            '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+            '.html': 'text/html', '.xml': 'application/xml',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          };
+          const mimetype = mimeMap[ext] || 'application/octet-stream';
+          const displayName = params.name || origName;
+          const url = `/uploads/${filename}`;
+
+          const record = await this.prisma.fileRecord.create({
+            data: {
+              orgId: agent.orgId,
+              folderId: params.folderId || null,
+              filename,
+              originalName: displayName,
+              mimetype,
+              size: stat.size,
+              url,
+              uploadedBy: 'AGENT',
+              uploaderId: agent.id,
+            },
+          });
+
+          return { success: true, id: record.id, url, originalName: displayName, size: stat.size };
+        } catch (err: any) {
+          return { error: err.message };
+        }
+      },
+    });
+
+    // ── Convert HTML to PDF using headless Chromium ──
+    tools.push({
+      name: 'html_to_pdf',
+      description: 'Convert an HTML file to PDF using headless Chromium. Write your report as HTML first (with write_file), then convert to PDF. The PDF is automatically saved to Files library. Returns the PDF URL for download.',
+      parameters: z.object({
+        htmlPath: z.string().describe('Absolute path to the HTML file, e.g. /tmp/report.html'),
+        name: z.string().optional().describe('Display name for the PDF (default: derived from HTML filename)'),
+        folderId: z.string().optional().describe('Folder ID to place the PDF in (default: root)'),
+      }),
+      execute: async (params: { htmlPath: string; name?: string; folderId?: string }) => {
+        try {
+          const { execSync } = await import('child_process');
+          const { statSync, copyFileSync } = await import('fs');
+          const { basename } = await import('path');
+
+          if (!existsSync(params.htmlPath)) {
+            return { error: `HTML file not found: ${params.htmlPath}` };
+          }
+
+          const pdfFilename = `${randomUUID()}.pdf`;
+          const pdfTmpPath = `/tmp/${pdfFilename}`;
+
+          // Convert HTML to PDF with Chromium
+          const chromiumPath = process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser';
+          execSync(
+            `${chromiumPath} --headless --disable-gpu --no-sandbox --disable-dev-shm-usage --print-to-pdf="${pdfTmpPath}" "file://${params.htmlPath}"`,
+            { timeout: 30000, stdio: 'pipe' },
+          );
+
+          if (!existsSync(pdfTmpPath)) {
+            return { error: 'PDF generation failed — output file not created' };
+          }
+
+          // Copy to uploads and register in DB
+          const cwd = process.cwd();
+          const isMonorepoRoot = existsSync(join(cwd, 'apps', 'api')) && existsSync(join(cwd, 'apps', 'web'));
+          const uploadsDir = isMonorepoRoot
+            ? join(cwd, 'apps', 'web', 'public', 'uploads')
+            : join(cwd, '..', 'web', 'public', 'uploads');
+          if (!existsSync(uploadsDir)) mkdirSync(uploadsDir, { recursive: true });
+
+          copyFileSync(pdfTmpPath, join(uploadsDir, pdfFilename));
+          const stat = statSync(pdfTmpPath);
+
+          const displayName = params.name || basename(params.htmlPath).replace(/\.html?$/i, '') + '.pdf';
+          const url = `/uploads/${pdfFilename}`;
+
+          const record = await this.prisma.fileRecord.create({
+            data: {
+              orgId: agent.orgId,
+              folderId: params.folderId || null,
+              filename: pdfFilename,
+              originalName: displayName,
+              mimetype: 'application/pdf',
+              size: stat.size,
+              url,
+              uploadedBy: 'AGENT',
+              uploaderId: agent.id,
+            },
+          });
+
+          // Cleanup tmp
+          try { const { unlinkSync } = await import('fs'); unlinkSync(pdfTmpPath); } catch {}
+
+          return { success: true, id: record.id, url, originalName: displayName, size: stat.size };
+        } catch (err: any) {
+          return { error: err.message };
+        }
       },
     });
 
@@ -3073,7 +3382,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     // System — available to all agents
     add('bash_command', 'Execute bash commands', 'System');
     add('read_file', 'Read file contents (text, PDF)', 'System');
-    add('write_file', 'Write content to file', 'System');
+    add('write_file', 'Write content to file (with optional saveToFiles flag)', 'System');
 
     // Memory — persistent knowledge store
     add('memory_read', 'Read persistent memory entries', 'Memory');
@@ -3134,7 +3443,10 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     add('agems_meetings', 'Schedule and manage meetings', 'AGEMS Platform');
     add('agems_approvals', 'Request and resolve approvals between agents/humans', 'AGEMS Platform');
     add('agems_send_image', 'Send image to chat channel', 'AGEMS Platform');
+    add('agems_send_file', 'Send any file to chat as downloadable attachment', 'AGEMS Platform');
     add('list_org_files', 'List and search uploaded files in the organisation', 'AGEMS Platform');
+    add('save_to_files', 'Save a file to Files library (/files page) for user access', 'AGEMS Platform');
+    add('html_to_pdf', 'Convert HTML file to PDF and save to Files library', 'AGEMS Platform');
     add('gemini_generate_image', 'Generate images with Gemini AI (supports logo/reference images)', 'AGEMS Platform');
     add('dashboard_manage_widget', 'Manage dashboard widgets', 'AGEMS Platform');
 
