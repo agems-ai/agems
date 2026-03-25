@@ -97,9 +97,12 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const clientInfo = this.clients.get(client.id);
     if (!clientInfo) return;
 
-    // Verify approval belongs to user's org
-    const approval = await this.approvalsService.findById(data.approvalId);
-    if (!approval || approval.orgId !== clientInfo.orgId) return;
+    // Verify approval belongs to user's org (ApprovalRequest has no orgId — check via agent relation)
+    const approval = await this.prisma.approvalRequest.findUnique({
+      where: { id: data.approvalId },
+      select: { id: true, agent: { select: { orgId: true } } },
+    });
+    if (!approval || approval.agent.orgId !== clientInfo.orgId) return;
 
     if (data.action === 'approve') {
       await this.approvalsService.resolveRequest(data.approvalId, 'APPROVED', 'HUMAN', clientInfo.userId);
