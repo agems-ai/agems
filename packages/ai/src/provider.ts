@@ -29,14 +29,14 @@ export function createProvider(config: AIProviderConfig): any {
         apiKey: config.apiKey,
         baseURL: config.baseUrl || 'https://api.deepseek.com/v1',
       });
-      return deepseek.chat(config.model);
+      return deepseek(config.model);
     }
     case 'MISTRAL': {
       const mistral = createOpenAI({
         apiKey: config.apiKey,
         baseURL: config.baseUrl || 'https://api.mistral.ai/v1',
       });
-      return mistral.chat(config.model);
+      return mistral(config.model);
     }
     case 'OLLAMA': {
       const ollama = createOpenAI({
