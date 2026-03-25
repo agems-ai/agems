@@ -5,11 +5,12 @@ import { FilesController } from './files.controller';
 import { CommsService } from './comms.service';
 import { CommsGateway } from './comms.gateway';
 import { ApprovalsModule } from '../approvals/approvals.module';
+import { requireEnv } from '../../config/env.util';
 
 @Module({
   imports: [
     JwtModule.register({
-      secret: process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? (() => { throw new Error('JWT_SECRET is required in production'); })() : 'agems-dev-secret'),
+      secret: requireEnv('JWT_SECRET'),
       signOptions: { expiresIn: '7d' },
     }),
     forwardRef(() => ApprovalsModule),

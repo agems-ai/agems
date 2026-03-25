@@ -5,12 +5,13 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { BootstrapModule } from '../bootstrap/bootstrap.module';
+import { requireEnv } from '../../config/env.util';
 
 @Module({
   imports: [
     PassportModule,
     JwtModule.register({
-      secret: process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? (() => { throw new Error('JWT_SECRET is required in production'); })() : 'agems-dev-secret'),
+      secret: requireEnv('JWT_SECRET'),
       signOptions: { expiresIn: '7d' },
     }),
     BootstrapModule,

@@ -2718,14 +2718,25 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
 
   /** Execute SQL query using mysql2 */
   private async executeSqlQuery(config: Record<string, any>, authConfig: Record<string, any>, query: string, allowWrite: boolean) {
-    // Safety: block write operations if not allowed
-    const upperQuery = query.trim().toUpperCase();
-    if (!allowWrite && !upperQuery.startsWith('SELECT') && !upperQuery.startsWith('SHOW') && !upperQuery.startsWith('DESCRIBE') && !upperQuery.startsWith('EXPLAIN')) {
-      return { error: 'Only SELECT/SHOW/DESCRIBE/EXPLAIN queries are allowed in read-only mode.' };
+    // Security hardening: SQL tools are read-only in multi-tenant runtime.
+    if (allowWrite) {
+      return { error: 'Write SQL is disabled for safety. Use API-level operations instead.' };
     }
-    // Block dangerous operations
-    if (/\b(DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b/i.test(query)) {
-      return { error: 'DDL operations (DROP, TRUNCATE, ALTER, CREATE, GRANT, REVOKE) are blocked.' };
+
+    const cleanQuery = query.trim().replace(/;\s*$/, '');
+    const upperQuery = cleanQuery.toUpperCase();
+    const isReadOnly = upperQuery.startsWith('SELECT') || upperQuery.startsWith('SHOW') || upperQuery.startsWith('DESCRIBE') || upperQuery.startsWith('EXPLAIN');
+    if (!isReadOnly) {
+      return { error: 'Only SELECT/SHOW/DESCRIBE/EXPLAIN queries are allowed.' };
+    }
+    if (cleanQuery.includes(';')) {
+      return { error: 'Multiple SQL statements are not allowed.' };
+    }
+    if (/--|\/\*|\*\//.test(cleanQuery)) {
+      return { error: 'SQL comments are not allowed.' };
+    }
+    if (/\b(INSERT|UPDATE|DELETE|REPLACE|DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b/i.test(cleanQuery)) {
+      return { error: 'Write and DDL operations are blocked.' };
     }
 
     try {
@@ -2740,8 +2751,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
       });
 
       try {
-        const cleanQuery = query.replace(/;\s*$/, '');
-        const needsLimit = !allowWrite && !cleanQuery.trim().toUpperCase().includes('LIMIT');
+        const needsLimit = !upperQuery.includes('LIMIT');
         const [rows] = await conn.execute(cleanQuery + (needsLimit ? ' LIMIT 100' : ''));
         const result = Array.isArray(rows) ? rows : [{ affectedRows: (rows as any).affectedRows }];
         return { data: result.slice(0, 100), rowCount: result.length };

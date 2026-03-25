@@ -199,7 +199,7 @@ export class SettingsController {
         commitsBehind: parseInt(behind),
         remoteCommit,
         remoteLog: remoteLog || null,
-        canAutoUpdate: true,
+        canAutoUpdate: false,
       };
     } catch (e: any) {
       return { version: '?', commit: null, date: null, updateAvailable: false, canAutoUpdate: false, error: e.message };
@@ -209,30 +209,7 @@ export class SettingsController {
   @Post('system/update')
   @Roles('ADMIN')
   async triggerSystemUpdate() {
-    const hasRepo = existsSync(join(HOST_REPO, '.git'));
-    if (!hasRepo) {
-      return { ok: false, error: 'Host repo not mounted. Add ".:/app/host-repo:rw" volume to docker-compose.' };
-    }
-    const hasDocker = existsSync('/var/run/docker.sock');
-    if (!hasDocker) {
-      return { ok: false, error: 'Docker socket not mounted. Add "/var/run/docker.sock" volume to docker-compose.' };
-    }
-    try {
-      const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: HOST_REPO }).toString().trim();
-      // Stash local changes (e.g. custom docker-compose ports), pull, then restore
-      execSync('git stash 2>&1', { cwd: HOST_REPO, timeout: 10000 });
-      const pullLog = execSync(`git pull origin ${branch} 2>&1`, { cwd: HOST_REPO, timeout: 60000 }).toString().trim();
-      execSync('git stash pop 2>&1 || true', { cwd: HOST_REPO, timeout: 10000 });
-      // Rebuild containers in background (this will replace the current container)
-      const child = require('child_process').spawn(
-        'docker', ['compose', 'up', '-d', '--build', 'api', 'web'],
-        { cwd: HOST_REPO, detached: true, stdio: 'ignore' },
-      );
-      child.unref();
-      return { ok: true, pullLog, message: 'Update started. Containers are rebuilding — page will reload in ~30 seconds.' };
-    } catch (e: any) {
-      return { ok: false, error: e.message, output: e.stdout?.toString() || e.stderr?.toString() };
-    }
+    return { ok: false, error: 'Auto-update is disabled for security. Use manual deployment commands.' };
   }
 
 }
