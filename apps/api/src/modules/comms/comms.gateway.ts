@@ -9,17 +9,18 @@ import {
 } from '@nestjs/websockets';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { Server, Socket } from 'socket.io';
-import { Inject, forwardRef } from '@nestjs/common';
+import { Inject, forwardRef, ForbiddenException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { CommsService } from './comms.service';
 import { ApprovalsService } from '../approvals/approvals.service';
+import { PrismaService } from '../../config/prisma.service';
 
 @WebSocketGateway({ cors: { origin: process.env.WEB_URL || 'http://localhost:3000', credentials: true }, namespace: '/comms' })
 export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
-  private clients = new Map<string, { userId: string; socket: Socket }>();
+  private clients = new Map<string, { userId: string; orgId: string; socket: Socket }>();
 
   constructor(
     private jwtService: JwtService,
@@ -27,6 +28,7 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @Inject(forwardRef(() => ApprovalsService))
     private approvalsService: ApprovalsService,
     private events: EventEmitter2,
+    private prisma: PrismaService,
   ) {}
 
   async handleConnection(client: Socket) {
@@ -37,7 +39,12 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
       const payload = this.jwtService.verify(token);
-      this.clients.set(client.id, { userId: payload.sub, socket: client });
+      const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
+      if (!user) {
+        client.disconnect();
+        return;
+      }
+      this.clients.set(client.id, { userId: user.id, orgId: user.orgId, socket: client });
     } catch {
       client.disconnect();
     }
@@ -47,21 +54,40 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.clients.delete(client.id);
   }
 
+  private async checkChannelAccess(channelId: string, userOrgId: string) {
+    const channel = await this.commsService.findChannelById(channelId);
+    if (!channel || channel.orgId !== userOrgId) throw new ForbiddenException('Access denied to this channel');
+    return channel;
+  }
+
   @SubscribeMessage('join_channel')
-  handleJoinChannel(@ConnectedSocket() client: Socket, @MessageBody() data: { channelId: string }) {
+  async handleJoinChannel(@ConnectedSocket() client: Socket, @MessageBody() data: { channelId: string }) {
+    const clientInfo = this.clients.get(client.id);
+    if (!clientInfo) return;
+
+    await this.checkChannelAccess(data.channelId, clientInfo.orgId);
     client.join(`channel:${data.channelId}`);
     return { event: 'joined', channelId: data.channelId };
   }
 
   @SubscribeMessage('leave_channel')
-  handleLeaveChannel(@ConnectedSocket() client: Socket, @MessageBody() data: { channelId: string }) {
+  async handleLeaveChannel(@ConnectedSocket() client: Socket, @MessageBody() data: { channelId: string }) {
+    const clientInfo = this.clients.get(client.id);
+    if (!clientInfo) return;
+
+    await this.checkChannelAccess(data.channelId, clientInfo.orgId);
     client.leave(`channel:${data.channelId}`);
   }
 
   @SubscribeMessage('send_message')
-  async handleSendMessage(@ConnectedSocket() client: Socket, @MessageBody() data: { channelId: string; content: string; contentType?: string }) {
+  async handleSendMessage(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { channelId: string; content: string; contentType?: string },
+  ) {
     const clientInfo = this.clients.get(client.id);
     if (!clientInfo) return;
+
+    await this.checkChannelAccess(data.channelId, clientInfo.orgId);
 
     const message = await this.commsService.sendMessage(
       data.channelId,
@@ -74,7 +100,9 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @OnEvent('message.new')
-  handleMessageBroadcast(payload: { channelId: string; message: any }) {
+  async handleMessageBroadcast(payload: { channelId: string; message: any }) {
+    const channel = await this.commsService.findChannelById(payload.channelId);
+    if (!channel) return;
     this.server.to(`channel:${payload.channelId}`).emit('new_message', payload.message);
   }
 
@@ -88,6 +116,9 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const clientInfo = this.clients.get(client.id);
     if (!clientInfo) return;
 
+    const approval = await this.approvalsService.findById(data.approvalId);
+    if (!approval || approval.orgId !== clientInfo.orgId) throw new ForbiddenException('Access denied');
+
     if (data.action === 'approve') {
       await this.approvalsService.resolveRequest(data.approvalId, 'APPROVED', 'HUMAN', clientInfo.userId);
     } else {
@@ -98,112 +129,118 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // ── Stop Agent Execution ──
 
   @SubscribeMessage('stop_execution')
-  handleStopExecution(
+  async handleStopExecution(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { channelId: string; executionId?: string },
   ) {
     const clientInfo = this.clients.get(client.id);
     if (!clientInfo) return;
+    await this.checkChannelAccess(data.channelId, clientInfo.orgId);
+
     this.events.emit('agent.execution.stop', { channelId: data.channelId, executionId: data.executionId });
   }
 
   // ── Agent Execution Live Updates ──
 
   @OnEvent('agent.execution.start')
-  handleExecutionStart(payload: { channelId: string; agentId: string; agentName: string; executionId: string }) {
-    if (payload.channelId) {
-      this.server.to(`channel:${payload.channelId}`).emit('agent_thinking', {
-        channelId: payload.channelId,
-        agentId: payload.agentId,
-        agentName: payload.agentName,
-        executionId: payload.executionId,
-        status: 'thinking',
-      });
-    }
+  async handleExecutionStart(payload: { channelId: string; agentId: string; agentName: string; executionId: string }) {
+    const channel = await this.commsService.findChannelById(payload.channelId);
+    if (!channel) return;
+
+    this.server.to(`channel:${payload.channelId}`).emit('agent_thinking', {
+      channelId: payload.channelId,
+      agentId: payload.agentId,
+      agentName: payload.agentName,
+      executionId: payload.executionId,
+      status: 'thinking',
+    });
   }
 
   @OnEvent('agent.tool.start')
-  handleToolStart(payload: { channelId: string; agentId: string; agentName: string; executionId: string; toolName: string; toolInput: any }) {
-    if (payload.channelId) {
-      this.server.to(`channel:${payload.channelId}`).emit('agent_tool_update', {
-        channelId: payload.channelId,
-        agentId: payload.agentId,
-        agentName: payload.agentName,
-        executionId: payload.executionId,
-        toolName: payload.toolName,
-        toolInput: payload.toolInput,
-        status: 'running',
-      });
-    }
+  async handleToolStart(payload: { channelId: string; agentId: string; agentName: string; executionId: string; toolName: string; toolInput: any }) {
+    const channel = await this.commsService.findChannelById(payload.channelId);
+    if (!channel) return;
+
+    this.server.to(`channel:${payload.channelId}`).emit('agent_tool_update', {
+      channelId: payload.channelId,
+      agentId: payload.agentId,
+      agentName: payload.agentName,
+      executionId: payload.executionId,
+      toolName: payload.toolName,
+      toolInput: payload.toolInput,
+      status: 'running',
+    });
   }
 
   @OnEvent('agent.tool.complete')
-  handleToolComplete(payload: { channelId: string; agentId: string; agentName: string; executionId: string; toolName: string; durationMs: number; error?: string }) {
-    if (payload.channelId) {
-      this.server.to(`channel:${payload.channelId}`).emit('agent_tool_update', {
-        channelId: payload.channelId,
-        agentId: payload.agentId,
-        agentName: payload.agentName,
-        executionId: payload.executionId,
-        toolName: payload.toolName,
-        status: payload.error ? 'error' : 'completed',
-        durationMs: payload.durationMs,
-        error: payload.error,
-      });
-    }
+  async handleToolComplete(payload: { channelId: string; agentId: string; agentName: string; executionId: string; toolName: string; durationMs: number; error?: string }) {
+    const channel = await this.commsService.findChannelById(payload.channelId);
+    if (!channel) return;
+
+    this.server.to(`channel:${payload.channelId}`).emit('agent_tool_update', {
+      channelId: payload.channelId,
+      agentId: payload.agentId,
+      agentName: payload.agentName,
+      executionId: payload.executionId,
+      toolName: payload.toolName,
+      status: payload.error ? 'error' : 'completed',
+      durationMs: payload.durationMs,
+      error: payload.error,
+    });
   }
 
   @OnEvent('agent.thinking.chunk')
-  handleThinkingChunk(payload: { channelId: string; agentId: string; executionId: string; chunk: string }) {
-    if (payload.channelId) {
-      this.server.to(`channel:${payload.channelId}`).emit('agent_thinking_chunk', {
-        channelId: payload.channelId,
-        agentId: payload.agentId,
-        executionId: payload.executionId,
-        chunk: payload.chunk,
-      });
-    }
+  async handleThinkingChunk(payload: { channelId: string; agentId: string; executionId: string; chunk: string }) {
+    const channel = await this.commsService.findChannelById(payload.channelId);
+    if (!channel) return;
+
+    this.server.to(`channel:${payload.channelId}`).emit('agent_thinking_chunk', {
+      channelId: payload.channelId,
+      agentId: payload.agentId,
+      executionId: payload.executionId,
+      chunk: payload.chunk,
+    });
   }
 
   @OnEvent('agent.text.chunk')
-  handleTextChunk(payload: { channelId: string; agentId: string; executionId: string; chunk: string }) {
-    if (payload.channelId) {
-      this.server.to(`channel:${payload.channelId}`).emit('agent_text_chunk', {
-        channelId: payload.channelId,
-        agentId: payload.agentId,
-        executionId: payload.executionId,
-        chunk: payload.chunk,
-      });
-    }
+  async handleTextChunk(payload: { channelId: string; agentId: string; executionId: string; chunk: string }) {
+    const channel = await this.commsService.findChannelById(payload.channelId);
+    if (!channel) return;
+
+    this.server.to(`channel:${payload.channelId}`).emit('agent_text_chunk', {
+      channelId: payload.channelId,
+      agentId: payload.agentId,
+      executionId: payload.executionId,
+      chunk: payload.chunk,
+    });
   }
 
   @OnEvent('agent.execution.done')
-  handleExecutionDone(payload: { channelId: string; agentId: string; executionId: string }) {
-    if (payload.channelId) {
-      this.server.to(`channel:${payload.channelId}`).emit('agent_thinking', {
-        channelId: payload.channelId,
-        agentId: payload.agentId,
-        executionId: payload.executionId,
-        status: 'done',
-      });
-    }
+  async handleExecutionDone(payload: { channelId: string; agentId: string; executionId: string }) {
+    const channel = await this.commsService.findChannelById(payload.channelId);
+    if (!channel) return;
+
+    this.server.to(`channel:${payload.channelId}`).emit('agent_thinking', {
+      channelId: payload.channelId,
+      agentId: payload.agentId,
+      executionId: payload.executionId,
+      status: 'done',
+    });
   }
 
   @OnEvent('approval.requested')
-  handleApprovalRequested(request: any) {
+  async handleApprovalRequested(request: any) {
+    const channel = request.channelId ? await this.commsService.findChannelById(request.channelId) : null;
     this.server.emit('approval_new', request);
-    if (request.channelId) {
-      this.server.to(`channel:${request.channelId}`).emit('approval_new', request);
-    }
+    if (channel) this.server.to(`channel:${request.channelId}`).emit('approval_new', request);
   }
 
   @OnEvent('approval.resolved')
   async handleApprovalResolved(payload: { request: any; status: string }) {
+    const channel = payload.request.channelId ? await this.commsService.findChannelById(payload.request.channelId) : null;
     this.server.emit('approval_resolved', payload);
-    if (payload.request.channelId) {
-      this.server.to(`channel:${payload.request.channelId}`).emit('approval_resolved', payload);
-    }
-    // Broadcast updated pending count
+    if (channel) this.server.to(`channel:${payload.request.channelId}`).emit('approval_resolved', payload);
+
     const count = await this.approvalsService.getPendingCount();
     this.server.emit('approval_count', { count });
   }

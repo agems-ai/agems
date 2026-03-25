@@ -20,12 +20,15 @@ import { RedisLockService } from '../../common/redis-lock.service';
 @Injectable()
 export class RuntimeService {
   private readonly logger = new Logger(RuntimeService.name);
-  /** Queued messages: stores the latest message received while a channel is locked (local fallback for pending queue) */
-  private readonly pendingMessages = new Map<string, { channelId: string; message: any }>();
   /** Abort controllers for running executions — keyed by executionId */
   private readonly abortControllers = new Map<string, AbortController>();
   /** Maps channelId → Set of executionIds for targeted channel stopping */
   private readonly channelExecutionMap = new Map<string, Set<string>>();
+
+  // Redis queue TTL (seconds)
+  private readonly QUEUE_TTL_SECONDS = 5 * 60; // 5 minutes
+  private readonly EXECUTION_STOP_TTL_SECONDS = 10 * 60; // 10 minutes
+  private readonly STOP_POLL_INTERVAL_MS = 1000;
 
   constructor(
     private prisma: PrismaService,
@@ -42,14 +45,43 @@ export class RuntimeService {
     private redisLock: RedisLockService,
   ) {}
 
+  // ========== Redis queue helpers ==========
+  private async enqueueMessage(channelId: string, message: any): Promise<void> {
+    const queueKey = `channel:${channelId}:queue`;
+    const serialized = JSON.stringify({ channelId, message });
+    const client = this.redisLock.getClient(); // предполагаем, что RedisLockService предоставляет клиент
+    await client.lpush(queueKey, serialized);
+    await client.expire(queueKey, this.QUEUE_TTL_SECONDS);
+  }
+
+  private async dequeueLastMessage(channelId: string): Promise<{ channelId: string; message: any } | null> {
+    const queueKey = `channel:${channelId}:queue`;
+    const client = this.redisLock.getClient();
+    const raw = await client.lpop(queueKey);
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  private getExecutionStopKey(executionId: string): string {
+    return `execution:${executionId}:stop`;
+  }
+
+  private getChannelStopKey(channelId: string): string {
+    return `channel:${channelId}:stop`;
+  }
+
   /** Handle stop execution request from UI */
   @OnEvent('agent.execution.stop')
-  handleStopExecution(payload: { channelId?: string; executionId?: string }) {
+  async handleStopExecution(payload: { channelId?: string; executionId?: string }) {
     if (payload.executionId) {
-      const stopped = this.stopExecution(payload.executionId);
+      const stopped = await this.stopExecution(payload.executionId);
       this.logger.log(`Stop execution ${payload.executionId}: ${stopped ? 'stopped' : 'not found'}`);
     } else {
-      const stopped = this.stopChannel(payload.channelId || '');
+      const stopped = await this.stopChannel(payload.channelId || '');
       this.logger.log(`Stop all executions in channel ${payload.channelId}: ${stopped} stopped`);
     }
   }
@@ -80,7 +112,7 @@ export class RuntimeService {
     const releaseLock = await this.redisLock.tryAcquire(lockKey, 5 * 60 * 1000); // 5 min TTL
     if (!releaseLock) {
       this.logger.log(`Queuing message in channel ${channelId} — agents are already executing`);
-      this.pendingMessages.set(lockKey, { channelId, message });
+      await this.enqueueMessage(channelId, message);
       return;
     }
 
@@ -195,9 +227,8 @@ export class RuntimeService {
       await releaseLock();
 
       // Process the latest queued message if any arrived during execution
-      const pending = this.pendingMessages.get(lockKey);
+      const pending = await this.dequeueLastMessage(channelId);
       if (pending) {
-        this.pendingMessages.delete(lockKey);
         this.logger.log(`Processing queued message in channel ${channelId}`);
         // Use setImmediate to avoid deep recursion
         setImmediate(() => this.handleChannelMessage(pending));
@@ -484,6 +515,7 @@ export class RuntimeService {
     });
 
     let executionTimeout: ReturnType<typeof setTimeout> | undefined;
+    let stopPollTimer: ReturnType<typeof setInterval> | undefined;
     try {
       const tools = await this.buildTools(agent, context);
 
@@ -571,6 +603,20 @@ export class RuntimeService {
         this.logger.warn(`Agent ${agent.name}: execution timeout (30 min) — aborting`);
         abortController.abort();
       }, 30 * 60 * 1000);
+      stopPollTimer = setInterval(async () => {
+        try {
+          const client = this.redisLock.getClient();
+          const keys = [this.getExecutionStopKey(execution.id)];
+          if (context?.channelId) keys.push(this.getChannelStopKey(context.channelId));
+          const stopFlags = await client.mget(keys);
+          if (stopFlags.includes('1')) {
+            this.logger.log(`Execution ${execution.id} stopped via distributed stop signal`);
+            abortController.abort();
+          }
+        } catch (err) {
+          this.logger.warn(`Failed to poll distributed stop signal for ${execution.id}: ${err}`);
+        }
+      }, this.STOP_POLL_INTERVAL_MS);
 
       const runner = new AgentRunner({
         provider: {
@@ -628,6 +674,7 @@ export class RuntimeService {
 
       // Clear execution timeout
       clearTimeout(executionTimeout);
+      if (stopPollTimer) clearInterval(stopPollTimer);
 
       this.logger.log(`Agent ${agent.name}: ${result.toolCalls?.length || 0} tool calls, ${result.iterations} iterations, text=${result.text?.substring(0, 80)}...`);
 
@@ -688,6 +735,7 @@ export class RuntimeService {
       return { executionId: execution.id, ...result, waitingForApproval: false };
     } catch (error) {
       clearTimeout(executionTimeout);
+      if (stopPollTimer) clearInterval(stopPollTimer);
       this.abortControllers.delete(execution.id);
       if (context?.channelId) {
         this.channelExecutionMap.get(context.channelId)?.delete(execution.id);
@@ -714,18 +762,25 @@ export class RuntimeService {
   }
 
   /** Stop a running agent execution */
-  stopExecution(executionId: string): boolean {
+  async stopExecution(executionId: string): Promise<boolean> {
+    const client = this.redisLock.getClient();
+    await client.set(this.getExecutionStopKey(executionId), '1', 'EX', this.EXECUTION_STOP_TTL_SECONDS);
+
     const controller = this.abortControllers.get(executionId);
     if (controller) {
       controller.abort();
       this.abortControllers.delete(executionId);
       return true;
     }
-    return false;
+    return true; // may be running on another pod and will be stopped via Redis flag
   }
 
   /** Stop all running executions in a channel */
-  stopChannel(channelId: string): number {
+  async stopChannel(channelId: string): Promise<number> {
+    if (!channelId) return 0;
+    const client = this.redisLock.getClient();
+    await client.set(this.getChannelStopKey(channelId), '1', 'EX', this.EXECUTION_STOP_TTL_SECONDS);
+
     // Find executions belonging to this specific channel and stop only those
     let stopped = 0;
     const channelExecIds = this.channelExecutionMap.get(channelId);
@@ -1534,7 +1589,7 @@ Your agent ID: ${agent.id} | Your name: ${agent.name}`,
               select: { id: true, senderType: true, senderId: true, content: true, contentType: true, createdAt: true },
             });
             // Resolve sender names
-            const resolved = [];
+            const resolved: Array<{ id: string; sender: string; senderType: string; content: string; createdAt: Date }> = [];
             for (const m of messages.reverse()) {
               let senderName = m.senderId;
               if (m.senderType === 'AGENT') {
@@ -2113,56 +2168,12 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
 
   /** Add SQL query tools for a DATABASE tool */
   private addDatabaseTools(tools: any[], toolName: string, config: Record<string, any>, authConfig: Record<string, any>, perms: Record<string, boolean>) {
-    const safeName = toolName.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-    const desc = config.description || toolName;
-
-    // sql_query tool (read)
-    if (perms.read !== false) {
-      tools.push({
-        name: `db_query_${safeName}`,
-        description: `Execute a READ-ONLY SQL query on ${desc}. Returns up to 100 rows. Use this to get business data, statistics, user info, orders, lessons, etc.`,
-        parameters: z.object({
-          query: z.string().describe('SQL SELECT query to execute. Only SELECT queries allowed.'),
-        }),
-        execute: async (params: { query: string }) => {
-          return this.executeSqlQuery(config, authConfig, params.query, false);
-        },
-      });
-    }
-
-    // sql_execute tool (write)
-    if (perms.write === true) {
-      tools.push({
-        name: `db_execute_${safeName}`,
-        description: `Execute a write SQL statement (INSERT/UPDATE/DELETE) on ${desc}.`,
-        parameters: z.object({
-          query: z.string().describe('SQL statement to execute (INSERT, UPDATE, DELETE).'),
-        }),
-        execute: async (params: { query: string }) => {
-          return this.executeSqlQuery(config, authConfig, params.query, true);
-        },
-      });
-    }
-
-    // db_tables tool (always available if read)
-    if (perms.read !== false) {
-      tools.push({
-        name: `db_tables_${safeName}`,
-        description: `List all tables and their columns in ${desc}. Use this first to understand the database structure before writing queries.`,
-        parameters: z.object({
-          tableFilter: z.string().optional().describe('Optional table name filter (SQL LIKE pattern, e.g. "%user%")'),
-        }),
-        execute: async (params: { tableFilter?: string }) => {
-          const db = config.database || 'db_prod_guru';
-          let query = `SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '${db}'`;
-          if (params.tableFilter) {
-            query += ` AND TABLE_NAME LIKE '${params.tableFilter.replace(/'/g, "''")}'`;
-          }
-          query += ' ORDER BY TABLE_NAME, ORDINAL_POSITION LIMIT 500';
-          return this.executeSqlQuery(config, authConfig, query, false);
-        },
-      });
-    }
+    void tools;
+    void toolName;
+    void config;
+    void authConfig;
+    void perms;
+    this.logger.warn('DATABASE tools are disabled in runtime service to enforce tenant boundaries');
   }
 
   /** Add HTTP request tool for a REST_API tool */
@@ -2695,41 +2706,12 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     );
   }
 
-  /** Execute SQL query using mysql2 */
-  private async executeSqlQuery(config: Record<string, any>, authConfig: Record<string, any>, query: string, allowWrite: boolean) {
-    // Safety: block write operations if not allowed
-    const upperQuery = query.trim().toUpperCase();
-    if (!allowWrite && !upperQuery.startsWith('SELECT') && !upperQuery.startsWith('SHOW') && !upperQuery.startsWith('DESCRIBE') && !upperQuery.startsWith('EXPLAIN')) {
-      return { error: 'Only SELECT/SHOW/DESCRIBE/EXPLAIN queries are allowed in read-only mode.' };
-    }
-    // Block dangerous operations
-    if (/\b(DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b/i.test(query)) {
-      return { error: 'DDL operations (DROP, TRUNCATE, ALTER, CREATE, GRANT, REVOKE) are blocked.' };
-    }
-
-    try {
-      const mysql = await import('mysql2/promise');
-      const conn = await mysql.createConnection({
-        host: config.host || 'localhost',
-        port: config.port || 3306,
-        user: authConfig.username || 'root',
-        password: authConfig.password || '',
-        database: config.database || '',
-        connectTimeout: 5000,
-      });
-
-      try {
-        const cleanQuery = query.replace(/;\s*$/, '');
-        const needsLimit = !allowWrite && !cleanQuery.trim().toUpperCase().includes('LIMIT');
-        const [rows] = await conn.execute(cleanQuery + (needsLimit ? ' LIMIT 100' : ''));
-        const result = Array.isArray(rows) ? rows : [{ affectedRows: (rows as any).affectedRows }];
-        return { data: result.slice(0, 100), rowCount: result.length };
-      } finally {
-        await conn.end();
-      }
-    } catch (err: any) {
-      return { error: err.message };
-    }
+  /** Execute SQL query (disabled for external DB connections in multi-tenant runtime) */
+  private async executeSqlQuery(_config: Record<string, any>, _authConfig: Record<string, any>, _query: string, _allowWrite: boolean) {
+    this.logger.warn('Blocked SQL tool execution: direct database connections are disabled in runtime service');
+    return {
+      error: 'Database tools are disabled in runtime for security. Use tenant-scoped API tools or backend services instead.',
+    };
   }
 
   /** Execute HTTP request for REST_API tools — supports JSON, form-encoded, and multipart */

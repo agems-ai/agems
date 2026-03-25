@@ -5,16 +5,18 @@ import { AuthService } from './auth.service';
 import { Public } from '../../common/decorators/roles.decorator';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 
+const MIN_PASSWORD_LENGTH = 8;
+
 const RegisterSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(6).max(128),
+  password: z.string().min(MIN_PASSWORD_LENGTH).max(128),
   name: z.string().min(1).max(100),
   orgName: z.string().max(100).optional(),
 });
 
 const LoginSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(1).max(128),
+  password: z.string().min(MIN_PASSWORD_LENGTH).max(128),
   orgId: z.string().uuid().optional(),
 });
 

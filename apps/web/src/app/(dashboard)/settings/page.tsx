@@ -657,12 +657,11 @@ export default function SettingsPage() {
             <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5">
               <h3 className="font-semibold mb-2">Manual Update</h3>
               <p className="text-xs text-[var(--muted)] mb-3">
-                Auto-update is not available. To enable it, add these volumes to your <code className="text-[var(--accent)]">docker-compose.yml</code> in the api service:
+                Auto-update is intentionally disabled for security. If you need repository access inside the API container, use read-only mount:
               </p>
               <pre className="text-xs bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3 font-mono">
 {`volumes:
-  - .:/app/host-repo:rw
-  - /var/run/docker.sock:/var/run/docker.sock`}
+  - .:/app/host-repo:ro`}
               </pre>
               <p className="text-xs text-[var(--muted)] mt-3">Or update manually:</p>
               <pre className="text-xs bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3 font-mono mt-1">
