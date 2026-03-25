@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'crypto';
+import { requireEnv } from '../config/env.util';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16;
@@ -6,7 +7,7 @@ const TAG_LENGTH = 16;
 const SALT = 'agems-credential-salt'; // static salt, key derivation uses JWT_SECRET
 
 function getKey(): Buffer {
-  const secret = process.env.JWT_SECRET || 'agems-dev-secret';
+  const secret = requireEnv('JWT_SECRET');
   return scryptSync(secret, SALT, 32);
 }
 
