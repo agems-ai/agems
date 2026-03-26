@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../config/prisma.service';
 import { encryptJson, decryptJson } from '../../common/crypto.util';
@@ -9,6 +9,28 @@ export class ToolsService {
     private prisma: PrismaService,
     private events: EventEmitter2,
   ) {}
+
+  private sanitizeTool(tool: any) {
+    if (!tool) return tool;
+    return {
+      ...tool,
+      authConfig: tool.authConfig ? { configured: true } : {},
+    };
+  }
+
+  private async getToolRecord(id: string, orgId: string) {
+    const tool = await this.prisma.tool.findUnique({
+      where: { id },
+      include: { agents: { include: { agent: { select: { id: true, name: true, slug: true } } } } },
+    });
+    if (!tool || tool.orgId !== orgId) throw new NotFoundException('Tool not found');
+    return tool;
+  }
+
+  private async assertAgentInOrg(agentId: string, orgId: string) {
+    const agent = await this.prisma.agent.findFirst({ where: { id: agentId, orgId }, select: { id: true } });
+    if (!agent) throw new ForbiddenException('Agent not found in this organization');
+  }
 
   /** Encrypt authConfig for storage */
   private encryptAuthForStorage(authConfig: any): any {
@@ -45,7 +67,7 @@ export class ToolsService {
       actorType: 'HUMAN', actorId: userId, action: 'CREATE',
       resourceType: 'tool', resourceId: tool.id,
     });
-    return tool;
+    return this.sanitizeTool(tool);
   }
 
   async findAllTools(filters: any, orgId: string) {
@@ -60,17 +82,16 @@ export class ToolsService {
       this.prisma.tool.findMany({ where, skip: (page - 1) * pageSize, take: pageSize, orderBy: { createdAt: 'desc' }, include: { _count: { select: { agents: true } } } }),
       this.prisma.tool.count({ where }),
     ]);
-    return { data, total, page, pageSize, totalPages: Math.ceil(total / pageSize) };
+    return { data: data.map((tool) => this.sanitizeTool(tool)), total, page, pageSize, totalPages: Math.ceil(total / pageSize) };
   }
 
   async findOneTool(id: string, orgId: string) {
-    const tool = await this.prisma.tool.findUnique({ where: { id }, include: { agents: { include: { agent: { select: { id: true, name: true, slug: true } } } } } });
-    if (!tool || tool.orgId !== orgId) throw new NotFoundException('Tool not found');
-    return this.decryptAuthFromStorage(tool);
+    const tool = await this.getToolRecord(id, orgId);
+    return this.sanitizeTool(tool);
   }
 
   async updateTool(id: string, input: any, orgId: string) {
-    await this.findOneTool(id, orgId);
+    await this.getToolRecord(id, orgId);
     // Whitelist allowed fields to prevent overwriting orgId, createdAt etc.
     const allowed = ['name', 'type', 'config', 'authType', 'authConfig'];
     const safeInput: any = {};
@@ -79,16 +100,17 @@ export class ToolsService {
         safeInput[key] = key === 'authConfig' ? this.encryptAuthForStorage(input[key]) : input[key];
       }
     }
-    return this.prisma.tool.update({ where: { id }, data: safeInput });
+    const tool = await this.prisma.tool.update({ where: { id }, data: safeInput });
+    return this.sanitizeTool(tool);
   }
 
   async deleteTool(id: string, orgId: string) {
-    await this.findOneTool(id, orgId);
+    await this.getToolRecord(id, orgId);
     return this.prisma.tool.delete({ where: { id } });
   }
 
   async testConnection(id: string, orgId: string) {
-    const tool = this.decryptAuthFromStorage(await this.findOneTool(id, orgId));
+    const tool = this.decryptAuthFromStorage(await this.getToolRecord(id, orgId));
     const start = Date.now();
     try {
       const config = tool.config as any;
@@ -126,7 +148,10 @@ export class ToolsService {
     return {
       version: '1.0.0',
       exportedAt: new Date().toISOString(),
-      tools: tools.map(({ id, orgId: _org, createdAt: _c, ...rest }) => rest),
+      tools: tools.map(({ id, orgId: _org, createdAt: _c, authConfig: _authConfig, ...rest }) => ({
+        ...rest,
+        authConfig: {},
+      })),
     };
   }
 
@@ -151,7 +176,7 @@ export class ToolsService {
             type: item.type,
             config: item.config ?? {},
             authType: item.authType,
-            authConfig: item.authConfig ?? {},
+            authConfig: this.encryptAuthForStorage(item.authConfig ?? {}),
             orgId,
           },
         });
@@ -163,13 +188,17 @@ export class ToolsService {
     return results;
   }
 
-  async assignToolToAgent(agentId: string, toolId: string, permissions: any) {
+  async assignToolToAgent(agentId: string, toolId: string, permissions: any, orgId: string) {
+    await this.assertAgentInOrg(agentId, orgId);
+    await this.getToolRecord(toolId, orgId);
     return this.prisma.agentTool.create({
       data: { agentId, toolId, permissions: permissions ?? { read: true, write: false, execute: true } },
     });
   }
 
-  async removeToolFromAgent(agentId: string, toolId: string) {
+  async removeToolFromAgent(agentId: string, toolId: string, orgId: string) {
+    await this.assertAgentInOrg(agentId, orgId);
+    await this.getToolRecord(toolId, orgId);
     const at = await this.prisma.agentTool.findFirst({ where: { agentId, toolId } });
     if (!at) throw new NotFoundException('Agent-tool link not found');
     return this.prisma.agentTool.delete({ where: { id: at.id } });
