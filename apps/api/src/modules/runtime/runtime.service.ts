@@ -149,7 +149,9 @@ export class RuntimeService {
         if (message.senderType === 'AGENT' && p.participantId === message.senderId) continue;
         const agent = await this.agentsService.findOne(p.participantId);
         if (agent.status === 'ACTIVE') agents.push(agent);
-      } catch {}
+        } catch (err: any) {
+          this.logger.warn(`Failed to load channel agent ${p.participantId}: ${err?.message || err}`);
+        }
     }
     if (agents.length === 0) { await releaseLock(); return; }
 
@@ -442,7 +444,9 @@ export class RuntimeService {
       try {
         const agent = await this.agentsService.findOne(p.participantId);
         if (agent.status === 'ACTIVE') agents.push(agent);
-      } catch {}
+        } catch (err: any) {
+          this.logger.warn(`Failed to load meeting agent ${p.participantId}: ${err?.message || err}`);
+        }
     }
     if (agents.length === 0) return;
 
