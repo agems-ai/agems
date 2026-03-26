@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../config/prisma.service';
 import { CommsService } from '../comms/comms.service';
@@ -15,13 +15,36 @@ export class ApprovalsService {
     private comms: CommsService,
   ) {}
 
-  // ── Policy Management ──
+  private async getAgentInOrg(agentId: string, orgId: string) {
+    const agent = await this.prisma.agent.findFirst({
+      where: { id: agentId, orgId },
+      select: { id: true, orgId: true, name: true },
+    });
+    if (!agent) throw new ForbiddenException('Agent not found in this organization');
+    return agent;
+  }
 
-  async getPolicy(agentId: string) {
+  private async getApprovalInOrg(requestId: string, orgId: string) {
+    const request = await this.prisma.approvalRequest.findUnique({
+      where: { id: requestId },
+      include: {
+        agent: { select: { id: true, name: true, avatar: true, orgId: true } },
+        comments: { orderBy: { createdAt: 'asc' } },
+      },
+    });
+    if (!request) throw new NotFoundException('Approval request not found');
+    if (request.agent.orgId !== orgId) throw new ForbiddenException('Approval request not found in this organization');
+    return request;
+  }
+
+  async getPolicy(agentId: string, orgId: string) {
+    await this.getAgentInOrg(agentId, orgId);
     return this.prisma.approvalPolicy.findUnique({ where: { agentId } });
   }
 
-  async upsertPolicy(agentId: string, input: any) {
+  async upsertPolicy(agentId: string, input: any, orgId: string) {
+    await this.getAgentInOrg(agentId, orgId);
+
     const data = {
       preset: input.preset,
       readMode: input.readMode ?? null,
@@ -45,7 +68,7 @@ export class ApprovalsService {
     });
   }
 
-  async applyPreset(agentId: string, preset: string) {
+  async applyPreset(agentId: string, preset: string, orgId: string) {
     return this.upsertPolicy(agentId, {
       preset,
       readMode: null,
@@ -55,54 +78,38 @@ export class ApprovalsService {
       sendMode: null,
       adminMode: null,
       toolOverrides: null,
-    });
+    }, orgId);
   }
 
-  // ── Mode Resolution ──
-
-  /**
-   * Resolve the effective approval mode for a tool.
-   * Priority: agentTool override → policy tool override → policy category → preset → FREE
-   */
   resolveMode(
     policy: any | null,
     toolName: string,
     category: string,
     agentToolApprovalMode?: string,
   ): string {
-    // 1. Per-tool assignment override (AgentTool.approvalMode)
     if (agentToolApprovalMode && agentToolApprovalMode !== 'FREE') {
       return agentToolApprovalMode;
     }
 
     if (!policy) return 'FREE';
 
-    // 2. Policy per-tool override
     const toolOverrides = (policy.toolOverrides as Record<string, string>) ?? {};
     if (toolOverrides[toolName]) return toolOverrides[toolName];
 
-    // 3. Policy per-category override
     const categoryModeKey = `${category.toLowerCase()}Mode` as string;
     const categoryMode = (policy as any)[categoryModeKey];
     if (categoryMode) return categoryMode;
 
-    // 4. Preset default
     const presetMap = APPROVAL_PRESETS[policy.preset];
     if (presetMap && presetMap[category]) return presetMap[category];
 
-    // 5. Fallback
     return 'FREE';
   }
 
-  /**
-   * Resolve mode using tool name only (fetches category internally).
-   */
   resolveModeForTool(policy: any | null, toolName: string, agentToolMode?: string): string {
     const category = categorizeToolName(toolName);
     return this.resolveMode(policy, toolName, category, agentToolMode);
   }
-
-  // ── Request Management ──
 
   async createRequest(input: {
     agentId: string;
@@ -135,11 +142,10 @@ export class ApprovalsService {
         requestedFromType: (input.requestedFromType as any) || null,
         requestedFromId: input.requestedFromId || null,
       },
-      include: { agent: { select: { id: true, name: true, avatar: true } } },
+      include: { agent: { select: { id: true, name: true, avatar: true, orgId: true } } },
     });
 
     this.events.emit('approval.requested', request);
-
     this.events.emit('audit.create', {
       actorType: 'AGENT',
       actorId: input.agentId,
@@ -161,14 +167,10 @@ export class ApprovalsService {
     status: 'APPROVED' | 'REJECTED',
     resolvedByType: string,
     resolvedById: string,
+    orgId: string,
     rejectionReason?: string,
   ) {
-    const request = await this.prisma.approvalRequest.findUnique({
-      where: { id: requestId },
-      include: { agent: { select: { id: true, name: true } } },
-    });
-
-    if (!request) throw new NotFoundException('Approval request not found');
+    const request = await this.getApprovalInOrg(requestId, orgId);
     if (request.status !== 'PENDING') {
       throw new Error(`Request already resolved: ${request.status}`);
     }
@@ -182,10 +184,9 @@ export class ApprovalsService {
         resolvedAt: new Date(),
         rejectionReason: rejectionReason || null,
       },
-      include: { agent: { select: { id: true, name: true } } },
+      include: { agent: { select: { id: true, name: true, orgId: true } } },
     });
 
-    // Audit log
     this.events.emit('audit.create', {
       actorType: resolvedByType,
       actorId: resolvedById,
@@ -195,7 +196,6 @@ export class ApprovalsService {
       details: { toolName: request.toolName, agentId: request.agentId },
     });
 
-    // Emit event for WebSocket broadcast
     this.events.emit('approval.resolved', { request: updated, status });
 
     if (status === 'APPROVED') {
@@ -208,24 +208,20 @@ export class ApprovalsService {
   }
 
   private async handleApproved(request: any) {
-    // Check if all pending approvals for this execution are resolved
     if (request.executionId) {
       const pendingCount = await this.prisma.approvalRequest.count({
         where: { executionId: request.executionId, status: 'PENDING' },
       });
 
       if (pendingCount === 0) {
-        // All approvals resolved — trigger re-execution
         const resumeMessage = `Your previous request to use "${request.toolName}" has been approved. Please proceed with the approved action. Parameters: ${JSON.stringify(request.toolInput)}`;
 
-        // Collect all approved tool names for this execution
         const approvedRequests = await this.prisma.approvalRequest.findMany({
           where: { executionId: request.executionId, status: 'APPROVED' },
           select: { toolName: true },
         });
-        const approvedTools = [...new Set(approvedRequests.map(r => r.toolName))];
+        const approvedTools = [...new Set(approvedRequests.map((r) => r.toolName))];
 
-        // Emit event for RuntimeService to handle the resume
         this.events.emit('approval.resume', {
           agentId: request.agentId,
           executionId: request.executionId,
@@ -235,7 +231,6 @@ export class ApprovalsService {
           approvedTools,
         });
 
-        // Mark original execution as completed
         await this.prisma.agentExecution.update({
           where: { id: request.executionId },
           data: { status: 'COMPLETED', endedAt: new Date() },
@@ -243,7 +238,6 @@ export class ApprovalsService {
       }
     }
 
-    // Handle Telegram access approval
     if (request.toolName === 'telegram_access') {
       const input = request.toolInput as any;
       if (input?.telegramDbChatId) {
@@ -259,7 +253,6 @@ export class ApprovalsService {
       }
     }
 
-    // Send approval notification to channel
     if (request.channelId) {
       await this.comms.sendMessage(
         request.channelId,
@@ -269,7 +262,6 @@ export class ApprovalsService {
       );
     }
 
-    // Resume task after approval
     if (request.taskId) {
       await this.prisma.task.updateMany({
         where: { id: request.taskId, status: { in: ['PENDING', 'BLOCKED'] } },
@@ -279,7 +271,6 @@ export class ApprovalsService {
   }
 
   private async handleRejected(request: any, reason?: string) {
-    // Handle Telegram access rejection
     if (request.toolName === 'telegram_access') {
       const input = request.toolInput as any;
       if (input?.telegramDbChatId) {
@@ -291,7 +282,6 @@ export class ApprovalsService {
       }
     }
 
-    // Notify channel
     if (request.channelId) {
       const msg = `Rejected: ${request.description}${reason ? `. Reason: ${reason}` : ''}`;
       await this.comms.sendMessage(
@@ -302,7 +292,6 @@ export class ApprovalsService {
       );
     }
 
-    // Mark execution as failed
     if (request.executionId) {
       await this.prisma.agentExecution.update({
         where: { id: request.executionId },
@@ -314,7 +303,6 @@ export class ApprovalsService {
       });
     }
 
-    // If approval rejected, block the task
     if (request.taskId) {
       await this.prisma.task.updateMany({
         where: { id: request.taskId, status: { in: ['PENDING', 'IN_PROGRESS'] } },
@@ -322,8 +310,6 @@ export class ApprovalsService {
       });
     }
   }
-
-  // ── Send Approval Card to Chat ──
 
   async sendApprovalMessage(request: any, channelId: string) {
     const agent = request.agent ?? await this.prisma.agent.findUnique({
@@ -353,7 +339,6 @@ export class ApprovalsService {
       'system',
     );
 
-    // Store message ID for later updates
     await this.prisma.approvalRequest.update({
       where: { id: request.id },
       data: { messageId: message.id },
@@ -362,11 +347,8 @@ export class ApprovalsService {
     return message;
   }
 
-  // ── Queries ──
-
-  async findAll(filters: any) {
-    const where: any = {};
-    if (filters.orgId) where.agent = { orgId: filters.orgId };
+  async findAll(filters: any, orgId: string) {
+    const where: any = { agent: { orgId } };
     if (filters.agentId) where.agentId = filters.agentId;
     if (filters.status) where.status = filters.status;
     if (filters.category) where.category = filters.category;
@@ -380,7 +362,7 @@ export class ApprovalsService {
     const [data, total] = await Promise.all([
       this.prisma.approvalRequest.findMany({
         where,
-        include: { agent: { select: { id: true, name: true, avatar: true } } },
+        include: { agent: { select: { id: true, name: true, avatar: true, orgId: true } } },
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -397,36 +379,33 @@ export class ApprovalsService {
     };
   }
 
-  async findOne(id: string) {
-    const request = await this.prisma.approvalRequest.findUnique({
-      where: { id },
-      include: {
-        agent: { select: { id: true, name: true, avatar: true } },
-        comments: { orderBy: { createdAt: 'asc' } },
-      },
-    });
-    if (!request) throw new NotFoundException('Approval request not found');
-    return request;
+  async findOne(id: string, orgId: string) {
+    return this.getApprovalInOrg(id, orgId);
   }
 
-  async getPendingCount() {
-    return this.prisma.approvalRequest.count({ where: { status: 'PENDING' } });
+  async getPendingCount(orgId: string) {
+    return this.prisma.approvalRequest.count({ where: { status: 'PENDING', agent: { orgId } } });
   }
 
-  async getPendingForApprover(approverType: string, approverId: string) {
+  async getPendingForApprover(approverType: string, approverId: string, orgId: string) {
     return this.prisma.approvalRequest.findMany({
-      where: { status: 'PENDING', requestedFromType: approverType as any, requestedFromId: approverId },
-      include: { agent: { select: { id: true, name: true, avatar: true } } },
+      where: {
+        status: 'PENDING',
+        requestedFromType: approverType as any,
+        requestedFromId: approverId,
+        agent: { orgId },
+      },
+      include: { agent: { select: { id: true, name: true, avatar: true, orgId: true } } },
       orderBy: { createdAt: 'desc' },
       take: 50,
     });
   }
 
-  async bulkResolve(ids: string[], status: 'APPROVED' | 'REJECTED', resolvedByType: string, resolvedById: string, reason?: string) {
+  async bulkResolve(ids: string[], status: 'APPROVED' | 'REJECTED', resolvedByType: string, resolvedById: string, orgId: string, reason?: string) {
     let count = 0;
     for (const id of ids) {
       try {
-        await this.resolveRequest(id, status, resolvedByType, resolvedById, reason);
+        await this.resolveRequest(id, status, resolvedByType, resolvedById, orgId, reason);
         count++;
       } catch (e) {
         this.logger.warn(`Failed to ${status.toLowerCase()} request ${id}: ${e}`);
@@ -435,12 +414,8 @@ export class ApprovalsService {
     return count;
   }
 
-  // ── Comments ──
-
-  async addComment(requestId: string, authorType: string, authorId: string, content: string) {
-    // Verify the request exists
-    const request = await this.prisma.approvalRequest.findUnique({ where: { id: requestId } });
-    if (!request) throw new NotFoundException('Approval request not found');
+  async addComment(requestId: string, authorType: string, authorId: string, content: string, orgId: string) {
+    await this.getApprovalInOrg(requestId, orgId);
 
     const comment = await this.prisma.approvalComment.create({
       data: {
@@ -456,9 +431,8 @@ export class ApprovalsService {
     return comment;
   }
 
-  async listComments(requestId: string) {
-    const request = await this.prisma.approvalRequest.findUnique({ where: { id: requestId } });
-    if (!request) throw new NotFoundException('Approval request not found');
+  async listComments(requestId: string, orgId: string) {
+    await this.getApprovalInOrg(requestId, orgId);
 
     return this.prisma.approvalComment.findMany({
       where: { requestId },
