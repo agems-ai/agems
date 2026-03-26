@@ -11,6 +11,28 @@ export class CommsService {
     private events: EventEmitter2,
   ) {}
 
+  private async assertChannelParticipant(channelId: string, participantType: 'AGENT' | 'HUMAN', participantId: string, orgId?: string) {
+    const participant = await this.prisma.channelParticipant.findFirst({
+      where: {
+        channelId,
+        participantType,
+        participantId,
+        channel: orgId ? { orgId } : undefined,
+      },
+      include: { channel: { select: { orgId: true } } },
+    });
+    if (!participant) throw new ForbiddenException('Access denied');
+    return participant;
+  }
+
+  private async getOrgUsers(orgId: string) {
+    const memberships = await this.prisma.orgMember.findMany({
+      where: { orgId },
+      include: { user: { select: { id: true, name: true } } },
+    });
+    return memberships.map((membership) => membership.user);
+  }
+
   async createChannel(
     input: CreateChannelInput,
     creatorType: 'AGENT' | 'HUMAN',
@@ -95,7 +117,7 @@ export class CommsService {
     });
   }
 
-  async findOneChannel(channelId: string, orgId?: string) {
+  async findOneChannel(channelId: string, orgId?: string, participantType?: 'AGENT' | 'HUMAN', participantId?: string) {
     const channel = await this.prisma.channel.findUnique({
       where: { id: channelId },
       include: {
@@ -105,6 +127,11 @@ export class CommsService {
     });
     if (!channel) throw new NotFoundException('Channel not found');
     if (orgId && channel.orgId !== orgId) throw new ForbiddenException('Channel does not belong to this organization');
+    if (participantType && participantId) {
+      const isParticipant = channel.participants.some((participant) =>
+        participant.participantType === participantType && participant.participantId === participantId);
+      if (!isParticipant) throw new ForbiddenException('Access denied');
+    }
     return channel;
   }
 
@@ -115,7 +142,11 @@ export class CommsService {
     senderId: string,
     orgId?: string,
   ) {
-    await this.findOneChannel(channelId, orgId);
+    if (senderType !== 'SYSTEM') {
+      await this.assertChannelParticipant(channelId, senderType, senderId, orgId);
+    } else {
+      await this.findOneChannel(channelId, orgId);
+    }
 
     const message = await this.prisma.message.create({
       data: {
@@ -216,7 +247,7 @@ export class CommsService {
       where: orgId ? { orgId } : undefined,
       select: { id: true, name: true },
     });
-    const users = await this.prisma.user.findMany({ select: { id: true, name: true } });
+    const users = await this.getOrgUsers(orgId);
 
     const others: { type: 'AGENT' | 'HUMAN'; id: string; name: string }[] = [
       ...agents.filter((a) => !(type === 'AGENT' && a.id === id)).map((a) => ({ type: 'AGENT' as const, id: a.id, name: a.name })),
@@ -256,7 +287,7 @@ export class CommsService {
       where: orgId ? { orgId } : undefined,
       select: { id: true, name: true },
     });
-    const users = await this.prisma.user.findMany({ select: { id: true, name: true } });
+    const users = await this.getOrgUsers(orgId);
 
     const participants: { type: 'AGENT' | 'HUMAN'; id: string; name: string }[] = [
       ...agents.map((a) => ({ type: 'AGENT' as const, id: a.id, name: a.name })),
