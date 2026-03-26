@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, OnModuleInit, OnModuleDestroy, Inject, forwardRef } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from '../../config/prisma.service';
 import { TelegramBotManager, type BotConfig } from './telegram-bot-manager';
@@ -26,6 +26,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     private comms: CommsService,
     private events: EventEmitter2,
   ) {}
+
+  private async getAgentInOrg(agentId: string, orgId: string) {
+    const agent = await this.prisma.agent.findFirst({ where: { id: agentId, orgId } });
+    if (!agent) throw new NotFoundException('Agent not found');
+    return agent;
+  }
+
+  private async getChatInOrg(chatId: string, orgId: string) {
+    const chat = await this.prisma.telegramChat.findFirst({
+      where: { id: chatId, agent: { orgId } },
+      include: { channel: { include: { _count: { select: { messages: true } } } } },
+    });
+    if (!chat) throw new NotFoundException('Telegram chat not found');
+    return chat;
+  }
 
   async onModuleInit() {
     // Start bots for all active agents with telegram config
@@ -114,9 +129,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Sync ALL bots' profiles (name, description, photo) — includes non-running bots */
-  async syncAllBotProfiles(): Promise<{ synced: string[]; errors: string[] }> {
+  async syncAllBotProfiles(orgId?: string): Promise<{ synced: string[]; errors: string[] }> {
     const agents = await this.prisma.agent.findMany({
-      where: { telegramConfig: { not: null as any } },
+      where: { telegramConfig: { not: null as any }, ...(orgId ? { orgId } : {}) },
       select: { id: true, name: true, telegramConfig: true },
     });
     const synced: string[] = [];
@@ -222,6 +237,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   async stopBotForAgent(agentId: string) {
     await this.botManager.stop(agentId);
+  }
+
+  async getRunningBots(orgId: string) {
+    const agents = await this.prisma.agent.findMany({
+      where: { orgId },
+      select: { id: true, name: true },
+    });
+    const allowed = new Set(agents.map((agent) => agent.id));
+    return this.botManager.getRunningBots().filter((botId) => allowed.has(botId));
   }
 
   // ── Message Handlers ──
@@ -724,7 +748,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   // ── Public API for controller ──
 
-  async getBotStatus(agentId: string) {
+  async getBotStatus(agentId: string, orgId?: string) {
+    if (orgId) await this.getAgentInOrg(agentId, orgId);
     const running = this.botManager.isRunning(agentId);
     const instance = this.botManager.getBotInstance(agentId);
     const chatCount = await this.prisma.telegramChat.count({ where: { agentId } });
@@ -736,7 +761,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async getChats(agentId: string) {
+  async getChats(agentId: string, orgId?: string) {
+    if (orgId) await this.getAgentInOrg(agentId, orgId);
     return this.prisma.telegramChat.findMany({
       where: { agentId },
       include: { channel: { include: { _count: { select: { messages: true } } } } },
@@ -744,18 +770,42 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async approveChat(chatId: string) {
+  async approveChat(chatId: string, orgId?: string) {
+    if (orgId) await this.getChatInOrg(chatId, orgId);
     return this.prisma.telegramChat.update({
       where: { id: chatId },
       data: { isApproved: true },
     });
   }
 
-  async rejectChat(chatId: string) {
+  async rejectChat(chatId: string, orgId?: string) {
+    if (orgId) await this.getChatInOrg(chatId, orgId);
     return this.prisma.telegramChat.update({
       where: { id: chatId },
       data: { isApproved: false },
     });
+  }
+
+  async startBot(agentId: string, orgId: string) {
+    const agent = await this.getAgentInOrg(agentId, orgId);
+    const config = agent.telegramConfig as any;
+    if (!config?.botToken) return { error: 'No bot token configured' };
+    await this.startBotForAgent(agentId, config);
+    return { ok: true };
+  }
+
+  async stopBot(agentId: string, orgId: string) {
+    await this.getAgentInOrg(agentId, orgId);
+    await this.stopBotForAgent(agentId);
+    return { ok: true };
+  }
+
+  async syncProfile(agentId: string, orgId: string) {
+    const agent = await this.getAgentInOrg(agentId, orgId);
+    const config = agent.telegramConfig as any;
+    if (!config?.botToken) return { error: 'No bot token configured' };
+    await this.syncBotProfile(agentId, config.botToken);
+    return { ok: true };
   }
 
   async testBotToken(token: string): Promise<{ ok: boolean; username?: string; name?: string; error?: string }> {
