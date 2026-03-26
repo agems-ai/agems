@@ -14,6 +14,7 @@ export class ToolsController {
   // ── Tools ──
 
   @Post('tools')
+  @Roles('MANAGER')
   createTool(@Body() body: any, @Request() req: { user: RequestUser }) {
     return this.toolsService.createTool(body, req.user.id, req.user.orgId);
   }
@@ -24,11 +25,13 @@ export class ToolsController {
   }
 
   @Get('tools/export')
+  @Roles('ADMIN')
   exportTools(@Request() req: { user: RequestUser }) {
     return this.toolsService.exportTools(req.user.orgId);
   }
 
   @Post('tools/import')
+  @Roles('ADMIN')
   importTools(@Body() body: any, @Request() req: { user: RequestUser }) {
     return this.toolsService.importTools(body, req.user.orgId);
   }
@@ -39,6 +42,7 @@ export class ToolsController {
   }
 
   @Patch('tools/:id')
+  @Roles('MANAGER')
   updateTool(@Param('id') id: string, @Body() body: any, @Request() req: { user: RequestUser }) {
     return this.toolsService.updateTool(id, body, req.user.orgId);
   }
@@ -50,6 +54,7 @@ export class ToolsController {
   }
 
   @Post('tools/:id/test')
+  @Roles('MANAGER')
   testTool(@Param('id') id: string, @Request() req: { user: RequestUser }) {
     return this.toolsService.testConnection(id, req.user.orgId);
   }
@@ -57,6 +62,7 @@ export class ToolsController {
   // ── Skills ──
 
   @Post('skills')
+  @Roles('MANAGER')
   createSkill(@Body() body: any, @Request() req: { user: RequestUser }) {
     return this.skillsService.createSkill(body, req.user.orgId);
   }
@@ -67,50 +73,57 @@ export class ToolsController {
   }
 
   @Get('skills/export')
+  @Roles('MANAGER')
   exportSkills(@Request() req: { user: RequestUser }) {
     return this.skillsService.exportSkills(req.user.orgId);
   }
 
   @Post('skills/import')
+  @Roles('MANAGER')
   importSkills(@Body() body: any, @Request() req: { user: RequestUser }) {
     return this.skillsService.importSkills(body, req.user.orgId);
   }
 
   @Get('skills/:id')
-  findOneSkill(@Param('id') id: string) {
-    return this.skillsService.findOneSkill(id);
+  findOneSkill(@Param('id') id: string, @Request() req: { user: RequestUser }) {
+    return this.skillsService.findOneSkill(id, req.user.orgId);
   }
 
   @Patch('skills/:id')
-  updateSkill(@Param('id') id: string, @Body() body: any) {
-    return this.skillsService.updateSkill(id, body);
+  @Roles('MANAGER')
+  updateSkill(@Param('id') id: string, @Body() body: any, @Request() req: { user: RequestUser }) {
+    return this.skillsService.updateSkill(id, body, req.user.orgId);
   }
 
   @Delete('skills/:id')
   @Roles('ADMIN')
-  deleteSkill(@Param('id') id: string) {
-    return this.skillsService.deleteSkill(id);
+  deleteSkill(@Param('id') id: string, @Request() req: { user: RequestUser }) {
+    return this.skillsService.deleteSkill(id, req.user.orgId);
   }
 
   // ── Agent assignments ──
 
   @Post('agents/:agentId/tools')
-  assignTool(@Param('agentId') agentId: string, @Body() body: { toolId: string; permissions?: any }) {
-    return this.toolsService.assignToolToAgent(agentId, body.toolId, body.permissions);
+  @Roles('MANAGER')
+  assignTool(@Param('agentId') agentId: string, @Body() body: { toolId: string; permissions?: any }, @Request() req: { user: RequestUser }) {
+    return this.toolsService.assignToolToAgent(agentId, body.toolId, body.permissions, req.user.orgId);
   }
 
   @Delete('agents/:agentId/tools/:toolId')
-  removeTool(@Param('agentId') agentId: string, @Param('toolId') toolId: string) {
-    return this.toolsService.removeToolFromAgent(agentId, toolId);
+  @Roles('MANAGER')
+  removeTool(@Param('agentId') agentId: string, @Param('toolId') toolId: string, @Request() req: { user: RequestUser }) {
+    return this.toolsService.removeToolFromAgent(agentId, toolId, req.user.orgId);
   }
 
   @Post('agents/:agentId/skills')
-  assignSkill(@Param('agentId') agentId: string, @Body() body: { skillId: string; config?: any }) {
-    return this.skillsService.assignSkillToAgent(agentId, body.skillId, body.config);
+  @Roles('MANAGER')
+  assignSkill(@Param('agentId') agentId: string, @Body() body: { skillId: string; config?: any }, @Request() req: { user: RequestUser }) {
+    return this.skillsService.assignSkillToAgent(agentId, body.skillId, body.config, req.user.orgId);
   }
 
   @Delete('agents/:agentId/skills/:skillId')
-  removeSkill(@Param('agentId') agentId: string, @Param('skillId') skillId: string) {
-    return this.skillsService.removeSkillFromAgent(agentId, skillId);
+  @Roles('MANAGER')
+  removeSkill(@Param('agentId') agentId: string, @Param('skillId') skillId: string, @Request() req: { user: RequestUser }) {
+    return this.skillsService.removeSkillFromAgent(agentId, skillId, req.user.orgId);
   }
 }
