@@ -19,6 +19,7 @@ const typeIcon: Record<string, string> = {
 };
 
 export default function SkillsPage() {
+  const isAdmin = api.getUserFromToken()?.role === 'ADMIN';
   const [skills, setSkills] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<any>(null);
@@ -284,7 +285,7 @@ export default function SkillsPage() {
                   className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-[var(--border)] hover:bg-[var(--hover)]">
                   <Pencil size={12} /> Edit
                 </button>
-                {deleteConfirm === skill.id ? (
+                {isAdmin && (deleteConfirm === skill.id ? (
                   <div className="flex gap-1 ml-auto">
                     <button onClick={() => handleDelete(skill.id)}
                       className="text-xs px-3 py-1.5 rounded bg-red-500 text-white hover:bg-red-600">Confirm</button>
@@ -296,7 +297,7 @@ export default function SkillsPage() {
                     className="text-xs px-3 py-1.5 rounded border border-red-300/30 text-red-400 hover:bg-red-500/10 ml-auto">
                     Delete
                   </button>
-                )}
+                ))}
               </div>
             </div>
           ))}

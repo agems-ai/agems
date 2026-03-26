@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, Request } from '@nestjs/common';
 import { ToolsService } from './tools.service';
 import { SkillsService } from './skills.service';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { RequestUser } from '../../common/types';
 
 @Controller()
@@ -43,6 +44,7 @@ export class ToolsController {
   }
 
   @Delete('tools/:id')
+  @Roles('ADMIN')
   deleteTool(@Param('id') id: string, @Request() req: { user: RequestUser }) {
     return this.toolsService.deleteTool(id, req.user.orgId);
   }
@@ -85,6 +87,7 @@ export class ToolsController {
   }
 
   @Delete('skills/:id')
+  @Roles('ADMIN')
   deleteSkill(@Param('id') id: string) {
     return this.skillsService.deleteSkill(id);
   }

@@ -37,6 +37,7 @@ import ThemeToggle from '@/components/ThemeToggle';
 const navItems = [
   // Overview
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/company', label: 'Company', icon: Building2 },
   // AI core
   { href: '/agents', label: 'Agents', icon: Bot },
   { href: '/skills', label: 'Skills', icon: Sparkles },
@@ -52,7 +53,6 @@ const navItems = [
   { href: '/meetings', label: 'Meetings', icon: Video },
   // Organization
   { href: '/employees', label: 'Employees', icon: Users },
-  { href: '/company', label: 'Company', icon: Building2 },
   // Governance & resources
   { href: '/approvals', label: 'Approvals', icon: ShieldAlert },
   { href: '/budgets', label: 'Budgets', icon: DollarSign },

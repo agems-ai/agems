@@ -131,6 +131,20 @@ export class TasksService {
     return task;
   }
 
+  async deleteTask(id: string, orgId: string) {
+    await this.findOne(id, orgId);
+    // Delete related records first
+    await this.prisma.taskComment.deleteMany({ where: { taskId: id } });
+    await this.prisma.taskLabel.deleteMany({ where: { taskId: id } });
+    await this.prisma.taskAttachment.deleteMany({ where: { taskId: id } });
+    await this.prisma.taskWorkProduct.deleteMany({ where: { taskId: id } });
+    await this.prisma.taskReadState.deleteMany({ where: { taskId: id } }).catch(() => {});
+    // Delete subtasks
+    await this.prisma.task.deleteMany({ where: { parentTaskId: id } });
+    // Delete the task itself
+    return this.prisma.task.delete({ where: { id } });
+  }
+
   async assign(id: string, assigneeType: string, assigneeId: string, userId: string) {
     const task = await this.findOne(id);
     const updated = await this.prisma.task.update({

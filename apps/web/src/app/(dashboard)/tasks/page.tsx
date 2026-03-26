@@ -45,11 +45,13 @@ const priorityIcon: Record<string, string> = {
 type QuickFilter = 'all' | 'my_tasks' | 'assigned_to_me' | 'created_by_me';
 
 export default function TasksPage() {
+  const isAdmin = api.getUserFromToken()?.role === 'ADMIN';
   const [tasks, setTasks] = useState<any[]>([]);
   const [agents, setAgents] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [modalMode, setModalMode] = useState<'view' | 'edit' | 'create' | null>(null);
   const [viewTask, setViewTask] = useState<any>(null);
   const [viewLoading, setViewLoading] = useState(false);
@@ -558,6 +560,23 @@ export default function TasksPage() {
                     <path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" />
                   </svg>
                 </button>
+                {isAdmin && (
+                  deleteConfirm === viewTask.id ? (
+                    <div className="flex gap-1 shrink-0">
+                      <button onClick={async (e) => { e.stopPropagation(); await api.deleteTask(viewTask.id); setTasks(t => t.filter(x => x.id !== viewTask.id)); setModalMode(null); setDeleteConfirm(null); }}
+                        className="text-xs px-2 py-1 rounded bg-red-500 text-white hover:bg-red-600">Delete</button>
+                      <button onClick={(e) => { e.stopPropagation(); setDeleteConfirm(null); }}
+                        className="text-xs px-2 py-1 rounded border border-[var(--border)]">Cancel</button>
+                    </div>
+                  ) : (
+                    <button onClick={(e) => { e.stopPropagation(); setDeleteConfirm(viewTask.id); }}
+                      className="p-2 rounded-lg hover:bg-red-500/10 transition shrink-0 text-red-400" title="Delete task">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M2 4h12M5.33 4V2.67a1.33 1.33 0 011.34-1.34h2.66a1.33 1.33 0 011.34 1.34V4m2 0v9.33a1.33 1.33 0 01-1.34 1.34H4.67a1.33 1.33 0 01-1.34-1.34V4h9.34z" />
+                      </svg>
+                    </button>
+                  )
+                )}
                 <button onClick={() => setModalMode(null)} className="p-2 rounded-lg hover:bg-[var(--hover)] transition shrink-0 text-[var(--muted)]">
                   &times;
                 </button>

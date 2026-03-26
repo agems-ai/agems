@@ -163,6 +163,10 @@ class ApiClient {
     return this.fetch(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
   }
 
+  deleteTask(id: string) {
+    return this.fetch(`/tasks/${id}`, { method: 'DELETE' });
+  }
+
   getTask(id: string) {
     return this.fetch<any>(`/tasks/${id}`);
   }

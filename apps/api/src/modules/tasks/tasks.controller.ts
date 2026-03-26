@@ -1,5 +1,6 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, Query, Request } from '@nestjs/common';
 import { TasksService } from './tasks.service';
+import { Roles } from '../../common/decorators/roles.decorator';
 import type { CreateTaskInput, UpdateTaskInput, TaskFilters } from '@agems/shared';
 import type { RequestUser } from '../../common/types';
 
@@ -52,6 +53,12 @@ export class TasksController {
   @Patch(':id')
   update(@Param('id') id: string, @Body() body: UpdateTaskInput, @Request() req: { user: RequestUser }) {
     return this.tasksService.update(id, body, req.user.orgId);
+  }
+
+  @Delete(':id')
+  @Roles('ADMIN')
+  deleteTask(@Param('id') id: string, @Request() req: { user: RequestUser }) {
+    return this.tasksService.deleteTask(id, req.user.orgId);
   }
 
   @Post(':id/assign')

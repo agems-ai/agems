@@ -7,9 +7,11 @@ import { Settings, Plus, ChevronDown, MessageSquare, ArrowLeft, Users, User, Bot
 import ChatPanel, { Avatar } from '@/components/ChatPanel';
 
 export default function CommsPage() {
+  const isAdmin = api.getUserFromToken()?.role === 'ADMIN';
   const searchParams = useSearchParams();
   const [channels, setChannels] = useState<any[]>([]);
   const [selectedChannel, setSelectedChannel] = useState<any>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newChannelName, setNewChannelName] = useState('');
   const [newChannelType, setNewChannelType] = useState('GROUP');
@@ -556,6 +558,19 @@ export default function CommsPage() {
             <div className="flex justify-end gap-2 mt-6">
               <button onClick={() => setShowEditChannel(false)} className="px-4 py-2 rounded-lg border border-[var(--border)] hover:bg-[var(--hover)]">Cancel</button>
               <button onClick={saveEditChannel} className="px-4 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90">Save</button>
+              {isAdmin && (
+                deleteConfirm === selectedChannel.id ? (
+                  <div className="flex gap-2 ml-auto">
+                    <button onClick={async () => { await api.deleteChannel(selectedChannel.id); setChannels(c => c.filter(x => x.id !== selectedChannel.id)); setSelectedChannel(null); setShowEditChannel(false); setDeleteConfirm(null); }}
+                      className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600">Confirm Delete</button>
+                    <button onClick={() => setDeleteConfirm(null)}
+                      className="px-4 py-2 border border-[var(--border)] rounded-lg">Cancel</button>
+                  </div>
+                ) : (
+                  <button onClick={() => setDeleteConfirm(selectedChannel.id)}
+                    className="px-4 py-2 border border-red-300/30 text-red-400 rounded-lg hover:bg-red-500/10 ml-auto">Delete Channel</button>
+                )
+              )}
             </div>
           </div>
         </div>

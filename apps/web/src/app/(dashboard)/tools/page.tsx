@@ -11,6 +11,7 @@ const typeIcons: Record<string, string> = { DATABASE: '🗄️', REST_API: '🌐
 const emptyForm = { name: '', type: 'REST_API', description: '', config: '{}', authType: 'NONE', authConfig: '{}' };
 
 export default function ToolsPage() {
+  const isAdmin = api.getUserFromToken()?.role === 'ADMIN';
   const [tools, setTools] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -253,7 +254,7 @@ export default function ToolsPage() {
                     className="text-xs px-3 py-1.5 rounded border border-[var(--border)] hover:bg-[var(--hover)]">
                     Edit
                   </button>
-                  {deleteConfirm === tool.id ? (
+                  {isAdmin && (deleteConfirm === tool.id ? (
                     <div className="flex gap-1 ml-auto">
                       <button onClick={() => handleDelete(tool.id)}
                         className="text-xs px-3 py-1.5 rounded bg-red-500 text-white hover:bg-red-600">Confirm</button>
@@ -265,7 +266,7 @@ export default function ToolsPage() {
                       className="text-xs px-3 py-1.5 rounded border border-red-300/30 text-red-400 hover:bg-red-500/10 ml-auto">
                       Delete
                     </button>
-                  )}
+                  ))}
                 </div>
               </div>
             );
