@@ -13,7 +13,7 @@ import { AgentRunner, type RunResult, type UserMessage, type MessagePart } from 
 import { z } from 'zod';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { randomUUID } from 'crypto';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { decryptJson } from '../../common/crypto.util';
 import { RedisLockService } from '../../common/redis-lock.service';
 
@@ -29,6 +29,26 @@ export class RuntimeService {
   private readonly QUEUE_TTL_SECONDS = 5 * 60; // 5 minutes
   private readonly EXECUTION_STOP_TTL_SECONDS = 10 * 60; // 10 minutes
   private readonly STOP_POLL_INTERVAL_MS = 1000;
+
+  private hasHostAccessEnabled(runtimeConfig: Record<string, unknown>) {
+    return runtimeConfig.allowHostAccess === true;
+  }
+
+  private getHostWorkspaceRoot(runtimeConfig: Record<string, unknown>) {
+    return resolve((runtimeConfig.workingDirectory as string) || process.cwd());
+  }
+
+  private resolveWorkspacePath(targetPath: string, runtimeConfig: Record<string, unknown>) {
+    if (!this.hasHostAccessEnabled(runtimeConfig)) {
+      throw new Error('Host filesystem access is disabled for this agent');
+    }
+    const workspaceRoot = this.getHostWorkspaceRoot(runtimeConfig);
+    const resolvedPath = resolve(targetPath);
+    if (resolvedPath !== workspaceRoot && !resolvedPath.startsWith(workspaceRoot + '\\') && !resolvedPath.startsWith(workspaceRoot + '/')) {
+      throw new Error(`Path "${targetPath}" is outside the allowed workspace`);
+    }
+    return resolvedPath;
+  }
 
   constructor(
     private prisma: PrismaService,
@@ -980,7 +1000,7 @@ export class RuntimeService {
     }
 
     // ── System tools (bash, file I/O) — available to ALL agents ──
-    {
+    if (this.hasHostAccessEnabled(runtimeConfig)) {
       tools.push({
         name: 'bash_command',
         description: 'Execute a bash command and return the output.',
@@ -1001,7 +1021,7 @@ export class RuntimeService {
           maxLines: z.number().optional().describe('Max lines to read (default 200)'),
         }),
         execute: async (params: { path: string; maxLines?: number }) => {
-          return this.readFile(params.path, params.maxLines ?? 200);
+          return this.readFile(params.path, params.maxLines ?? 200, runtimeConfig);
         },
       });
 
@@ -1014,7 +1034,7 @@ export class RuntimeService {
           saveToFiles: z.boolean().optional().describe('If true, also copy file to /uploads/ and register in Files library (default: false)'),
         }),
         execute: async (params: { path: string; content: string; saveToFiles?: boolean }) => {
-          const writeResult = await this.writeFile(params.path, params.content);
+          const writeResult = await this.writeFile(params.path, params.content, runtimeConfig);
           if ('error' in writeResult || !params.saveToFiles) return writeResult;
 
           // Also register in Files library
@@ -1032,8 +1052,9 @@ export class RuntimeService {
               : join(cwd, '..', 'web', 'public', 'uploads');
             if (!existsSync(uploadsDir)) mkdirSync(uploadsDir, { recursive: true });
 
-            copyFileSync(params.path, join(uploadsDir, filename));
-            const stat = statSync(params.path);
+            const sourcePath = this.resolveWorkspacePath(params.path, runtimeConfig);
+            copyFileSync(sourcePath, join(uploadsDir, filename));
+            const stat = statSync(sourcePath);
             const mimeMap: Record<string, string> = {
               '.pdf': 'application/pdf', '.txt': 'text/plain', '.csv': 'text/csv',
               '.json': 'application/json', '.md': 'text/markdown',
@@ -2110,17 +2131,18 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
         try {
           const { copyFileSync, statSync } = await import('fs');
           const { basename, extname: pathExtname } = await import('path');
+          const safeSourcePath = this.resolveWorkspacePath(params.sourcePath, runtimeConfig);
 
-          if (!existsSync(params.sourcePath)) {
+          if (!existsSync(safeSourcePath)) {
             return { error: `File not found: ${params.sourcePath}` };
           }
 
-          const stat = statSync(params.sourcePath);
+          const stat = statSync(safeSourcePath);
           if (stat.size > 10 * 1024 * 1024) {
             return { error: 'File too large (max 10MB)' };
           }
 
-          const origName = basename(params.sourcePath);
+          const origName = basename(safeSourcePath);
           const ext = pathExtname(origName).toLowerCase() || '.bin';
           const filename = `${randomUUID()}${ext}`;
 
@@ -2131,7 +2153,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
             : join(cwd, '..', 'web', 'public', 'uploads');
           if (!existsSync(uploadsDir)) mkdirSync(uploadsDir, { recursive: true });
 
-          copyFileSync(params.sourcePath, join(uploadsDir, filename));
+          copyFileSync(safeSourcePath, join(uploadsDir, filename));
 
           const mimeMap: Record<string, string> = {
             '.pdf': 'application/pdf', '.txt': 'text/plain', '.csv': 'text/csv',
@@ -2181,8 +2203,9 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
           const { execSync } = await import('child_process');
           const { statSync, copyFileSync } = await import('fs');
           const { basename } = await import('path');
+          const safeHtmlPath = this.resolveWorkspacePath(params.htmlPath, runtimeConfig);
 
-          if (!existsSync(params.htmlPath)) {
+          if (!existsSync(safeHtmlPath)) {
             return { error: `HTML file not found: ${params.htmlPath}` };
           }
 
@@ -2192,7 +2215,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
           // Convert HTML to PDF with Chromium
           const chromiumPath = process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser';
           execSync(
-            `${chromiumPath} --headless --disable-gpu --no-sandbox --disable-dev-shm-usage --print-to-pdf="${pdfTmpPath}" "file://${params.htmlPath}"`,
+            `${chromiumPath} --headless --disable-gpu --no-sandbox --disable-dev-shm-usage --print-to-pdf="${pdfTmpPath}" "file://${safeHtmlPath}"`,
             { timeout: 30000, stdio: 'pipe' },
           );
 
@@ -2211,7 +2234,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
           copyFileSync(pdfTmpPath, join(uploadsDir, pdfFilename));
           const stat = statSync(pdfTmpPath);
 
-          const displayName = params.name || basename(params.htmlPath).replace(/\.html?$/i, '') + '.pdf';
+          const displayName = params.name || basename(safeHtmlPath).replace(/\.html?$/i, '') + '.pdf';
           const url = `/uploads/${pdfFilename}`;
 
           const record = await this.prisma.fileRecord.create({
@@ -3273,10 +3296,11 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
   }
 
   private async executeBash(command: string, timeout: number, runtimeConfig: Record<string, unknown>) {
+    if (!this.hasHostAccessEnabled(runtimeConfig)) return { error: 'Host command execution is disabled for this agent' };
     const { execSync } = await import('child_process');
     const blockedCommands = runtimeConfig.blockedCommands as string[] | undefined;
     const allowedCommands = runtimeConfig.allowedCommands as string[] | undefined;
-    const cwd = runtimeConfig.workingDirectory as string || '/tmp';
+    const cwd = this.getHostWorkspaceRoot(runtimeConfig);
 
     const firstWord = command.trim().split(/\s+/)[0];
     const blocked = blockedCommands ?? ['rm', 'rmdir', 'dd', 'mkfs', 'shutdown', 'reboot', 'kill', 'killall'];
@@ -3299,20 +3323,21 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     }
   }
 
-  private async readFile(filePath: string, maxLines: number) {
+  private async readFile(filePath: string, maxLines: number, runtimeConfig: Record<string, unknown>) {
     const { readFileSync, statSync } = await import('fs');
     const { extname } = await import('path');
     try {
-      const stats = statSync(filePath);
+      const safePath = this.resolveWorkspacePath(filePath, runtimeConfig);
+      const stats = statSync(safePath);
       if (stats.size > 10 * 1024 * 1024) return { error: 'File too large (>10MB)' };
 
-      const ext = extname(filePath).toLowerCase();
+      const ext = extname(safePath).toLowerCase();
 
       // PDF: extract text via pdftotext
       if (ext === '.pdf') {
         const { execSync } = await import('child_process');
         try {
-          const text = execSync(`pdftotext "${filePath}" -`, {
+          const text = execSync(`pdftotext "${safePath}" -`, {
             maxBuffer: 5 * 1024 * 1024,
             timeout: 15000,
           }).toString('utf-8');
@@ -3323,7 +3348,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
         }
       }
 
-      const content = readFileSync(filePath, 'utf-8');
+      const content = readFileSync(safePath, 'utf-8');
       const lines = content.split('\n');
       return { content: lines.slice(0, maxLines).join('\n'), totalLines: lines.length };
     } catch (err: any) {
@@ -3331,11 +3356,12 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     }
   }
 
-  private async writeFile(path: string, content: string) {
+  private async writeFile(path: string, content: string, runtimeConfig: Record<string, unknown>) {
     const { writeFileSync } = await import('fs');
     try {
-      writeFileSync(path, content, 'utf-8');
-      return { success: true, path };
+      const safePath = this.resolveWorkspacePath(path, runtimeConfig);
+      writeFileSync(safePath, content, 'utf-8');
+      return { success: true, path: safePath };
     } catch (err: any) {
       return { error: err.message };
     }
@@ -3380,9 +3406,11 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     }
 
     // System — available to all agents
-    add('bash_command', 'Execute bash commands', 'System');
-    add('read_file', 'Read file contents (text, PDF)', 'System');
-    add('write_file', 'Write content to file (with optional saveToFiles flag)', 'System');
+    if (this.hasHostAccessEnabled(runtimeConfig)) {
+      add('bash_command', 'Execute bash commands', 'System');
+      add('read_file', 'Read file contents (text, PDF)', 'System');
+      add('write_file', 'Write content to file (with optional saveToFiles flag)', 'System');
+    }
 
     // Memory — persistent knowledge store
     add('memory_read', 'Read persistent memory entries', 'Memory');
