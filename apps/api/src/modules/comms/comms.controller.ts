@@ -1,54 +1,54 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Patch,
-  Delete,
-  Param,
-  Body,
-  Query,
-  Req,
-  UseInterceptors,
-  UploadedFile,
-  BadRequestException,
-  ForbiddenException,
-} from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, Req, UseInterceptors, UploadedFile, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import { extname, join } from 'path';
 import { randomUUID } from 'crypto';
 import { CommsService } from './comms.service';
+import { PrismaService } from '../../config/prisma.service';
+import { Roles } from '../../common/decorators/roles.decorator';
 import type { CreateChannelInput, SendMessageInput } from '@agems/shared';
 import type { RequestUser } from '../../common/types';
 
 @Controller('channels')
 export class CommsController {
-  constructor(private commsService: CommsService) {}
+  constructor(private commsService: CommsService, private prisma: PrismaService) {}
+
+  /** Verify channel belongs to user's org and the user participates in it */
+  private async verifyChannelAccess(channelId: string, userId: string, orgId: string) {
+    const participant = await this.prisma.channelParticipant.findFirst({
+      where: {
+        channelId,
+        participantType: 'HUMAN',
+        participantId: userId,
+        channel: { orgId },
+      },
+      select: { id: true },
+    });
+    if (!participant) throw new ForbiddenException('Access denied');
+  }
 
   @Post()
-  async create(@Body() body: any, @Req() req: { user: RequestUser }) {
+  create(@Body() body: any, @Req() req: { user: RequestUser }) {
+    // Support shorthand { targetType, targetId } from ChatPanel auto-create
     if (!body.participantIds && body.targetType && body.targetId) {
       body.participantIds = [{ type: body.targetType, id: body.targetId }];
     }
-    // orgId передаётся в сервис для проверки доступа участников
     return this.commsService.createChannel(body as CreateChannelInput, 'HUMAN', req.user.id, req.user.orgId);
   }
 
   @Get()
-  async findAll(@Req() req: { user: RequestUser }) {
+  findAll(@Req() req: { user: RequestUser }) {
     return this.commsService.findAllChannels(req.user.id, req.user.orgId);
   }
 
   @Get('agent-chats')
-  async findAgentChats(@Req() req: { user: RequestUser }) {
+  findAgentChats(@Req() req: { user: RequestUser }) {
     return this.commsService.findAgentToAgentChannels(req.user.orgId);
   }
 
   @Get(':id')
-  async findOne(@Param('id') id: string, @Req() req: { user: RequestUser }) {
-    const channel = await this.commsService.findOneChannel(id);
-    if (!channel || channel.orgId !== req.user.orgId) throw new ForbiddenException('Access denied');
-    return channel;
+  findOne(@Param('id') id: string, @Req() req: { user: RequestUser }) {
+    return this.commsService.findOneChannel(id, req.user.orgId, 'HUMAN', req.user.id);
   }
 
   @Post(':id/upload')
@@ -63,12 +63,11 @@ export class CommsController {
     },
   }))
   async uploadFile(@Param('id') channelId: string, @UploadedFile() file: any, @Req() req: { user: RequestUser }) {
+    await this.verifyChannelAccess(channelId, req.user.id, req.user.orgId);
     if (!file) throw new BadRequestException('No file provided');
-    const channel = await this.commsService.findOneChannel(channelId);
-    if (!channel || channel.orgId !== req.user.orgId) throw new ForbiddenException('Access denied');
-
     const ext = extname(file.originalname).toLowerCase() || '.bin';
     const filename = `${randomUUID()}${ext}`;
+    // Resolve uploads dir: works from both monorepo root and apps/api
     const cwd = process.cwd();
     const isMonorepoRoot = existsSync(join(cwd, 'apps', 'api')) && existsSync(join(cwd, 'apps', 'web'));
     const dir = isMonorepoRoot
@@ -76,8 +75,25 @@ export class CommsController {
       : join(cwd, '..', 'web', 'public', 'uploads');
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, filename), file.buffer);
+
+    const url = `/uploads/${filename}`;
+
+    // Register in fileRecord so file appears on /files page
+    await this.prisma.fileRecord.create({
+      data: {
+        orgId: req.user.orgId,
+        filename,
+        originalName: file.originalname,
+        mimetype: file.mimetype,
+        size: file.size,
+        url,
+        uploadedBy: 'HUMAN',
+        uploaderId: req.user.id,
+      },
+    }).catch(() => {}); // non-blocking — chat upload still works even if DB insert fails
+
     return {
-      url: `/uploads/${filename}`,
+      url,
       filename,
       originalName: file.originalname,
       size: file.size,
@@ -86,65 +102,61 @@ export class CommsController {
   }
 
   @Post(':id/messages')
-  async sendMessage(@Param('id') channelId: string, @Body() body: SendMessageInput, @Req() req: { user: RequestUser }) {
-    const channel = await this.commsService.findOneChannel(channelId);
-    if (!channel || channel.orgId !== req.user.orgId) throw new ForbiddenException('Access denied');
-
+  sendMessage(
+    @Param('id') channelId: string,
+    @Body() body: SendMessageInput,
+    @Req() req: { user: RequestUser },
+  ) {
     return this.commsService.sendMessage(channelId, body, 'HUMAN', req.user.id, req.user.orgId);
   }
 
   @Get(':id/messages')
   async getMessages(@Param('id') channelId: string, @Query() filters: any, @Req() req: { user: RequestUser }) {
-    const channel = await this.commsService.findOneChannel(channelId);
-    if (!channel || channel.orgId !== req.user.orgId) throw new ForbiddenException('Access denied');
-
+    await this.verifyChannelAccess(channelId, req.user.id, req.user.orgId);
     return this.commsService.getMessages(channelId, filters);
   }
 
   @Post(':id/participants')
-  async addParticipant(@Param('id') channelId: string, @Body() body: { participantType: string; participantId: string; role?: string }, @Req() req: { user: RequestUser }) {
-    const channel = await this.commsService.findOneChannel(channelId);
-    if (!channel || channel.orgId !== req.user.orgId) throw new ForbiddenException('Access denied');
-
+  async addParticipant(
+    @Param('id') channelId: string,
+    @Body() body: { participantType: string; participantId: string; role?: string },
+    @Req() req: { user: RequestUser },
+  ) {
+    await this.verifyChannelAccess(channelId, req.user.id, req.user.orgId);
     return this.commsService.addParticipant(channelId, body.participantType, body.participantId, body.role);
   }
 
   @Delete(':id/participants/:pid')
   async removeParticipant(@Param('id') channelId: string, @Param('pid') participantId: string, @Req() req: { user: RequestUser }) {
-    const channel = await this.commsService.findOneChannel(channelId);
-    if (!channel || channel.orgId !== req.user.orgId) throw new ForbiddenException('Access denied');
-
+    await this.verifyChannelAccess(channelId, req.user.id, req.user.orgId);
     return this.commsService.removeParticipant(channelId, participantId);
   }
 
   @Patch(':id')
   async updateChannel(@Param('id') id: string, @Body() body: { name?: string; metadata?: any }, @Req() req: { user: RequestUser }) {
-    const channel = await this.commsService.findOneChannel(id);
-    if (!channel || channel.orgId !== req.user.orgId) throw new ForbiddenException('Access denied');
-
+    await this.verifyChannelAccess(id, req.user.id, req.user.orgId);
     return this.commsService.updateChannel(id, body);
   }
 
   @Delete(':id')
+  @Roles('ADMIN')
   async deleteChannel(@Param('id') id: string, @Req() req: { user: RequestUser }) {
-    const channel = await this.commsService.findOneChannel(id);
-    if (!channel || channel.orgId !== req.user.orgId) throw new ForbiddenException('Access denied');
-
+    await this.verifyChannelAccess(id, req.user.id, req.user.orgId);
     return this.commsService.deleteChannel(id);
   }
 
   @Post('ensure-direct')
-  async ensureAllDirectChats(@Req() req: { user: RequestUser }) {
+  ensureAllDirectChats(@Req() req: { user: RequestUser }) {
     return this.commsService.ensureAllDirectChats(req.user.orgId);
   }
 
   @Get('direct/:type/:targetId')
-  async findDirectChannel(@Param('type') type: string, @Param('targetId') targetId: string, @Req() req: { user: RequestUser }) {
+  findDirectChannel(@Param('type') type: string, @Param('targetId') targetId: string, @Req() req: { user: RequestUser }) {
     return this.commsService.findDirectChannel('HUMAN', req.user.id, type, targetId, req.user.orgId);
   }
 
   @Get('direct/:type/:targetId/all')
-  async findAllDirectChannels(@Param('type') type: string, @Param('targetId') targetId: string, @Req() req: { user: RequestUser }) {
+  findAllDirectChannels(@Param('type') type: string, @Param('targetId') targetId: string, @Req() req: { user: RequestUser }) {
     return this.commsService.findAllDirectChannels('HUMAN', req.user.id, type, targetId, req.user.orgId);
   }
 }
