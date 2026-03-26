@@ -48,11 +48,13 @@ export class SettingsController {
   }
 
   @Patch('users/:id')
-  updateUser(@Param('id') id: string, @Body() body: { name?: string; email?: string; role?: string; password?: string }) {
-    return this.settingsService.updateUser(id, body);
+  @Roles('MANAGER')
+  updateUser(@Param('id') id: string, @Body() body: { name?: string; email?: string; role?: string; password?: string }, @Request() req: { user: RequestUser }) {
+    return this.settingsService.updateUser(id, body, req.user.orgId);
   }
 
   @Post('users/:id/avatar')
+  @Roles('MANAGER')
   @UseInterceptors(FileInterceptor('avatar', {
     limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (_req: any, file: any, cb: any) => {
@@ -60,20 +62,20 @@ export class SettingsController {
       else cb(new Error('Only image files allowed'), false);
     },
   }))
-  async uploadAvatar(@Param('id') id: string, @UploadedFile() file: any) {
+  async uploadAvatar(@Param('id') id: string, @UploadedFile() file: any, @Request() req: { user: RequestUser }) {
     const ext = extname(file.originalname).toLowerCase() || '.png';
     const filename = `${id}${ext}`;
     const dir = join(process.cwd(), 'apps/web/public/avatars/users');
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, filename), file.buffer);
     const avatarUrl = `/avatars/users/${filename}`;
-    return this.settingsService.updateUser(id, { avatarUrl });
+    return this.settingsService.updateUser(id, { avatarUrl }, req.user.orgId);
   }
 
   @Delete('users/:id')
   @Roles('ADMIN')
-  deleteUser(@Param('id') id: string) {
-    return this.settingsService.deleteUser(id);
+  deleteUser(@Param('id') id: string, @Request() req: { user: RequestUser }) {
+    return this.settingsService.deleteUser(id, req.user.orgId);
   }
 
   @Get('company')
@@ -104,6 +106,7 @@ export class SettingsController {
   }
 
   @Post('task-agents')
+  @Roles('MANAGER')
   async setTaskAgentsConfig(@Body() body: { enabled?: boolean; interval?: number; reviewInterval?: number; reviewBudget?: number; autonomyLevel?: number }, @Request() req: { user: RequestUser }) {
     if (body.enabled !== undefined) {
       await this.settingsService.set('task_agents_enabled', String(body.enabled), req.user.orgId);
