@@ -10,6 +10,29 @@ export class ToolsService {
     private events: EventEmitter2,
   ) {}
 
+  private isBlockedHostname(hostname: string): boolean {
+    const normalized = hostname.toLowerCase();
+    if (normalized === 'localhost' || normalized.endsWith('.localhost')) return true;
+    if (normalized === '0.0.0.0' || normalized === '127.0.0.1' || normalized === '::1') return true;
+    if (/^10\./.test(normalized)) return true;
+    if (/^192\.168\./.test(normalized)) return true;
+    if (/^169\.254\./.test(normalized)) return true;
+    if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(normalized)) return true;
+    if (normalized === 'metadata.google.internal') return true;
+    return false;
+  }
+
+  private assertSafeUrl(rawUrl: string) {
+    const parsed = new URL(rawUrl);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error('Only http/https URLs are allowed');
+    }
+    if (this.isBlockedHostname(parsed.hostname)) {
+      throw new Error('Requests to local or private network destinations are blocked');
+    }
+    return parsed.toString();
+  }
+
   private sanitizeTool(tool: any) {
     if (!tool) return tool;
     return {
@@ -118,7 +141,7 @@ export class ToolsService {
 
       if (tool.type === 'FIRECRAWL') {
         const apiKey = authConfig.token || authConfig.apiKey || authConfig.bearerToken || '';
-        const baseUrl = config.url || 'https://api.firecrawl.dev/v2';
+        const baseUrl = this.assertSafeUrl(config.url || 'https://api.firecrawl.dev/v2');
         if (!apiKey) return { success: false, latencyMs: Date.now() - start, error: 'No API key configured' };
         const res = await fetch(`${baseUrl}/scrape`, {
           method: 'POST',
@@ -131,7 +154,8 @@ export class ToolsService {
       }
 
       if (config?.url) {
-        const res = await fetch(config.url, { method: 'HEAD', signal: AbortSignal.timeout(5000) }).catch(() => null);
+        const safeUrl = this.assertSafeUrl(config.url);
+        const res = await fetch(safeUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) }).catch(() => null);
         return { success: !!res?.ok, latencyMs: Date.now() - start, status: res?.status };
       }
       return { success: false, latencyMs: Date.now() - start, error: 'No URL configured' };
