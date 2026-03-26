@@ -2200,7 +2200,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
       }),
       execute: async (params: { htmlPath: string; name?: string; folderId?: string }) => {
         try {
-          const { execSync } = await import('child_process');
+          const { execFileSync } = await import('child_process');
           const { statSync, copyFileSync } = await import('fs');
           const { basename } = await import('path');
           const safeHtmlPath = this.resolveWorkspacePath(params.htmlPath, runtimeConfig);
@@ -2214,8 +2214,16 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
 
           // Convert HTML to PDF with Chromium
           const chromiumPath = process.env.CHROMIUM_PATH || '/usr/bin/chromium-browser';
-          execSync(
-            `${chromiumPath} --headless --disable-gpu --no-sandbox --disable-dev-shm-usage --print-to-pdf="${pdfTmpPath}" "file://${safeHtmlPath}"`,
+          execFileSync(
+            chromiumPath,
+            [
+              '--headless',
+              '--disable-gpu',
+              '--no-sandbox',
+              '--disable-dev-shm-usage',
+              `--print-to-pdf=${pdfTmpPath}`,
+              `file://${safeHtmlPath}`,
+            ],
             { timeout: 30000, stdio: 'pipe' },
           );
 
@@ -3029,13 +3037,23 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
 
   /** Execute SQL query using mysql2 */
   private async executeSqlQuery(config: Record<string, any>, authConfig: Record<string, any>, query: string, allowWrite: boolean) {
+    if (typeof query !== 'string' || query.trim().length === 0) {
+      return { error: 'SQL query is required.' };
+    }
+    const trimmedQuery = query.trim();
     // Safety: block write operations if not allowed
-    const upperQuery = query.trim().toUpperCase();
+    const upperQuery = trimmedQuery.toUpperCase();
     if (!allowWrite && !upperQuery.startsWith('SELECT') && !upperQuery.startsWith('SHOW') && !upperQuery.startsWith('DESCRIBE') && !upperQuery.startsWith('EXPLAIN')) {
       return { error: 'Only SELECT/SHOW/DESCRIBE/EXPLAIN queries are allowed in read-only mode.' };
     }
+    if (trimmedQuery.includes('\0')) {
+      return { error: 'SQL query contains invalid null bytes.' };
+    }
+    if (trimmedQuery.includes(';')) {
+      return { error: 'Multiple SQL statements are not allowed.' };
+    }
     // Block dangerous operations
-    if (/\b(DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b/i.test(query)) {
+    if (/\b(DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b/i.test(trimmedQuery)) {
       return { error: 'DDL operations (DROP, TRUNCATE, ALTER, CREATE, GRANT, REVOKE) are blocked.' };
     }
 
@@ -3048,11 +3066,12 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
         password: authConfig.password || '',
         database: config.database || '',
         connectTimeout: 5000,
+        multipleStatements: false,
       });
 
       try {
-        const cleanQuery = query.replace(/;\s*$/, '');
-        const needsLimit = !allowWrite && !cleanQuery.trim().toUpperCase().includes('LIMIT');
+        const cleanQuery = trimmedQuery;
+        const needsLimit = !allowWrite && !cleanQuery.toUpperCase().includes('LIMIT');
         const [rows] = await conn.execute(cleanQuery + (needsLimit ? ' LIMIT 100' : ''));
         const result = Array.isArray(rows) ? rows : [{ affectedRows: (rows as any).affectedRows }];
         return { data: result.slice(0, 100), rowCount: result.length };
@@ -3335,12 +3354,13 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
 
       // PDF: extract text via pdftotext
       if (ext === '.pdf') {
-        const { execSync } = await import('child_process');
+        const { execFileSync } = await import('child_process');
         try {
-          const text = execSync(`pdftotext "${safePath}" -`, {
+          const text = execFileSync('pdftotext', [safePath, '-'], {
             maxBuffer: 5 * 1024 * 1024,
             timeout: 15000,
-          }).toString('utf-8');
+            encoding: 'utf-8',
+          });
           const lines = text.split('\n');
           return { content: lines.slice(0, maxLines).join('\n'), totalLines: lines.length, type: 'pdf' };
         } catch (pdfErr: any) {
