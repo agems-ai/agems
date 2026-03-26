@@ -170,7 +170,7 @@ export class FilesController {
   @UseInterceptors(FileInterceptor('file', {
     limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: (_req: any, file: any, cb: any) => {
-      if (/^(image\/(jpeg|png|gif|webp|svg\+xml)|application\/pdf|text\/(plain|csv|markdown)|application\/json)$/.test(file.mimetype)) {
+      if (/^(image\/(jpeg|png|gif|webp)|application\/pdf|text\/(plain|csv|markdown)|application\/json)$/.test(file.mimetype)) {
         cb(null, true);
       } else {
         cb(new BadRequestException('Unsupported file type'), false);
@@ -199,7 +199,7 @@ export class FilesController {
         size: file.size,
         url,
         uploadedBy: 'HUMAN',
-        uploaderId: req.user?.userId || null,
+        uploaderId: req.user?.id || null,
       },
     });
 
