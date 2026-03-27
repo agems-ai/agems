@@ -598,6 +598,11 @@ export class RuntimeService {
           this.channelExecutionMap.set(context.channelId, new Set());
         }
         this.channelExecutionMap.get(context.channelId)!.add(execution.id);
+        // Clear any stale stop signal from previous execution so new messages aren't immediately killed
+        try {
+          const client = this.redisLock.getClient();
+          await client.del(this.getChannelStopKey(context.channelId));
+        } catch {}
       }
       executionTimeout = setTimeout(() => {
         this.logger.warn(`Agent ${agent.name}: execution timeout (30 min) — aborting`);

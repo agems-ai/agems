@@ -487,7 +487,7 @@ export default function ChatPanel({
       const files = meta.files as any[];
       const textContent = meta.text;
       return (
-        <div key={msg.id || i} className={`flex items-end gap-2 ${isMe ? 'justify-end' : 'justify-start'}`}>
+        <div key={msg.id || i} className={`flex items-end gap-2 w-full overflow-hidden ${isMe ? 'justify-end' : 'justify-start'}`}>
           {!isMe && <Avatar name={senderInfo.name} avatar={senderInfo.avatar} size={28} />}
           <div className={`max-w-[70%] min-w-0 overflow-hidden rounded-xl px-4 py-2 ${
             isMe ? 'bg-[var(--accent)] text-white' : 'bg-[var(--card)] border border-[var(--border)]'
@@ -522,13 +522,13 @@ export default function ChatPanel({
 
     // Regular TEXT messages
     return (
-      <div key={msg.id || i} className={`flex items-end gap-2 ${isMe ? 'justify-end' : 'justify-start'}`}>
+      <div key={msg.id || i} className={`flex items-end gap-2 w-full overflow-hidden ${isMe ? 'justify-end' : 'justify-start'}`}>
         {!isMe && <Avatar name={senderInfo.name} avatar={senderInfo.avatar} size={28} />}
         <div className={`max-w-[70%] min-w-0 overflow-hidden rounded-xl px-4 py-2 ${
           isMe ? 'bg-[var(--accent)] text-white' : 'bg-[var(--card)] border border-[var(--border)]'
         }`}>
           {!isMe && <div className="text-xs opacity-70 mb-1">{senderInfo.name}{senderInfo.role ? <span className="ml-1 opacity-60">· {senderInfo.role}</span> : ''}</div>}
-          <div className="text-sm whitespace-pre-wrap break-words prose prose-sm prose-invert max-w-none
+          <div className="text-sm whitespace-pre-wrap break-words prose prose-sm prose-invert max-w-none [word-break:break-word]
             prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5
             prose-headings:my-2 prose-headings:font-semibold
             prose-a:text-[var(--accent)] prose-a:underline
