@@ -15,6 +15,17 @@ export const toolDefinitionSchema = z.object({
   parameters: z.record(z.unknown()), // JSON Schema
 });
 
+// ── MCP Server Configuration ─────────────────────────
+export const mcpServerSchema = z.object({
+  name: z.string().min(1).max(100),
+  url: z.string().url(),
+  authorizationToken: z.string().nullish(),
+  toolConfiguration: z.object({
+    enabled: z.boolean().nullish(),
+    allowedTools: z.array(z.string()).nullish(),
+  }).nullish(),
+});
+
 // ── Runtime Configuration (Eden-like) ──────────────
 export const runtimeConfigSchema = z.object({
   mode: z.enum(['CLAUDE_CODE', 'N8N', 'API', 'CUSTOM']).default('CLAUDE_CODE'),
@@ -27,6 +38,8 @@ export const runtimeConfigSchema = z.object({
   // n8n mode settings
   n8nApiUrl: z.string().url().optional(),
   n8nApiKey: z.string().optional(),
+  // MCP servers (Anthropic remote MCP client)
+  mcpServers: z.array(mcpServerSchema).optional(),
   // AGEMS self-management (agent can manage AGEMS platform)
   agemsApiAccess: z.boolean().optional(),       // Can this agent call AGEMS's own API?
   agemsPermissions: z.array(z.enum([
@@ -100,6 +113,7 @@ export const agentFiltersSchema = z.object({
 
 // ── Types ──────────────────────────────────────────
 export type LLMConfig = z.infer<typeof llmConfigSchema>;
+export type MCPServer = z.infer<typeof mcpServerSchema>;
 export type RuntimeConfig = z.infer<typeof runtimeConfigSchema>;
 export type TelegramConfig = z.infer<typeof telegramConfigSchema>;
 export type CreateAgentInput = z.infer<typeof createAgentSchema>;

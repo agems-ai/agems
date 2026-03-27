@@ -9,7 +9,7 @@ import { TelegramAccountService } from '../telegram/telegram-account.service';
 import { ApprovalsService } from '../approvals/approvals.service';
 import { DashboardService } from '../dashboard/dashboard.service';
 import { categorizeToolName } from '../approvals/tool-categories';
-import { AgentRunner, type RunResult, type UserMessage, type MessagePart } from '@agems/ai';
+import { AgentRunner, type MCPServerConfig, type RunResult, type UserMessage, type MessagePart } from '@agems/ai';
 import { z } from 'zod';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { randomUUID } from 'crypto';
@@ -623,6 +623,9 @@ export class RuntimeService {
         }
       }, this.STOP_POLL_INTERVAL_MS);
 
+      // Collect MCP servers from runtimeConfig + MCP_SERVER tools
+      const mcpServers = await this.collectMcpServers(agent.id, runtimeConfig);
+
       const runner = new AgentRunner({
         provider: {
           provider: agent.llmProvider as any,
@@ -635,6 +638,7 @@ export class RuntimeService {
         maxTokens: (llmConfig.maxTokens as number) ?? 4096,
         temperature: (llmConfig.temperature as number) ?? 0.7,
         thinkingBudget: (llmConfig.thinkingBudget as number) ?? 4000,
+        ...(mcpServers.length > 0 && { mcpServers }),
       });
 
       // Stream thinking & text chunks to frontend in real-time
@@ -2398,6 +2402,47 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
       return tools.filter(t => !disabledTools.has(t.name));
     }
     return tools;
+  }
+
+  /** Collect MCP servers from runtimeConfig and MCP_SERVER agent tools */
+  private async collectMcpServers(agentId: string, runtimeConfig: Record<string, unknown>): Promise<MCPServerConfig[]> {
+    const servers: MCPServerConfig[] = [];
+
+    // 1. From runtimeConfig.mcpServers (manually configured)
+    const configServers = runtimeConfig.mcpServers as any[];
+    if (Array.isArray(configServers)) {
+      for (const s of configServers) {
+        if (s?.name && s?.url) {
+          servers.push({
+            name: s.name,
+            url: s.url,
+            authorizationToken: s.authorizationToken ?? undefined,
+            toolConfiguration: s.toolConfiguration ?? undefined,
+          });
+        }
+      }
+    }
+
+    // 2. From MCP_SERVER type tools attached to the agent
+    const mcpTools = await this.prisma.agentTool.findMany({
+      where: { agentId, enabled: true, tool: { type: 'MCP_SERVER' } },
+      include: { tool: true },
+    });
+    for (const at of mcpTools) {
+      const config = at.tool.config as Record<string, any>;
+      const rawAuth = (at.tool.authConfig as any) ?? {};
+      const authConfig = rawAuth._enc ? decryptJson(rawAuth._enc) : rawAuth;
+      if (config?.url) {
+        servers.push({
+          name: at.tool.name,
+          url: config.url,
+          authorizationToken: authConfig?.token ?? authConfig?.authorizationToken ?? undefined,
+          toolConfiguration: config.toolConfiguration ?? undefined,
+        });
+      }
+    }
+
+    return servers;
   }
 
   /** Fetch tools assigned to agent from database and add executable definitions */

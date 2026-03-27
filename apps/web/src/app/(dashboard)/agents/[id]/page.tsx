@@ -181,6 +181,7 @@ export default function AgentDetailPage() {
 
   const openEdit = () => {
     const lc = (agent.llmConfig as any) || {};
+    const rc = (agent.runtimeConfig as any) || {};
     setEditForm({
       name: agent.name || '',
       llmProvider: agent.llmProvider || 'ANTHROPIC',
@@ -193,6 +194,7 @@ export default function AgentDetailPage() {
       temperature: lc.temperature ?? 0.7,
       maxTokens: lc.maxTokens ?? 4096,
       thinkingBudget: lc.thinkingBudget ?? 4000,
+      mcpServers: Array.isArray(rc.mcpServers) ? rc.mcpServers : [],
     });
     setSaveError('');
     setEditing(true);
@@ -202,14 +204,18 @@ export default function AgentDetailPage() {
     setSaving(true);
     setSaveError('');
     try {
-      const { values: valuesStr, temperature, maxTokens, thinkingBudget, ...rest } = editForm;
+      const { values: valuesStr, temperature, maxTokens, thinkingBudget, mcpServers: mcpRaw, ...rest } = editForm;
       const values = valuesStr ? valuesStr.split(',').map((v: string) => v.trim()).filter(Boolean) : [];
       const llmConfig = {
         temperature: parseFloat(temperature) || 0.7,
         maxTokens: parseInt(maxTokens) || 4096,
         thinkingBudget: parseInt(thinkingBudget) || 4000,
       };
-      await api.updateAgent(agent.id, { ...rest, values, llmConfig });
+      // Merge MCP servers into existing runtimeConfig
+      const existingRc = (agent.runtimeConfig as any) || {};
+      const mcpServers = Array.isArray(mcpRaw) ? mcpRaw.filter((s: any) => s.name && s.url) : [];
+      const runtimeConfig = { ...existingRc, mcpServers };
+      await api.updateAgent(agent.id, { ...rest, values, llmConfig, runtimeConfig });
       setEditing(false);
       loadAgent();
     } catch (err: any) {
@@ -553,6 +559,26 @@ export default function AgentDetailPage() {
             >+ Add Skill</button>
           </div>
         </Section>
+
+        {/* MCP Servers (read-only display) */}
+        {(() => {
+          const rc = (agent.runtimeConfig as any) || {};
+          const servers = Array.isArray(rc.mcpServers) ? rc.mcpServers : [];
+          if (servers.length === 0) return null;
+          return (
+            <Section title={`MCP Servers (${servers.length})`} wide>
+              <div className="space-y-2">
+                {servers.map((s: any, i: number) => (
+                  <div key={i} className="flex items-center gap-3 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-sm">
+                    <span className="font-medium">{s.name}</span>
+                    <span className="text-[var(--muted)] font-mono text-xs truncate">{s.url}</span>
+                    {s.authorizationToken && <span className="text-[10px] text-green-400 border border-green-400/30 rounded px-1">AUTH</span>}
+                  </div>
+                ))}
+              </div>
+            </Section>
+          );
+        })()}
 
         <Section title="System Prompt" wide>
           <pre className="text-sm text-[var(--muted)] whitespace-pre-wrap bg-[var(--background)] rounded-lg p-4 border border-[var(--border)] max-h-60 overflow-auto">
@@ -987,6 +1013,81 @@ export default function AgentDetailPage() {
                   </div>
                 )}
               </div>
+
+              {/* MCP Servers */}
+              {editForm.llmProvider === 'ANTHROPIC' && (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-sm font-medium">MCP Servers</label>
+                    <button
+                      type="button"
+                      onClick={() => setEditForm({ ...editForm, mcpServers: [...(editForm.mcpServers || []), { name: '', url: '', authorizationToken: '' }] })}
+                      className="text-xs px-2 py-1 rounded border border-[var(--border)] hover:bg-[var(--hover)]"
+                    >+ Add Server</button>
+                  </div>
+                  {(editForm.mcpServers || []).length === 0 && (
+                    <p className="text-xs text-[var(--muted)]">No MCP servers configured. Add servers like GitLab, AWS, Datadog, Sentry etc.</p>
+                  )}
+                  {(editForm.mcpServers || []).map((srv: any, idx: number) => (
+                    <div key={idx} className="mb-3 p-3 rounded-lg border border-[var(--border)] bg-[var(--bg)]">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-medium text-[var(--muted)]">Server #{idx + 1}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = [...editForm.mcpServers];
+                            updated.splice(idx, 1);
+                            setEditForm({ ...editForm, mcpServers: updated });
+                          }}
+                          className="text-xs text-red-400 hover:text-red-300"
+                        >Remove</button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 mb-2">
+                        <div>
+                          <label className="block text-[10px] text-[var(--muted)] mb-0.5">Name</label>
+                          <input
+                            value={srv.name || ''}
+                            onChange={(e) => {
+                              const updated = [...editForm.mcpServers];
+                              updated[idx] = { ...updated[idx], name: e.target.value };
+                              setEditForm({ ...editForm, mcpServers: updated });
+                            }}
+                            placeholder="e.g. gitlab"
+                            className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] text-[var(--muted)] mb-0.5">Auth Token</label>
+                          <input
+                            type="password"
+                            value={srv.authorizationToken || ''}
+                            onChange={(e) => {
+                              const updated = [...editForm.mcpServers];
+                              updated[idx] = { ...updated[idx], authorizationToken: e.target.value };
+                              setEditForm({ ...editForm, mcpServers: updated });
+                            }}
+                            placeholder="Optional"
+                            className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-[var(--muted)] mb-0.5">URL</label>
+                        <input
+                          value={srv.url || ''}
+                          onChange={(e) => {
+                            const updated = [...editForm.mcpServers];
+                            updated[idx] = { ...updated[idx], url: e.target.value };
+                            setEditForm({ ...editForm, mcpServers: updated });
+                          }}
+                          placeholder="https://mcp-server.example.com/sse"
+                          className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--bg)] text-sm font-mono"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium mb-1">System Prompt</label>

@@ -3,6 +3,16 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import { createProvider, type AIProviderConfig } from './provider';
 import type { ToolDefinition, ToolResult, UserMessage } from './types';
 
+export interface MCPServerConfig {
+  name: string;
+  url: string;
+  authorizationToken?: string | null;
+  toolConfiguration?: {
+    enabled?: boolean | null;
+    allowedTools?: string[] | null;
+  } | null;
+}
+
 export interface AgentRunnerConfig {
   provider: AIProviderConfig;
   systemPrompt: string;
@@ -11,6 +21,7 @@ export interface AgentRunnerConfig {
   maxTokens?: number;
   temperature?: number;
   thinkingBudget?: number;
+  mcpServers?: MCPServerConfig[];
 }
 
 export interface StreamCallbacks {
@@ -105,6 +116,17 @@ export class AgentRunner {
       if (budget > 0) {
         providerOptions.anthropic = { thinking: { type: 'enabled', budgetTokens: budget } };
       }
+    }
+    // MCP servers (Anthropic remote MCP client)
+    if (this.config.provider.provider === 'ANTHROPIC' && this.config.mcpServers?.length) {
+      if (!providerOptions.anthropic) providerOptions.anthropic = {};
+      providerOptions.anthropic.mcpServers = this.config.mcpServers.map(s => ({
+        type: 'url' as const,
+        name: s.name,
+        url: s.url,
+        authorizationToken: s.authorizationToken ?? undefined,
+        toolConfiguration: s.toolConfiguration ?? undefined,
+      }));
     }
 
     return {
