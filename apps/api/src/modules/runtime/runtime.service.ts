@@ -672,6 +672,23 @@ export class RuntimeService {
         }
       }
 
+      // Empty-text recovery: if tool calls succeeded but agent returned no text, ask it to summarize
+      if (!result.text?.trim() && result.toolCalls?.length) {
+        const successfulCalls = result.toolCalls.filter((tc: any) => !tc.error);
+        if (successfulCalls.length > 0) {
+          const toolSummary = successfulCalls.map((tc: any) => {
+            const output = typeof tc.output === 'string' ? tc.output.substring(0, 200) : JSON.stringify(tc.output).substring(0, 200);
+            return `- ${tc.toolName}: ${output}`;
+          }).join('\n');
+          this.logger.warn(`Agent ${agent.name}: empty text after ${successfulCalls.length} successful tool calls — requesting summary`);
+          const summaryHint = `[System: You executed tool calls successfully but returned NO text response to the user. You MUST now provide a brief response summarizing what you did and the results. Here are the tool results:\n${toolSummary}]`;
+          const summaryInput = typeof input === 'string'
+            ? `${input}\n\n${summaryHint}`
+            : [...input, { role: 'user' as const, content: summaryHint }];
+          result = await runner.run(summaryInput, abortController.signal, streamCallbacks);
+        }
+      }
+
       // Clear execution timeout and stop poll timer
       clearTimeout(executionTimeout);
       if (stopPollTimer) clearInterval(stopPollTimer);
