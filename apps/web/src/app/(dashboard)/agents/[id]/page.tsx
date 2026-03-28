@@ -1015,7 +1015,7 @@ export default function AgentDetailPage() {
               </div>
 
               {/* MCP Servers */}
-              {editForm.llmProvider === 'ANTHROPIC' && (
+              {(
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <label className="block text-sm font-medium">MCP Servers</label>

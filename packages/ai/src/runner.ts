@@ -1,17 +1,11 @@
 import { generateText, streamText, tool, jsonSchema, stepCountIs } from 'ai';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { createProvider, type AIProviderConfig } from './provider';
+import { mcpServersToTools } from './mcp-client';
 import type { ToolDefinition, ToolResult, UserMessage } from './types';
 
-export interface MCPServerConfig {
-  name: string;
-  url: string;
-  authorizationToken?: string | null;
-  toolConfiguration?: {
-    enabled?: boolean | null;
-    allowedTools?: string[] | null;
-  } | null;
-}
+export type { MCPServerConfig } from './mcp-client';
+import type { MCPServerConfig } from './mcp-client';
 
 export interface AgentRunnerConfig {
   provider: AIProviderConfig;
@@ -230,6 +224,16 @@ export class AgentRunner {
   }
 
   async run(input: string | UserMessage[], abortSignal?: AbortSignal, streamCallbacks?: StreamCallbacks): Promise<RunResult> {
+    // For non-Anthropic providers, resolve MCP servers into regular tools
+    if (this.config.mcpServers?.length && this.config.provider.provider !== 'ANTHROPIC') {
+      try {
+        const mcpTools = await mcpServersToTools(this.config.mcpServers);
+        this.config.tools = [...(this.config.tools || []), ...mcpTools];
+      } catch (err) {
+        console.warn(`[MCP] Failed to resolve MCP tools: ${err}`);
+      }
+    }
+
     const maxSteps = this.config.maxIterations ?? 50;
     const toolResults: ToolResult[] = [];
     const loopDetector = new ToolLoopDetector();
