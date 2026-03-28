@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../config/prisma.service';
 
@@ -17,6 +17,8 @@ const ADAPTER_META: Array<{ type: AdapterType; name: string; description: string
   { type: 'PROCESS', name: 'Process', description: 'Generic shell command adapter - Run any CLI tool or script as an agent' },
 ];
 
+const DANGEROUS_ADAPTERS = new Set<AdapterType>(['HTTP', 'PROCESS']);
+
 @Injectable()
 export class AdaptersService {
   constructor(
@@ -26,6 +28,53 @@ export class AdaptersService {
 
   listAdapters() {
     return ADAPTER_META;
+  }
+
+  private getAdapterType(type: string): AdapterType {
+    const adapterType = type as AdapterType;
+    if (!ADAPTER_META.some((item) => item.type === adapterType)) {
+      throw new BadRequestException(`Unknown adapter type: ${type}`);
+    }
+    return adapterType;
+  }
+
+  private assertSafeAdapterType(type: AdapterType) {
+    if (DANGEROUS_ADAPTERS.has(type)) {
+      throw new ForbiddenException(`${type} adapters cannot be executed directly from this endpoint`);
+    }
+  }
+
+  private isBlockedHostname(hostname: string): boolean {
+    const normalized = hostname.trim().toLowerCase();
+    return normalized === 'localhost'
+      || normalized === '0.0.0.0'
+      || normalized === '::1'
+      || normalized.startsWith('127.')
+      || normalized.startsWith('10.')
+      || normalized.startsWith('192.168.')
+      || /^172\.(1[6-9]|2\d|3[0-1])\./.test(normalized)
+      || normalized.startsWith('169.254.')
+      || normalized.endsWith('.local')
+      || normalized === 'metadata.google.internal';
+  }
+
+  private assertSafeHttpUrl(urlValue: string) {
+    let parsed: URL;
+    try {
+      parsed = new URL(urlValue);
+    } catch {
+      throw new BadRequestException('Invalid adapter URL');
+    }
+
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new BadRequestException('Only http/https adapter URLs are allowed');
+    }
+
+    if (this.isBlockedHostname(parsed.hostname)) {
+      throw new ForbiddenException('Connections to local or private network targets are blocked');
+    }
+
+    return parsed.toString();
   }
 
   async checkAllAvailability() {
@@ -46,7 +95,7 @@ export class AdaptersService {
   }
 
   async checkAvailability(type: string, config?: Record<string, any>) {
-    const adapter = await this.createAdapter(type as AdapterType, config || {});
+    const adapter = await this.createAdapter(this.getAdapterType(type), config || {});
     return adapter.checkAvailability();
   }
 
@@ -61,54 +110,15 @@ export class AdaptersService {
       orgId: string;
     },
   ) {
-    const adapter = await this.createAdapter(type as AdapterType, options.config || {});
-
-    // Create execution record
-    const execution = await this.prisma.agentExecution.create({
-      data: {
-        agentId: options.userId, // placeholder for direct adapter execution
-        status: 'RUNNING',
-        triggerType: 'MANUAL',
-        triggerId: options.taskId,
-        input: { prompt, adapterType: type, config: options.config },
-        startedAt: new Date(),
-      },
+    const adapterType = this.getAdapterType(type);
+    this.assertSafeAdapterType(adapterType);
+    const adapter = await this.createAdapter(adapterType, options.config || {});
+    const result = await adapter.execute({
+      prompt,
+      taskId: options.taskId,
+      context: options.context,
     });
-
-    try {
-      const result = await adapter.execute({
-        prompt,
-        taskId: options.taskId,
-        context: options.context,
-      });
-
-      // Update execution record
-      await this.prisma.agentExecution.update({
-        where: { id: execution.id },
-        data: {
-          status: result.success ? 'COMPLETED' : 'FAILED',
-          output: result as any,
-          tokensUsed: result.tokensUsed,
-          costUsd: result.costUsd,
-          error: result.error,
-          endedAt: new Date(),
-        },
-      });
-
-      this.events.emit('adapter.execution.completed', { executionId: execution.id, type, result });
-
-      return { executionId: execution.id, ...result };
-    } catch (err: any) {
-      await this.prisma.agentExecution.update({
-        where: { id: execution.id },
-        data: {
-          status: 'FAILED',
-          error: err.message,
-          endedAt: new Date(),
-        },
-      });
-      throw err;
-    }
+    return { executionId: null, ...result };
   }
 
   async executeForAgent(
@@ -125,6 +135,9 @@ export class AdaptersService {
     if (!agent) throw new NotFoundException('Agent not found');
     if (agent.orgId !== options.orgId) throw new BadRequestException('Access denied');
     if (!agent.adapterType) throw new BadRequestException('Agent has no external adapter configured');
+    if (DANGEROUS_ADAPTERS.has(agent.adapterType as AdapterType)) {
+      throw new ForbiddenException('This agent uses a privileged adapter and cannot be executed from this endpoint');
+    }
 
     const adapter = await this.createAdapter(
       agent.adapterType as AdapterType,
@@ -215,15 +228,17 @@ export class AdaptersService {
           checkAvailability: async () => {
             if (!config.url) return { available: false, error: 'URL not configured' };
             try {
-              await fetch(config.url, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
+              const safeUrl = this.assertSafeHttpUrl(config.url);
+              await fetch(safeUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
               return { available: true };
             } catch (e: any) {
               return { available: false, error: e.message };
             }
           },
           execute: async (input: any) => {
-            const res = await fetch(config.url, {
-              method: config.method || 'POST',
+            const safeUrl = this.assertSafeHttpUrl(config.url);
+            const res = await fetch(safeUrl, {
+              method: 'POST',
               headers: { 'Content-Type': 'application/json', ...config.headers },
               body: JSON.stringify({ prompt: input.prompt, context: input.context }),
             });

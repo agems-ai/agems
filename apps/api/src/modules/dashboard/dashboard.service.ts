@@ -11,6 +11,18 @@ export class DashboardService {
     private settings: SettingsService,
   ) {}
 
+  private isBlockedHostname(hostname: string): boolean {
+    const normalized = hostname.toLowerCase();
+    if (normalized === 'localhost' || normalized.endsWith('.localhost')) return true;
+    if (normalized === '0.0.0.0' || normalized === '127.0.0.1' || normalized === '::1') return true;
+    if (/^10\./.test(normalized)) return true;
+    if (/^192\.168\./.test(normalized)) return true;
+    if (/^169\.254\./.test(normalized)) return true;
+    if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(normalized)) return true;
+    if (normalized === 'metadata.google.internal') return true;
+    return false;
+  }
+
   /** Get system-level statistics for the org */
   async getSystemStats(orgId?: string) {
     const orgFilter = orgId ? { orgId } : {};
@@ -181,10 +193,22 @@ export class DashboardService {
     const baseUrl = (config.url || '').replace(/\/$/, '');
 
     try {
+      if (method.toUpperCase() !== 'GET') {
+        return { error: 'Only GET requests are allowed for dashboard HTTP tools.' };
+      }
+
       let url = baseUrl + path;
       if (queryParams && Object.keys(queryParams).length > 0) {
         const qs = new URLSearchParams(queryParams).toString();
         url += (url.includes('?') ? '&' : '?') + qs;
+      }
+
+      const parsedUrl = new URL(url);
+      if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+        return { error: 'Only http/https URLs are allowed.' };
+      }
+      if (this.isBlockedHostname(parsedUrl.hostname)) {
+        return { error: 'Requests to local or private network destinations are blocked.' };
       }
 
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -209,10 +233,7 @@ export class DashboardService {
         }
       }
 
-      const fetchOpts: any = { method: method.toUpperCase(), headers };
-      if (body && !['GET', 'HEAD'].includes(fetchOpts.method)) {
-        fetchOpts.body = JSON.stringify(body);
-      }
+      const fetchOpts: any = { method: 'GET', headers };
 
       const res = await fetch(url, fetchOpts);
       const text = await res.text();

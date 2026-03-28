@@ -10,6 +10,26 @@ import type { RequestUser } from '../../common/types';
 export class FilesController {
   constructor(private prisma: PrismaService) {}
 
+  private async getFolderInOrg(id: string, orgId: string) {
+    const folder = await this.prisma.folder.findFirst({ where: { id, orgId } });
+    if (!folder) throw new NotFoundException('Folder not found');
+    return folder;
+  }
+
+  private async assertFolderTreeParent(folderId: string, parentId: string | null | undefined, orgId: string) {
+    if (!parentId) return;
+    if (parentId === folderId) throw new BadRequestException('Cannot move folder into itself');
+
+    let currentId: string | null = parentId;
+    while (currentId) {
+      const current = await this.getFolderInOrg(currentId, orgId);
+      if (current.id === folderId) {
+        throw new BadRequestException('Cannot move folder into its descendant');
+      }
+      currentId = current.parentId;
+    }
+  }
+
   // ═══════════════════════════════════════════════════
   // FOLDERS
   // ═══════════════════════════════════════════════════
@@ -48,8 +68,9 @@ export class FilesController {
 
   @Get('folders/:id')
   async getFolder(@Param('id') id: string, @Request() req: { user: RequestUser }) {
+    const orgId = req.user.orgId;
     const folder = await this.prisma.folder.findFirst({
-      where: { id, orgId: req.user.orgId },
+      where: { id, orgId },
       include: {
         parent: true,
         _count: { select: { children: true, files: true } },
@@ -62,7 +83,7 @@ export class FilesController {
     let current = folder;
     breadcrumbs.unshift({ id: current.id, name: current.name });
     while (current.parentId) {
-      const parent = await this.prisma.folder.findUnique({ where: { id: current.parentId } });
+      const parent = await this.prisma.folder.findFirst({ where: { id: current.parentId, orgId } });
       if (!parent) break;
       breadcrumbs.unshift({ id: parent.id, name: parent.name });
       current = parent as any;
@@ -96,15 +117,14 @@ export class FilesController {
 
   @Put('folders/:id')
   async updateFolder(@Param('id') id: string, @Body() body: { name?: string; parentId?: string | null }, @Request() req: { user: RequestUser }) {
-    const folder = await this.prisma.folder.findFirst({ where: { id, orgId: req.user.orgId } });
-    if (!folder) throw new NotFoundException('Folder not found');
+    const orgId = req.user.orgId;
+    const folder = await this.getFolderInOrg(id, orgId);
     if (folder.isSystem) throw new BadRequestException('Cannot modify system folders');
 
     const data: any = {};
     if (body.name !== undefined) data.name = body.name.trim();
     if (body.parentId !== undefined) {
-      // Prevent circular references
-      if (body.parentId === id) throw new BadRequestException('Cannot move folder into itself');
+      await this.assertFolderTreeParent(id, body.parentId, orgId);
       data.parentId = body.parentId || null;
     }
 
@@ -140,6 +160,7 @@ export class FilesController {
     if (filters.folderId === 'root') {
       where.folderId = null;
     } else if (filters.folderId) {
+      await this.getFolderInOrg(filters.folderId, orgId);
       where.folderId = filters.folderId;
     }
 
@@ -170,7 +191,7 @@ export class FilesController {
   @UseInterceptors(FileInterceptor('file', {
     limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: (_req: any, file: any, cb: any) => {
-      if (/^(image\/(jpeg|png|gif|webp|svg\+xml)|application\/pdf|text\/(plain|csv|markdown)|application\/json)$/.test(file.mimetype)) {
+      if (/^(image\/(jpeg|png|gif|webp)|application\/pdf|text\/(plain|csv|markdown)|application\/json)$/.test(file.mimetype)) {
         cb(null, true);
       } else {
         cb(new BadRequestException('Unsupported file type'), false);
@@ -179,13 +200,16 @@ export class FilesController {
   }))
   async uploadFile(@UploadedFile() file: any, @Req() req: any, @Query('folderId') folderId?: string) {
     if (!file) throw new BadRequestException('No file provided');
+    const orgId = req.user?.orgId;
+    if (folderId) {
+      await this.getFolderInOrg(folderId, orgId);
+    }
     const ext = extname(file.originalname).toLowerCase() || '.bin';
     const filename = `${randomUUID()}${ext}`;
     const dir = this.getUploadsDir();
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, filename), file.buffer);
 
-    const orgId = req.user?.orgId;
     const url = `/uploads/${filename}`;
 
     // Create FileRecord in DB
@@ -199,7 +223,7 @@ export class FilesController {
         size: file.size,
         url,
         uploadedBy: 'HUMAN',
-        uploaderId: req.user?.userId || null,
+        uploaderId: req.user?.id || null,
       },
     });
 

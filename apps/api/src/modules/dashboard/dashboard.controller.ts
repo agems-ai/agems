@@ -12,7 +12,7 @@ const QuerySchema = z.object({
 
 const HttpSchema = z.object({
   toolId: z.string().uuid(),
-  method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
+  method: z.enum(['GET']),
   path: z.string().min(1).max(2000),
   body: z.any().optional(),
   queryParams: z.record(z.string()).optional(),

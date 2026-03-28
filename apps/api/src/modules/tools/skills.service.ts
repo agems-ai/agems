@@ -1,9 +1,27 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../config/prisma.service';
 
 @Injectable()
 export class SkillsService {
   constructor(private prisma: PrismaService) {}
+
+  private async getSkillRecord(id: string, orgId?: string) {
+    const skill = await this.prisma.skill.findUnique({
+      where: { id },
+      include: { agents: { include: { agent: { select: { id: true, name: true } } } } },
+    });
+    if (!skill) throw new NotFoundException('Skill not found');
+    if ((skill.orgId ?? undefined) !== (orgId ?? undefined)) {
+      throw new ForbiddenException('Skill not found in this organization');
+    }
+    return skill;
+  }
+
+  private async assertAgentInOrg(agentId: string, orgId?: string) {
+    if (!orgId) throw new ForbiddenException('Organization is required');
+    const agent = await this.prisma.agent.findFirst({ where: { id: agentId, orgId }, select: { id: true } });
+    if (!agent) throw new ForbiddenException('Agent not found in this organization');
+  }
 
   async createSkill(input: any, orgId?: string) {
     return this.prisma.skill.create({
@@ -36,15 +54,12 @@ export class SkillsService {
     return { data, total, page, pageSize, totalPages: Math.ceil(total / pageSize) };
   }
 
-  async findOneSkill(id: string) {
-    const skill = await this.prisma.skill.findUnique({ where: { id }, include: { agents: { include: { agent: { select: { id: true, name: true } } } } } });
-    if (!skill) throw new NotFoundException('Skill not found');
-    return skill;
+  async findOneSkill(id: string, orgId?: string) {
+    return this.getSkillRecord(id, orgId);
   }
 
-  async updateSkill(id: string, input: any) {
-    const skill = await this.prisma.skill.findUnique({ where: { id } });
-    if (!skill) throw new NotFoundException('Skill not found');
+  async updateSkill(id: string, input: any, orgId?: string) {
+    const skill = await this.getSkillRecord(id, orgId);
     return this.prisma.skill.update({
       where: { id },
       data: {
@@ -60,9 +75,8 @@ export class SkillsService {
     });
   }
 
-  async deleteSkill(id: string) {
-    const skill = await this.prisma.skill.findUnique({ where: { id } });
-    if (!skill) throw new NotFoundException('Skill not found');
+  async deleteSkill(id: string, orgId?: string) {
+    const skill = await this.getSkillRecord(id, orgId);
     return this.prisma.skill.delete({ where: { id } });
   }
 
@@ -114,13 +128,17 @@ export class SkillsService {
     return results;
   }
 
-  async assignSkillToAgent(agentId: string, skillId: string, config?: any) {
+  async assignSkillToAgent(agentId: string, skillId: string, config?: any, orgId?: string) {
+    await this.assertAgentInOrg(agentId, orgId);
+    await this.getSkillRecord(skillId, orgId);
     return this.prisma.agentSkill.create({
       data: { agentId, skillId, config: config ?? {} },
     });
   }
 
-  async removeSkillFromAgent(agentId: string, skillId: string) {
+  async removeSkillFromAgent(agentId: string, skillId: string, orgId?: string) {
+    await this.assertAgentInOrg(agentId, orgId);
+    await this.getSkillRecord(skillId, orgId);
     const as = await this.prisma.agentSkill.findFirst({ where: { agentId, skillId } });
     if (!as) throw new NotFoundException('Agent-skill link not found');
     return this.prisma.agentSkill.delete({ where: { id: as.id } });

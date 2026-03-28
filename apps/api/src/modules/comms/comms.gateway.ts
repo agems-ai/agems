@@ -40,6 +40,7 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
       const payload = this.jwtService.verify(token);
       this.clients.set(client.id, { userId: payload.sub, orgId: payload.orgId, socket: client });
+      client.join(`org:${payload.orgId}`);
     } catch {
       client.disconnect();
     }
@@ -53,8 +54,16 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleJoinChannel(@ConnectedSocket() client: Socket, @MessageBody() data: { channelId: string }) {
     const clientInfo = this.clients.get(client.id);
     if (!clientInfo) return;
-    const channel = await this.prisma.channel.findUnique({ where: { id: data.channelId }, select: { orgId: true } });
-    if (!channel || channel.orgId !== clientInfo.orgId) return;
+    const participant = await this.prisma.channelParticipant.findFirst({
+      where: {
+        channelId: data.channelId,
+        participantType: 'HUMAN',
+        participantId: clientInfo.userId,
+        channel: { orgId: clientInfo.orgId },
+      },
+      select: { id: true },
+    });
+    if (!participant) return;
     client.join(`channel:${data.channelId}`);
     return { event: 'joined', channelId: data.channelId };
   }
@@ -69,14 +78,12 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const clientInfo = this.clients.get(client.id);
     if (!clientInfo) return;
 
-    const channel = await this.prisma.channel.findUnique({ where: { id: data.channelId }, select: { orgId: true } });
-    if (!channel || channel.orgId !== clientInfo.orgId) return;
-
     const message = await this.commsService.sendMessage(
       data.channelId,
       { content: data.content, contentType: (data.contentType as any) || 'TEXT' },
       'HUMAN',
       clientInfo.userId,
+      clientInfo.orgId,
     );
 
     return message;
@@ -105,9 +112,9 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (!approval || approval.agent.orgId !== clientInfo.orgId) return;
 
     if (data.action === 'approve') {
-      await this.approvalsService.resolveRequest(data.approvalId, 'APPROVED', 'HUMAN', clientInfo.userId);
+      await this.approvalsService.resolveRequest(data.approvalId, 'APPROVED', 'HUMAN', clientInfo.userId, clientInfo.orgId);
     } else {
-      await this.approvalsService.resolveRequest(data.approvalId, 'REJECTED', 'HUMAN', clientInfo.userId, data.reason);
+      await this.approvalsService.resolveRequest(data.approvalId, 'REJECTED', 'HUMAN', clientInfo.userId, clientInfo.orgId, data.reason);
     }
   }
 
@@ -211,7 +218,7 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @OnEvent('approval.requested')
   handleApprovalRequested(request: any) {
-    this.server.emit('approval_new', request);
+    this.server.to(`org:${request.agent?.orgId}`).emit('approval_new', request);
     if (request.channelId) {
       this.server.to(`channel:${request.channelId}`).emit('approval_new', request);
     }
@@ -219,12 +226,14 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @OnEvent('approval.resolved')
   async handleApprovalResolved(payload: { request: any; status: string }) {
-    this.server.emit('approval_resolved', payload);
+    this.server.to(`org:${payload.request.agent?.orgId}`).emit('approval_resolved', payload);
     if (payload.request.channelId) {
       this.server.to(`channel:${payload.request.channelId}`).emit('approval_resolved', payload);
     }
-    // Broadcast updated pending count
-    const count = await this.approvalsService.getPendingCount();
-    this.server.emit('approval_count', { count });
+    const orgId = payload.request.agent?.orgId;
+    if (orgId) {
+      const count = await this.approvalsService.getPendingCount(orgId);
+      this.server.to(`org:${orgId}`).emit('approval_count', { count });
+    }
   }
 }

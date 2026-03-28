@@ -1,4 +1,4 @@
-import { Injectable, ConflictException } from '@nestjs/common';
+import { Injectable, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../config/prisma.service';
 import * as bcrypt from 'bcrypt';
@@ -10,6 +10,15 @@ export class SettingsService {
     private prisma: PrismaService,
     private events: EventEmitter2,
   ) {}
+
+  private async getMembership(userId: string, orgId: string) {
+    const membership = await this.prisma.orgMember.findUnique({
+      where: { orgId_userId: { orgId, userId } },
+      include: { user: true },
+    });
+    if (!membership) throw new NotFoundException('User not found in this organization');
+    return membership;
+  }
 
   async getAll(orgId?: string) {
     const rows = await this.prisma.setting.findMany({
@@ -116,29 +125,51 @@ export class SettingsService {
       });
     }
 
-    this.events.emit('user.created', { id: user.id, name: user.name });
+    this.events.emit('user.created', { id: user.id, name: user.name, orgId });
     return user;
   }
 
-  async updateUser(userId: string, data: { name?: string; email?: string; role?: string; password?: string; avatarUrl?: string }) {
+  async updateUser(userId: string, data: { name?: string; email?: string; role?: string; password?: string; avatarUrl?: string }, orgId: string) {
+    const membership = await this.getMembership(userId, orgId);
     const updateData: any = {};
     if (data.name) updateData.name = data.name;
     if (data.email) updateData.email = data.email;
-    if (data.role) updateData.role = data.role;
     if (data.avatarUrl) updateData.avatarUrl = data.avatarUrl;
     if (data.password) updateData.passwordHash = await bcrypt.hash(data.password, 10);
-    return this.prisma.user.update({
-      where: { id: userId },
-      data: updateData,
-      select: { id: true, name: true, email: true, role: true, avatarUrl: true, createdAt: true },
-    });
+    if (Object.keys(updateData).length > 0) {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: updateData,
+      });
+    }
+    if (data.role && data.role !== membership.role) {
+      await this.prisma.orgMember.update({
+        where: { orgId_userId: { orgId, userId } },
+        data: { role: data.role as any },
+      });
+    }
+    const updatedMembership = await this.getMembership(userId, orgId);
+    return {
+      id: updatedMembership.user.id,
+      name: updatedMembership.user.name,
+      email: updatedMembership.user.email,
+      role: updatedMembership.user.role,
+      avatarUrl: updatedMembership.user.avatarUrl,
+      createdAt: updatedMembership.user.createdAt,
+      orgRole: updatedMembership.role,
+    };
   }
 
-  async deleteUser(userId: string) {
-    return this.prisma.user.delete({
-      where: { id: userId },
-      select: { id: true, name: true, email: true },
+  async deleteUser(userId: string, orgId: string) {
+    const membership = await this.getMembership(userId, orgId);
+    if (membership.role === 'ADMIN') {
+      const adminCount = await this.prisma.orgMember.count({ where: { orgId, role: 'ADMIN' } });
+      if (adminCount <= 1) throw new ForbiddenException('Cannot remove the last admin from the organization');
+    }
+    await this.prisma.orgMember.delete({
+      where: { orgId_userId: { orgId, userId } },
     });
+    return { id: membership.user.id, name: membership.user.name, email: membership.user.email };
   }
 
   // ── Company Profile ──

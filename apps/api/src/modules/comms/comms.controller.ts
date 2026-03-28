@@ -13,10 +13,18 @@ import type { RequestUser } from '../../common/types';
 export class CommsController {
   constructor(private commsService: CommsService, private prisma: PrismaService) {}
 
-  /** Verify channel belongs to user's org */
-  private async verifyChannelAccess(channelId: string, orgId: string) {
-    const channel = await this.prisma.channel.findUnique({ where: { id: channelId }, select: { orgId: true } });
-    if (!channel || channel.orgId !== orgId) throw new ForbiddenException('Access denied');
+  /** Verify channel belongs to user's org and the user participates in it */
+  private async verifyChannelAccess(channelId: string, userId: string, orgId: string) {
+    const participant = await this.prisma.channelParticipant.findFirst({
+      where: {
+        channelId,
+        participantType: 'HUMAN',
+        participantId: userId,
+        channel: { orgId },
+      },
+      select: { id: true },
+    });
+    if (!participant) throw new ForbiddenException('Access denied');
   }
 
   @Post()
@@ -40,14 +48,14 @@ export class CommsController {
 
   @Get(':id')
   findOne(@Param('id') id: string, @Req() req: { user: RequestUser }) {
-    return this.commsService.findOneChannel(id, req.user.orgId);
+    return this.commsService.findOneChannel(id, req.user.orgId, 'HUMAN', req.user.id);
   }
 
   @Post(':id/upload')
   @UseInterceptors(FileInterceptor('file', {
     limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: (_req: any, file: any, cb: any) => {
-      if (/^(image\/(jpeg|png|gif|webp|svg\+xml)|application\/pdf|text\/(plain|csv|markdown)|application\/json)$/.test(file.mimetype)) {
+      if (/^(image\/(jpeg|png|gif|webp)|application\/pdf|text\/(plain|csv|markdown)|application\/json)$/.test(file.mimetype)) {
         cb(null, true);
       } else {
         cb(new BadRequestException('Unsupported file type'), false);
@@ -55,6 +63,7 @@ export class CommsController {
     },
   }))
   async uploadFile(@Param('id') channelId: string, @UploadedFile() file: any, @Req() req: { user: RequestUser }) {
+    await this.verifyChannelAccess(channelId, req.user.id, req.user.orgId);
     if (!file) throw new BadRequestException('No file provided');
     const ext = extname(file.originalname).toLowerCase() || '.bin';
     const filename = `${randomUUID()}${ext}`;
@@ -103,7 +112,7 @@ export class CommsController {
 
   @Get(':id/messages')
   async getMessages(@Param('id') channelId: string, @Query() filters: any, @Req() req: { user: RequestUser }) {
-    await this.verifyChannelAccess(channelId, req.user.orgId);
+    await this.verifyChannelAccess(channelId, req.user.id, req.user.orgId);
     return this.commsService.getMessages(channelId, filters);
   }
 
@@ -113,26 +122,26 @@ export class CommsController {
     @Body() body: { participantType: string; participantId: string; role?: string },
     @Req() req: { user: RequestUser },
   ) {
-    await this.verifyChannelAccess(channelId, req.user.orgId);
+    await this.verifyChannelAccess(channelId, req.user.id, req.user.orgId);
     return this.commsService.addParticipant(channelId, body.participantType, body.participantId, body.role);
   }
 
   @Delete(':id/participants/:pid')
   async removeParticipant(@Param('id') channelId: string, @Param('pid') participantId: string, @Req() req: { user: RequestUser }) {
-    await this.verifyChannelAccess(channelId, req.user.orgId);
+    await this.verifyChannelAccess(channelId, req.user.id, req.user.orgId);
     return this.commsService.removeParticipant(channelId, participantId);
   }
 
   @Patch(':id')
   async updateChannel(@Param('id') id: string, @Body() body: { name?: string; metadata?: any }, @Req() req: { user: RequestUser }) {
-    await this.verifyChannelAccess(id, req.user.orgId);
+    await this.verifyChannelAccess(id, req.user.id, req.user.orgId);
     return this.commsService.updateChannel(id, body);
   }
 
   @Delete(':id')
   @Roles('ADMIN')
   async deleteChannel(@Param('id') id: string, @Req() req: { user: RequestUser }) {
-    await this.verifyChannelAccess(id, req.user.orgId);
+    await this.verifyChannelAccess(id, req.user.id, req.user.orgId);
     return this.commsService.deleteChannel(id);
   }
 
