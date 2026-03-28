@@ -231,7 +231,13 @@ export class EvalsService {
       },
       body: JSON.stringify({
         model,
-        system: systemPrompt,
+        system: [
+          {
+            type: 'text',
+            text: systemPrompt,
+            cache_control: { type: 'ephemeral' },
+          },
+        ],
         messages: [{ role: 'user', content: userInput }],
         temperature: config?.temperature ?? 0,
         max_tokens: config?.maxTokens ?? 2000,
