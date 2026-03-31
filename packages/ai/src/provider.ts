@@ -15,9 +15,6 @@ export function createProvider(config: AIProviderConfig): any {
     case 'ANTHROPIC': {
       const anthropic = createAnthropic({
         apiKey: config.apiKey,
-        // Enable prompt caching — system prompts marked with cacheControl
-        // will be cached server-side, reducing input token costs by ~90%
-        cacheControl: true,
       });
       return anthropic(config.model);
     }

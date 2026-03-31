@@ -550,7 +550,7 @@ export class RuntimeService {
 
       // Wrap tools with approval checks
       const wrappedTools = await this.wrapToolsWithApproval(
-        tools, agent.id, execution.id, context?.channelId, context?.taskId, context?.approvedTools,
+        tools, agent.id, execution.id, context?.channelId, context?.taskId, context?.approvedTools, agent.orgId,
       );
 
       const runtimeConfig = agent.runtimeConfig as Record<string, unknown> ?? {};
@@ -888,8 +888,9 @@ export class RuntimeService {
     channelId?: string,
     taskId?: string,
     approvedTools?: string[],
+    orgId?: string,
   ): Promise<any[]> {
-    const policy = await this.approvals.getPolicy(agentId);
+    const policy = await this.approvals.getPolicy(agentId, orgId!);
 
     // No policy = everything free (backward compatible)
     if (!policy) return tools;
@@ -1857,7 +1858,7 @@ Examples: budget approval, deployment sign-off, content review, strategy confirm
             return { success: true, approvalId: request.id, status: 'PENDING' };
           }
           case 'my_pending': {
-            const pending = await this.approvals.getPendingForApprover('AGENT', agent.id);
+            const pending = await this.approvals.getPendingForApprover('AGENT', agent.id, agent.orgId);
             return {
               approvals: pending.map((a: any) => ({
                 id: a.id,
@@ -1883,6 +1884,7 @@ Examples: budget approval, deployment sign-off, content review, strategy confirm
                 params.decision as 'APPROVED' | 'REJECTED',
                 'AGENT',
                 agent.id,
+                agent.orgId,
                 params.reason,
               );
               return { success: true, approvalId: result.id, status: result.status };
@@ -1920,7 +1922,7 @@ Examples: budget approval, deployment sign-off, content review, strategy confirm
             if (params.status) filters.status = params.status;
             if (params.agentId) filters.agentId = params.agentId;
             if (params.requestedFromIdFilter) filters.requestedFromId = params.requestedFromIdFilter;
-            const result = await this.approvals.findAll(filters);
+            const result = await this.approvals.findAll(filters, agent.orgId);
             return result;
           }
           default:

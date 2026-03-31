@@ -245,7 +245,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       select: { id: true, name: true },
     });
     const allowed = new Set(agents.map((agent) => agent.id));
-    return this.botManager.getRunningBots().filter((botId) => allowed.has(botId));
+    return this.botManager.getRunningBots().filter((bot) => allowed.has(bot.agentId));
   }
 
   // ── Message Handlers ──
