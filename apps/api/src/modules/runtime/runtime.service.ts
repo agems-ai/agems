@@ -503,16 +503,12 @@ export class RuntimeService {
       where: { channelId: { in: channelIds } },
       orderBy: { createdAt: 'desc' },
       take: messageCount,
-      select: {
-        content: true, senderType: true, senderId: true, senderName: true,
-        channelId: true, createdAt: true,
-        channel: { select: { name: true } },
-      },
+      include: { channel: { select: { name: true } } },
     });
     if (messages.length === 0) return null;
 
     const lines = messages.reverse().map(m => {
-      const sender = m.senderName || m.senderId || 'unknown';
+      const sender = (m as any).senderName || m.senderId || 'unknown';
       const ch = (m.channel as any)?.name || 'channel';
       return `[${ch}] ${sender}: ${(m.content || '').substring(0, 200)}`;
     });
