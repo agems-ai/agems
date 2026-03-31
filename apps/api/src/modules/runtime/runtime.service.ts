@@ -250,6 +250,9 @@ export class RuntimeService {
               'AGENT',
               agent.id,
             );
+
+            // Auto-save conversation summary to memory (fire-and-forget)
+            this.saveConversationSummary(agent.id, channelId, message, replyText).catch(() => {});
           } catch (err) {
             this.logger.error(`Agent ${agent.id} failed in channel ${channelId}: ${err}`);
           }
@@ -434,7 +437,87 @@ export class RuntimeService {
       merged.push({ role: 'user', content: '[System: Respond to the above. If an action was requested, use tools NOW — do not write plans or promise future work.]' });
     }
 
+    // Cross-channel context injection (if enabled in settings)
+    try {
+      const crossConfig = (await this.settings.getAllModulesConfig(currentAgent.orgId)).crossChannel;
+      if (crossConfig.enabled && crossConfig.messageCount > 0) {
+        const crossCtx = await this.buildCrossChannelContext(currentAgent.id, channelId, crossConfig.messageCount);
+        if (crossCtx && merged.length > 1) {
+          // Insert after first message (preamble) as a user message
+          merged.splice(1, 0, { role: 'user', content: crossCtx });
+        }
+      }
+    } catch (err) {
+      this.logger.debug(`Failed to inject cross-channel context: ${err}`);
+    }
+
     return merged;
+  }
+
+  /** Save a brief conversation summary to agent memory (cross-channel awareness) */
+  private async saveConversationSummary(agentId: string, channelId: string, userMessage: any, agentResponse: string) {
+    try {
+      const channel = await this.prisma.channel.findUnique({
+        where: { id: channelId },
+        select: { name: true, type: true },
+      });
+      const senderName = userMessage.senderName || userMessage.senderId || 'someone';
+      const userText = (userMessage.content || '').substring(0, 200);
+      const agentText = (agentResponse || '').substring(0, 300);
+      const summary = `[${channel?.name || 'channel'}] ${senderName}: "${userText}" → I responded: ${agentText}`;
+
+      await this.prisma.agentMemory.create({
+        data: {
+          agentId,
+          type: 'CONVERSATION',
+          content: summary,
+          metadata: { channelId, channelName: channel?.name, senderName, timestamp: new Date().toISOString() } as any,
+        },
+      });
+
+      // Cleanup: keep only last 50 CONVERSATION memories per agent
+      const allConv = await this.prisma.agentMemory.findMany({
+        where: { agentId, type: 'CONVERSATION' },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+      if (allConv.length > 50) {
+        const toDelete = allConv.slice(50).map(m => m.id);
+        await this.prisma.agentMemory.deleteMany({ where: { id: { in: toDelete } } });
+      }
+    } catch (err) {
+      this.logger.debug(`Failed to save conversation summary: ${err}`);
+    }
+  }
+
+  /** Build cross-channel context: recent messages from agent's other channels */
+  private async buildCrossChannelContext(agentId: string, currentChannelId: string, messageCount: number): Promise<string | null> {
+    const participations = await this.prisma.channelParticipant.findMany({
+      where: { participantId: agentId, participantType: 'AGENT', channelId: { not: currentChannelId } },
+      select: { channelId: true },
+    });
+    if (participations.length === 0) return null;
+
+    const channelIds = participations.map(p => p.channelId);
+    const messages = await this.prisma.message.findMany({
+      where: { channelId: { in: channelIds } },
+      orderBy: { createdAt: 'desc' },
+      take: messageCount,
+      select: {
+        content: true, senderType: true, senderId: true, senderName: true,
+        channelId: true, createdAt: true,
+        channel: { select: { name: true } },
+      },
+    });
+    if (messages.length === 0) return null;
+
+    const lines = messages.reverse().map(m => {
+      const sender = m.senderName || m.senderId || 'unknown';
+      const ch = (m.channel as any)?.name || 'channel';
+      return `[${ch}] ${sender}: ${(m.content || '').substring(0, 200)}`;
+    });
+
+    return `[System: Recent activity in your OTHER channels for context. You participated in these conversations.]\n${lines.join('\n')}\n[End of cross-channel context]`;
   }
 
   /** When a human adds a meeting entry, trigger agent participants to respond */
@@ -1004,6 +1087,17 @@ export class RuntimeService {
       if (memories.length > 0) {
         const entries = memories.map(m => `- ${m.content}`).join('\n');
         memoryContext = `\n=== YOUR PERSISTENT MEMORY ===\nThese are facts you saved from previous conversations. Use memory_write to add new knowledge, memory_delete to remove outdated entries.\n${entries}\n=== END MEMORY ===\n\n`;
+      }
+
+      // Inject CONVERSATION summaries (cross-channel awareness)
+      const conversations = await this.prisma.agentMemory.findMany({
+        where: { agentId: agent.id, type: 'CONVERSATION' },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+      });
+      if (conversations.length > 0) {
+        const entries = conversations.map(m => `- ${m.content}`).join('\n');
+        memoryContext += `=== RECENT CONVERSATIONS (cross-channel) ===\nThese are your recent interactions across all channels. You DID have these conversations — do not deny them.\n${entries}\n=== END RECENT CONVERSATIONS ===\n\n`;
       }
     } catch { /* memory table might not exist yet */ }
 

@@ -195,16 +195,19 @@ class ApiClient {
   getModulesConfig() {
     return this.fetch<{
       globalEnabled: boolean;
+      crossChannel: { enabled: boolean; messageCount: number };
       modules: Record<string, { enabled: boolean; activityLevel: number; autonomyLevel: number }>;
     }>('/settings/modules');
   }
 
   setModulesConfig(data: {
     globalEnabled?: boolean;
+    crossChannel?: { enabled?: boolean; messageCount?: number };
     modules?: Record<string, { enabled?: boolean; activityLevel?: number; autonomyLevel?: number }>;
   }) {
     return this.fetch<{
       globalEnabled: boolean;
+      crossChannel: { enabled: boolean; messageCount: number };
       modules: Record<string, { enabled: boolean; activityLevel: number; autonomyLevel: number }>;
     }>('/settings/modules', {
       method: 'POST',

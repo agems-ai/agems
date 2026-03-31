@@ -14,8 +14,14 @@ export interface ModuleConfig {
   autonomyLevel: number;  // 1-5
 }
 
+export interface CrossChannelConfig {
+  enabled: boolean;
+  messageCount: number;  // how many messages from other channels to include
+}
+
 export interface AllModulesConfig {
   globalEnabled: boolean;
+  crossChannel: CrossChannelConfig;
   modules: Record<ModuleName, ModuleConfig>;
 }
 
@@ -420,7 +426,7 @@ MAXIMUM teamwork. Every project involves the full relevant team.
     }
 
     // Build list of all keys we need
-    const keys: string[] = ['task_agents_enabled', 'autonomy_level'];
+    const keys: string[] = ['task_agents_enabled', 'autonomy_level', 'cross_channel_enabled', 'cross_channel_messages'];
     for (const mod of MODULE_NAMES) {
       keys.push(`module_${mod}_enabled`, `module_${mod}_activity_level`, `module_${mod}_autonomy_level`);
     }
@@ -454,7 +460,12 @@ MAXIMUM teamwork. Every project involves the full relevant team.
       modules[mod] = { enabled, activityLevel, autonomyLevel };
     }
 
-    const config: AllModulesConfig = { globalEnabled, modules };
+    const crossChannel: CrossChannelConfig = {
+      enabled: map['cross_channel_enabled'] === 'true',
+      messageCount: map['cross_channel_messages'] ? Math.max(0, Math.min(50, parseInt(map['cross_channel_messages']))) : 10,
+    };
+
+    const config: AllModulesConfig = { globalEnabled, crossChannel, modules };
 
     // Update cache
     this.moduleConfigCache.set(cacheKey, { config, fetchedAt: Date.now() });
@@ -466,6 +477,16 @@ MAXIMUM teamwork. Every project involves the full relevant team.
   async setAllModulesConfig(data: Partial<AllModulesConfig>, orgId?: string): Promise<AllModulesConfig> {
     if (data.globalEnabled !== undefined) {
       await this.set('task_agents_enabled', String(data.globalEnabled), orgId);
+    }
+
+    if (data.crossChannel) {
+      if (data.crossChannel.enabled !== undefined) {
+        await this.set('cross_channel_enabled', String(data.crossChannel.enabled), orgId);
+      }
+      if (data.crossChannel.messageCount !== undefined) {
+        const count = Math.max(0, Math.min(50, Math.round(data.crossChannel.messageCount)));
+        await this.set('cross_channel_messages', String(count), orgId);
+      }
     }
 
     if (data.modules) {

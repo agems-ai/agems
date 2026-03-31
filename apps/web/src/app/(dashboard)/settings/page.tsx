@@ -34,6 +34,8 @@ export default function SettingsPage() {
     projects: { enabled: true, activityLevel: 3, autonomyLevel: 3 },
   };
   const [globalEnabled, setGlobalEnabled] = useState(true);
+  const [crossChannelEnabled, setCrossChannelEnabled] = useState(false);
+  const [crossChannelMessages, setCrossChannelMessages] = useState(10);
   const [modules, setModules] = useState<Record<ModuleName, ModuleConfig>>(defaultModules);
   const [savingModules, setSavingModules] = useState(false);
   const [modulesSaved, setModulesSaved] = useState(false);
@@ -84,6 +86,10 @@ export default function SettingsPage() {
     }).catch(() => {});
     api.getModulesConfig().then((c) => {
       setGlobalEnabled(c.globalEnabled);
+      if (c.crossChannel) {
+        setCrossChannelEnabled(c.crossChannel.enabled);
+        setCrossChannelMessages(c.crossChannel.messageCount);
+      }
       setModules(c.modules as Record<ModuleName, ModuleConfig>);
     }).catch(() => {});
     api.getTaskAgentsConfig().then((c) => {
@@ -282,8 +288,16 @@ export default function SettingsPage() {
         const handleSaveModules = async () => {
           setSavingModules(true);
           try {
-            const res = await api.setModulesConfig({ globalEnabled, modules });
+            const res = await api.setModulesConfig({
+              globalEnabled,
+              crossChannel: { enabled: crossChannelEnabled, messageCount: crossChannelMessages },
+              modules,
+            });
             setGlobalEnabled(res.globalEnabled);
+            if (res.crossChannel) {
+              setCrossChannelEnabled(res.crossChannel.enabled);
+              setCrossChannelMessages(res.crossChannel.messageCount);
+            }
             setModules(res.modules as Record<ModuleName, ModuleConfig>);
             setModulesSaved(true);
             setTimeout(() => setModulesSaved(false), 2000);
@@ -325,6 +339,34 @@ export default function SettingsPage() {
                 </span>
               </div>
             </div>
+          </div>
+
+          {/* Cross-Channel Context */}
+          <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="font-semibold">Cross-Channel Context</h3>
+                <p className="text-xs text-[var(--muted)]">Inject recent messages from agent's other channels into conversation context</p>
+              </div>
+              <button
+                onClick={() => setCrossChannelEnabled(!crossChannelEnabled)}
+                className={`relative w-12 h-6 rounded-full transition-colors duration-200 ${crossChannelEnabled ? 'bg-emerald-500' : 'bg-gray-600'}`}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform duration-200 ${crossChannelEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+              </button>
+            </div>
+            {crossChannelEnabled && (
+              <div className="flex items-center gap-3 mt-2">
+                <label className="text-xs text-[var(--muted)]">Messages to include:</label>
+                <input type="number" min={1} max={50} value={crossChannelMessages}
+                  onChange={(e) => setCrossChannelMessages(parseInt(e.target.value) || 10)}
+                  className="w-16 px-2 py-1 rounded border border-[var(--border)] bg-[var(--bg)] text-xs text-center" />
+                <span className="text-xs text-[var(--muted)]">from other channels</span>
+              </div>
+            )}
+            <p className="text-[10px] text-[var(--muted)] mt-2">
+              Conversation summaries are always saved to memory automatically, regardless of this setting.
+            </p>
           </div>
 
           {/* Module Cards Grid */}
