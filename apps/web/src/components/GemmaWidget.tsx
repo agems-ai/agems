@@ -30,9 +30,7 @@ export default function GemmaWidget() {
       }
     }).catch(() => {});
 
-    // Get current user ID
-    api.getMe?.()?.then((u: any) => setUserId(u?.id || '')).catch(() => {});
-    // Fallback: try to extract from token
+    // Get current user ID from JWT token
     try {
       const token = localStorage.getItem('token');
       if (token) {
