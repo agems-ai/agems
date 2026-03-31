@@ -92,7 +92,7 @@ export class GoalSchedulerService {
       const result = await this.runtime.execute(
         agentId,
         prompt,
-        { type: 'GOAL', id: goal.id },
+        { type: 'EVENT', id: goal.id },
         { channelId },
       );
 
