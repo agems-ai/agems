@@ -30,12 +30,12 @@ export class DashboardService {
     const [running, recent] = await Promise.all([
       this.prisma.agentExecution.findMany({
         where: { status: 'RUNNING', ...orgFilter },
-        include: { agent: { select: { id: true, name: true, avatarUrl: true } } },
+        include: { agent: { select: { id: true, name: true } } },
         orderBy: { startedAt: 'desc' },
       }),
       this.prisma.agentExecution.findMany({
         where: { status: { in: ['COMPLETED', 'FAILED', 'CANCELLED', 'WAITING_HITL'] }, ...orgFilter },
-        include: { agent: { select: { id: true, name: true, avatarUrl: true } } },
+        include: { agent: { select: { id: true, name: true } } },
         orderBy: { startedAt: 'desc' },
         take: 20,
       }),
