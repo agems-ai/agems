@@ -32,7 +32,7 @@ export function createProvider(config: AIProviderConfig): any {
     case 'DEEPSEEK': {
       const deepseek = createOpenAI({
         apiKey: config.apiKey,
-        baseURL: config.baseUrl || 'https://api.deepseek.com/v1',
+        baseURL: config.baseUrl || 'https://api.deepseek.com',
       });
       return deepseek.chat(config.model);
     }

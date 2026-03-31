@@ -746,7 +746,7 @@ export default function AgentDetailPage() {
                   <span className="text-xs text-[var(--muted)]">{ex.triggerType}</span>
                   {ex.tokensUsed > 0 && <span className="text-xs text-[var(--muted)]">{ex.tokensUsed} tok</span>}
                   {ex.costUsd > 0 && <span className="text-xs text-[var(--muted)]">${ex.costUsd.toFixed(4)}</span>}
-                  <span className="text-xs text-[var(--muted)]">{new Date(ex.createdAt).toLocaleString()}</span>
+                  <span className="text-xs text-[var(--muted)]">{ex.startedAt ? new Date(ex.startedAt).toLocaleString() : '—'}</span>
                   <span className="text-xs text-[var(--muted)]">{expandedExec === ex.id ? '▲' : '▼'}</span>
                 </button>
                 {expandedExec === ex.id && (
