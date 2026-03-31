@@ -23,6 +23,27 @@ export class DashboardService {
     return false;
   }
 
+  /** Real-time agent activity: running + recent executions */
+  async getActivity(orgId?: string) {
+    const orgFilter = orgId ? { agent: { orgId } } : {};
+
+    const [running, recent] = await Promise.all([
+      this.prisma.agentExecution.findMany({
+        where: { status: 'RUNNING', ...orgFilter },
+        include: { agent: { select: { id: true, name: true, avatarUrl: true } } },
+        orderBy: { startedAt: 'desc' },
+      }),
+      this.prisma.agentExecution.findMany({
+        where: { status: { in: ['COMPLETED', 'FAILED', 'CANCELLED', 'WAITING_HITL'] }, ...orgFilter },
+        include: { agent: { select: { id: true, name: true, avatarUrl: true } } },
+        orderBy: { startedAt: 'desc' },
+        take: 20,
+      }),
+    ]);
+
+    return { running, recent };
+  }
+
   /** Get system-level statistics for the org */
   async getSystemStats(orgId?: string) {
     const orgFilter = orgId ? { orgId } : {};

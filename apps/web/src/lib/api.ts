@@ -738,6 +738,17 @@ class ApiClient {
   }
 
   // Dashboard
+  getActivity() {
+    return this.fetch<{
+      running: any[];
+      recent: any[];
+    }>('/dashboard/activity');
+  }
+
+  getSystemStats() {
+    return this.fetch<any>('/dashboard/system-stats');
+  }
+
   getDashboardTools() {
     return this.fetch<{ id: string; name: string; type: string; database: string; url: string; description: string }[]>('/dashboard/tools');
   }

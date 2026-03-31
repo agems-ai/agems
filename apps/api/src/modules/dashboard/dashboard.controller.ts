@@ -22,6 +22,12 @@ const HttpSchema = z.object({
 export class DashboardController {
   constructor(private readonly dashboardService: DashboardService) {}
 
+  /** Real-time agent activity: running + recent executions */
+  @Get('activity')
+  getActivity(@Request() req: { user: RequestUser }) {
+    return this.dashboardService.getActivity(req.user.orgId);
+  }
+
   /** System-level statistics for org widgets */
   @Get('system-stats')
   getSystemStats(@Request() req: { user: RequestUser }) {
