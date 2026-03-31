@@ -520,6 +520,9 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
     });
     if (!agent || agent.status !== 'ACTIVE') return;
 
+    // Check if tasks module is enabled for this agent's org
+    if (!(await this.settings.isModuleEnabled('tasks', agent.orgId))) return;
+
     if (this.runningAgents.has(agentId)) {
       this.logger.debug(`Agent ${agent.name} is busy, skipping task trigger`);
       return;
@@ -586,6 +589,9 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
       select: { id: true, name: true, status: true, orgId: true },
     });
     if (!agent || agent.status !== 'ACTIVE') return;
+
+    // Check if tasks module is enabled for this agent's org
+    if (!(await this.settings.isModuleEnabled('tasks', agent.orgId))) return;
 
     this.runningAgents.add(agentId);
 

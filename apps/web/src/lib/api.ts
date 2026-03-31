@@ -179,13 +179,34 @@ class ApiClient {
     return this.fetch(`/tasks/${taskId}/comments`, { method: 'POST', body: JSON.stringify({ content }) });
   }
 
-  // Task Agents Config
+  // Task Agents Config (legacy — kept for backward compat)
   getTaskAgentsConfig() {
     return this.fetch<{ enabled: boolean; interval: number; reviewInterval: number; reviewBudget: number; autonomyLevel: number }>('/settings/task-agents');
   }
 
   setTaskAgentsConfig(data: { enabled?: boolean; interval?: number; reviewInterval?: number; reviewBudget?: number; autonomyLevel?: number }) {
     return this.fetch<{ enabled: boolean; interval: number; reviewInterval: number; reviewBudget: number; autonomyLevel: number }>('/settings/task-agents', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  // Module Settings (per-module enable/activity/autonomy)
+  getModulesConfig() {
+    return this.fetch<{
+      globalEnabled: boolean;
+      modules: Record<string, { enabled: boolean; activityLevel: number; autonomyLevel: number }>;
+    }>('/settings/modules');
+  }
+
+  setModulesConfig(data: {
+    globalEnabled?: boolean;
+    modules?: Record<string, { enabled?: boolean; activityLevel?: number; autonomyLevel?: number }>;
+  }) {
+    return this.fetch<{
+      globalEnabled: boolean;
+      modules: Record<string, { enabled: boolean; activityLevel: number; autonomyLevel: number }>;
+    }>('/settings/modules', {
       method: 'POST',
       body: JSON.stringify(data),
     });

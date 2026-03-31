@@ -138,6 +138,19 @@ export class SettingsController {
     };
   }
 
+  // ── Module Settings (per-module enable/activity/autonomy) ──
+
+  @Get('modules')
+  getModulesConfig(@Request() req: { user: RequestUser }) {
+    return this.settingsService.getAllModulesConfig(req.user.orgId);
+  }
+
+  @Post('modules')
+  @Roles('MANAGER')
+  setModulesConfig(@Body() body: any, @Request() req: { user: RequestUser }) {
+    return this.settingsService.setAllModulesConfig(body, req.user.orgId);
+  }
+
   @Get('n8n')
   getN8nConfig(@Request() req: { user: RequestUser }) {
     return this.settingsService.getN8nConfig(req.user.orgId);

@@ -136,6 +136,16 @@ export class RuntimeService {
       return;
     }
 
+    // Check if comms module is enabled for this channel's org
+    const channel = await this.prisma.channel.findUnique({
+      where: { id: channelId },
+      select: { orgId: true },
+    });
+    if (channel?.orgId && !(await this.settings.isModuleEnabled('comms', channel.orgId))) {
+      await releaseLock();
+      return;
+    }
+
     // Find active agent participants
     const participants = await this.prisma.channelParticipant.findMany({
       where: { channelId, participantType: 'AGENT' },
@@ -434,6 +444,13 @@ export class RuntimeService {
 
     if (entry.speakerType !== 'HUMAN' || entry.entryType !== 'SPEECH') return;
 
+    // Check if meetings module is enabled for this meeting's org
+    const meeting = await this.prisma.meeting.findUnique({
+      where: { id: meetingId },
+      select: { title: true, agenda: true, orgId: true },
+    });
+    if (meeting?.orgId && !(await this.settings.isModuleEnabled('meetings', meeting.orgId))) return;
+
     const participants = await this.prisma.meetingParticipant.findMany({
       where: { meetingId, participantType: 'AGENT' },
     });
@@ -449,11 +466,6 @@ export class RuntimeService {
         }
     }
     if (agents.length === 0) return;
-
-    const meeting = await this.prisma.meeting.findUnique({
-      where: { id: meetingId },
-      select: { title: true, agenda: true },
-    });
 
     // Emit expected agent count so frontend knows how many responses to wait for
     this.events.emit('meeting.agents.pending', { meetingId, count: agents.length });
@@ -961,14 +973,14 @@ export class RuntimeService {
     });
   }
 
-  /** Build full system prompt: AGEMS preamble (from DB) + autonomy directive + company context + skill names (loaded on demand via use_skill tool) + agent's own system prompt */
+  /** Build full system prompt: AGEMS preamble + module directives + company context + skill names + agent's own system prompt */
   private async buildSystemPrompt(agent: any): Promise<string> {
-    const [agemsPreamble, companyContext, autonomyLevel] = await Promise.all([
-      this.settings.getAgemsPreamble(),
-      this.settings.getCompanyContext(),
-      this.settings.getAutonomyLevel(),
+    const orgId = agent.orgId;
+    const [agemsPreamble, companyContext, modulesDirective] = await Promise.all([
+      this.settings.getAgemsPreamble(orgId),
+      this.settings.getCompanyContext(orgId),
+      this.settings.getModulesDirective(orgId),
     ]);
-    const autonomyDirective = this.settings.getAutonomyDirective(autonomyLevel);
 
     let skillsContext = '';
     if (agent.skills?.length) {
@@ -995,7 +1007,7 @@ export class RuntimeService {
       }
     } catch { /* memory table might not exist yet */ }
 
-    return agemsPreamble + '\n' + autonomyDirective + '\n\n' + companyContext + skillsContext + memoryContext + agent.systemPrompt;
+    return agemsPreamble + '\n' + modulesDirective + '\n\n' + companyContext + skillsContext + memoryContext + agent.systemPrompt;
   }
 
   private async buildTools(agent: any, context?: { channelId?: string }) {

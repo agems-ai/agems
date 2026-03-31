@@ -1,11 +1,58 @@
-import { Injectable, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, ForbiddenException, NotFoundException, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../config/prisma.service';
 import * as bcrypt from 'bcrypt';
 import { AGEMS_DEFAULT_PREAMBLE } from './agems-defaults';
 
+// ── Module Settings Types ──
+
+export type ModuleName = 'tasks' | 'comms' | 'meetings' | 'goals' | 'projects';
+
+export interface ModuleConfig {
+  enabled: boolean;
+  activityLevel: number;  // 1-5
+  autonomyLevel: number;  // 1-5
+}
+
+export interface AllModulesConfig {
+  globalEnabled: boolean;
+  modules: Record<ModuleName, ModuleConfig>;
+}
+
+export const MODULE_NAMES: ModuleName[] = ['tasks', 'comms', 'meetings', 'goals', 'projects'];
+
+const MODULE_LABELS: Record<ModuleName, string> = {
+  tasks: 'TASKS',
+  comms: 'COMMS',
+  meetings: 'MEETINGS',
+  goals: 'GOALS',
+  projects: 'PROJECTS',
+};
+
+const ACTIVITY_LABELS: Record<number, string> = {
+  1: 'Passive',
+  2: 'Reactive',
+  3: 'Balanced',
+  4: 'Proactive',
+  5: 'Aggressive',
+};
+
+const AUTONOMY_LABELS: Record<number, string> = {
+  1: 'Solo',
+  2: 'Lean',
+  3: 'Balanced',
+  4: 'Team-first',
+  5: 'Full team',
+};
+
 @Injectable()
 export class SettingsService {
+  private readonly logger = new Logger(SettingsService.name);
+
+  /** In-memory cache for module configs (per-org, 30s TTL) */
+  private moduleConfigCache = new Map<string, { config: AllModulesConfig; fetchedAt: number }>();
+  private static readonly CACHE_TTL_MS = 30_000;
+
   constructor(
     private prisma: PrismaService,
     private events: EventEmitter2,
@@ -357,5 +404,188 @@ MAXIMUM teamwork. Every project involves the full relevant team.
       return { agems_preamble: AGEMS_DEFAULT_PREAMBLE };
     }
     return this.getSystemPrompts(orgId);
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // MODULE SETTINGS (per-org, per-module enable/activity/autonomy)
+  // ══════════════════════════════════════════════════════════
+
+  /** Get all module configs in a single DB query with fallback defaults */
+  async getAllModulesConfig(orgId?: string): Promise<AllModulesConfig> {
+    // Check cache first
+    const cacheKey = orgId || '__global__';
+    const cached = this.moduleConfigCache.get(cacheKey);
+    if (cached && Date.now() - cached.fetchedAt < SettingsService.CACHE_TTL_MS) {
+      return cached.config;
+    }
+
+    // Build list of all keys we need
+    const keys: string[] = ['task_agents_enabled', 'autonomy_level'];
+    for (const mod of MODULE_NAMES) {
+      keys.push(`module_${mod}_enabled`, `module_${mod}_activity_level`, `module_${mod}_autonomy_level`);
+    }
+
+    const rows = await this.prisma.setting.findMany({
+      where: { key: { in: keys }, ...(orgId ? { orgId } : {}) },
+    });
+    const map: Record<string, string> = {};
+    for (const r of rows) map[r.key] = r.value;
+
+    const globalEnabled = map['task_agents_enabled'] !== 'false';
+    const globalAutonomy = map['autonomy_level'] ? parseInt(map['autonomy_level']) : 3;
+
+    const modules = {} as Record<ModuleName, ModuleConfig>;
+    for (const mod of MODULE_NAMES) {
+      const enabledKey = `module_${mod}_enabled`;
+      const activityKey = `module_${mod}_activity_level`;
+      const autonomyKey = `module_${mod}_autonomy_level`;
+
+      // Migration: if module key absent, inherit from legacy keys for tasks
+      let enabled = true;
+      if (map[enabledKey] !== undefined) {
+        enabled = map[enabledKey] !== 'false';
+      } else if (mod === 'tasks' && map['task_agents_enabled'] !== undefined) {
+        enabled = map['task_agents_enabled'] !== 'false';
+      }
+
+      const activityLevel = map[activityKey] ? Math.max(1, Math.min(5, parseInt(map[activityKey]))) : 3;
+      const autonomyLevel = map[autonomyKey] ? Math.max(1, Math.min(5, parseInt(map[autonomyKey]))) : globalAutonomy;
+
+      modules[mod] = { enabled, activityLevel, autonomyLevel };
+    }
+
+    const config: AllModulesConfig = { globalEnabled, modules };
+
+    // Update cache
+    this.moduleConfigCache.set(cacheKey, { config, fetchedAt: Date.now() });
+
+    return config;
+  }
+
+  /** Update module configs (partial update supported) */
+  async setAllModulesConfig(data: Partial<AllModulesConfig>, orgId?: string): Promise<AllModulesConfig> {
+    if (data.globalEnabled !== undefined) {
+      await this.set('task_agents_enabled', String(data.globalEnabled), orgId);
+    }
+
+    if (data.modules) {
+      for (const mod of MODULE_NAMES) {
+        const mc = data.modules[mod];
+        if (!mc) continue;
+        if (mc.enabled !== undefined) {
+          await this.set(`module_${mod}_enabled`, String(mc.enabled), orgId);
+        }
+        if (mc.activityLevel !== undefined) {
+          const level = Math.max(1, Math.min(5, Math.round(mc.activityLevel)));
+          await this.set(`module_${mod}_activity_level`, String(level), orgId);
+        }
+        if (mc.autonomyLevel !== undefined) {
+          const level = Math.max(1, Math.min(5, Math.round(mc.autonomyLevel)));
+          await this.set(`module_${mod}_autonomy_level`, String(level), orgId);
+        }
+      }
+    }
+
+    // Invalidate cache
+    this.invalidateModuleCache(orgId);
+
+    return this.getAllModulesConfig(orgId);
+  }
+
+  /** Check if a module is enabled (global master switch AND module toggle) */
+  async isModuleEnabled(module: ModuleName, orgId?: string): Promise<boolean> {
+    const config = await this.getAllModulesConfig(orgId);
+    return config.globalEnabled && config.modules[module].enabled;
+  }
+
+  /** Invalidate module config cache for an org */
+  private invalidateModuleCache(orgId?: string) {
+    const cacheKey = orgId || '__global__';
+    this.moduleConfigCache.delete(cacheKey);
+  }
+
+  /** Build combined module configuration directive for agent system prompt */
+  async getModulesDirective(orgId?: string): Promise<string> {
+    const config = await this.getAllModulesConfig(orgId);
+
+    if (!config.globalEnabled) {
+      return `=== MODULE CONFIGURATION ===\nALL MODULES DISABLED. Do not initiate any work, respond to messages, or participate in meetings.\n=== END MODULE CONFIGURATION ===`;
+    }
+
+    const sections: string[] = ['=== MODULE CONFIGURATION ==='];
+
+    for (const mod of MODULE_NAMES) {
+      const mc = config.modules[mod];
+      const label = MODULE_LABELS[mod];
+
+      if (!mc.enabled) {
+        sections.push(`\n[${label}] DISABLED\n- Do NOT interact with ${label.toLowerCase()}. Ignore ${label.toLowerCase()}-related requests and activity.`);
+        continue;
+      }
+
+      const actLabel = ACTIVITY_LABELS[mc.activityLevel] || 'Balanced';
+      const autLabel = AUTONOMY_LABELS[mc.autonomyLevel] || 'Balanced';
+
+      sections.push(`\n[${label}] ENABLED | Activity: ${actLabel} (${mc.activityLevel}/5) | Autonomy: ${autLabel} (${mc.autonomyLevel}/5)`);
+      sections.push(`- ${this.getActivityDescription(mod, mc.activityLevel)}`);
+      sections.push(`- ${this.getAutonomyDescription(mc.autonomyLevel)}`);
+    }
+
+    sections.push('\n=== END MODULE CONFIGURATION ===');
+    return sections.join('\n');
+  }
+
+  /** Get activity description for a specific module and level */
+  private getActivityDescription(module: ModuleName, level: number): string {
+    const descriptions: Record<ModuleName, Record<number, string>> = {
+      tasks: {
+        1: 'Only execute tasks that are explicitly assigned to you. Do not create or suggest tasks.',
+        2: 'Pick up assigned tasks promptly. Do not create tasks proactively.',
+        3: 'Pick up assigned tasks and suggest improvements or follow-up tasks when relevant.',
+        4: 'Proactively create tasks, flag blockers, and suggest work items. Drive task progress.',
+        5: 'Autonomously create, organize, and prioritize tasks. Continuously monitor and drive all task work.',
+      },
+      comms: {
+        1: 'Only respond in channels when directly @mentioned or asked a question.',
+        2: 'Respond to direct questions and relevant discussions in your channels.',
+        3: 'Participate in relevant discussions and offer helpful input when appropriate.',
+        4: 'Initiate topic-relevant discussions and proactively share updates and insights.',
+        5: 'Actively monitor all channels, initiate discussions, and drive conversations forward.',
+      },
+      meetings: {
+        1: 'Only speak in meetings when directly asked a question.',
+        2: 'Contribute when the topic matches your expertise. Keep responses concise.',
+        3: 'Actively contribute opinions, vote on decisions, and offer suggestions.',
+        4: 'Propose agenda items, drive decisions, and follow up on action items.',
+        5: 'Schedule meetings proactively, drive full agendas, and ensure follow-through on all outcomes.',
+      },
+      goals: {
+        1: 'Only work on goals when explicitly tasked to do so.',
+        2: 'Track goal progress when prompted. Report status when asked.',
+        3: 'Periodically review goal progress and suggest actions to stay on track.',
+        4: 'Proactively create tasks to advance goals. Flag risks and blockers early.',
+        5: 'Drive goal strategy autonomously. Create subgoals, assign work, and continuously push progress.',
+      },
+      projects: {
+        1: 'Only manage projects when explicitly told to do so.',
+        2: 'Track project deadlines and report status when asked.',
+        3: 'Monitor project timelines, flag risks, and suggest adjustments.',
+        4: 'Proactively create tasks, adjust priorities, and coordinate team members for projects.',
+        5: 'Full project orchestration — plan, assign, track, and drive all project work autonomously.',
+      },
+    };
+    return descriptions[module]?.[level] || descriptions[module]?.[3] || '';
+  }
+
+  /** Get autonomy description for a given level */
+  private getAutonomyDescription(level: number): string {
+    const descriptions: Record<number, string> = {
+      1: 'Work independently. Only ask for help when you genuinely cannot do the work.',
+      2: 'Prefer independent work. Delegate only when specialized expertise is required.',
+      3: 'Use judgment — handle simple work alone, involve the team for complex multi-discipline tasks.',
+      4: 'Default to teamwork. Think "who is the best person for this?" before doing work yourself.',
+      5: 'Maximum collaboration. Identify and involve all relevant specialists. Create subtasks for each.',
+    };
+    return descriptions[level] || descriptions[3];
   }
 }

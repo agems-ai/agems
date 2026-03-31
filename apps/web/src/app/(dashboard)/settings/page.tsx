@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 
 export default function SettingsPage() {
-  const [tab, setTab] = useState<'llm' | 'platform' | 'n8n' | 'tasks' | 'prompts' | 'system'>('llm');
+  const [tab, setTab] = useState<'llm' | 'platform' | 'n8n' | 'modules' | 'prompts' | 'system'>('llm');
 
   // LLM Keys
   const [llmKeys, setLlmKeys] = useState<Record<string, { set: boolean; masked: string }>>({});
@@ -23,14 +23,27 @@ export default function SettingsPage() {
   const [savingPlatform, setSavingPlatform] = useState(false);
   const [platformSaved, setPlatformSaved] = useState(false);
 
-  // Task Agents
-  const [taskAgentsEnabled, setTaskAgentsEnabled] = useState(true);
+  // Module Settings
+  type ModuleName = 'tasks' | 'comms' | 'meetings' | 'goals' | 'projects';
+  interface ModuleConfig { enabled: boolean; activityLevel: number; autonomyLevel: number; }
+  const defaultModules: Record<ModuleName, ModuleConfig> = {
+    tasks: { enabled: true, activityLevel: 3, autonomyLevel: 3 },
+    comms: { enabled: true, activityLevel: 3, autonomyLevel: 3 },
+    meetings: { enabled: true, activityLevel: 3, autonomyLevel: 3 },
+    goals: { enabled: true, activityLevel: 3, autonomyLevel: 3 },
+    projects: { enabled: true, activityLevel: 3, autonomyLevel: 3 },
+  };
+  const [globalEnabled, setGlobalEnabled] = useState(true);
+  const [modules, setModules] = useState<Record<ModuleName, ModuleConfig>>(defaultModules);
+  const [savingModules, setSavingModules] = useState(false);
+  const [modulesSaved, setModulesSaved] = useState(false);
+  const [tasksExpanded, setTasksExpanded] = useState(false);
+  // Task advanced settings (kept via legacy endpoint)
   const [taskInterval, setTaskInterval] = useState(60);
   const [reviewInterval, setReviewInterval] = useState(300);
   const [reviewBudget, setReviewBudget] = useState(1.0);
-  const [autonomyLevel, setAutonomyLevel] = useState(3);
-  const [savingTasks, setSavingTasks] = useState(false);
-  const [tasksSaved, setTasksSaved] = useState(false);
+  const [savingTaskAdvanced, setSavingTaskAdvanced] = useState(false);
+  const [taskAdvancedSaved, setTaskAdvancedSaved] = useState(false);
 
   // System Prompts
   const [preamble, setPreamble] = useState('');
@@ -69,12 +82,14 @@ export default function SettingsPage() {
       setN8nConfig(c);
       setN8nUrl(c.url);
     }).catch(() => {});
+    api.getModulesConfig().then((c) => {
+      setGlobalEnabled(c.globalEnabled);
+      setModules(c.modules as Record<ModuleName, ModuleConfig>);
+    }).catch(() => {});
     api.getTaskAgentsConfig().then((c) => {
-      setTaskAgentsEnabled(c.enabled);
       setTaskInterval(c.interval);
       setReviewInterval(c.reviewInterval);
       setReviewBudget(c.reviewBudget);
-      setAutonomyLevel(c.autonomyLevel);
     }).catch(() => {});
     api.getSystemPrompts().then((p) => {
       setPreamble(p.agems_preamble || '');
@@ -130,7 +145,7 @@ export default function SettingsPage() {
         {[
           { key: 'llm', label: 'LLM Keys' },
           { key: 'platform', label: 'Platform' },
-          { key: 'tasks', label: 'Task Agents' },
+          { key: 'modules', label: 'AI Modules' },
           { key: 'prompts', label: 'System Prompts' },
           { key: 'n8n', label: 'N8N' },
           { key: 'system', label: 'System' },
@@ -239,212 +254,226 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {tab === 'tasks' && (
+      {tab === 'modules' && (() => {
+        const moduleList: { key: ModuleName; label: string; icon: string; desc: string }[] = [
+          { key: 'tasks', label: 'Tasks', icon: '\u2611\uFE0F', desc: 'Execute, review, and create tasks' },
+          { key: 'comms', label: 'Comms', icon: '\uD83D\uDCAC', desc: 'Respond to messages in channels' },
+          { key: 'meetings', label: 'Meetings', icon: '\uD83D\uDCC5', desc: 'Participate in meetings and vote' },
+          { key: 'goals', label: 'Goals', icon: '\uD83C\uDFAF', desc: 'Track and advance goals' },
+          { key: 'projects', label: 'Projects', icon: '\uD83D\uDCC1', desc: 'Manage project work' },
+        ];
+        const activityLabels: Record<number, string> = {
+          1: 'Passive \u2014 Only when explicitly asked',
+          2: 'Reactive \u2014 Responds to assigned work',
+          3: 'Balanced \u2014 Picks up work + suggests',
+          4: 'Proactive \u2014 Creates work, flags blockers',
+          5: 'Aggressive \u2014 Full autonomous drive',
+        };
+        const autonomyLabels: Record<number, string> = {
+          1: 'Solo \u2014 Work independently',
+          2: 'Lean \u2014 Mostly independent',
+          3: 'Balanced \u2014 Use judgment',
+          4: 'Team-first \u2014 Delegate by default',
+          5: 'Full team \u2014 Maximum collaboration',
+        };
+        const updateModule = (mod: ModuleName, patch: Partial<ModuleConfig>) => {
+          setModules(prev => ({ ...prev, [mod]: { ...prev[mod], ...patch } }));
+        };
+        const handleSaveModules = async () => {
+          setSavingModules(true);
+          try {
+            const res = await api.setModulesConfig({ globalEnabled, modules });
+            setGlobalEnabled(res.globalEnabled);
+            setModules(res.modules as Record<ModuleName, ModuleConfig>);
+            setModulesSaved(true);
+            setTimeout(() => setModulesSaved(false), 2000);
+          } finally { setSavingModules(false); }
+        };
+        const handleSaveTaskAdvanced = async () => {
+          setSavingTaskAdvanced(true);
+          try {
+            const res = await api.setTaskAgentsConfig({ interval: taskInterval, reviewInterval, reviewBudget });
+            setTaskInterval(res.interval);
+            setReviewInterval(res.reviewInterval);
+            setReviewBudget(res.reviewBudget);
+            setTaskAdvancedSaved(true);
+            setTimeout(() => setTaskAdvancedSaved(false), 2000);
+          } finally { setSavingTaskAdvanced(false); }
+        };
+
+        return (
         <div className="space-y-4">
+          {/* Global Master Switch */}
           <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-3">
               <div>
-                <h3 className="font-semibold">Agent Task Execution</h3>
-                <p className="text-xs text-[var(--muted)]">Control whether agents automatically pick up and execute assigned tasks</p>
+                <h3 className="font-semibold">AI Agent Execution</h3>
+                <p className="text-xs text-[var(--muted)]">Master switch for all agent interactions across all modules</p>
               </div>
               <button
-                onClick={async () => {
-                  const newVal = !taskAgentsEnabled;
-                  setTaskAgentsEnabled(newVal);
-                  setSavingTasks(true);
-                  try {
-                    const res = await api.setTaskAgentsConfig({ enabled: newVal });
-                    setTaskAgentsEnabled(res.enabled);
-                  } catch { setTaskAgentsEnabled(!newVal); }
-                  finally { setSavingTasks(false); }
-                }}
-                disabled={savingTasks}
-                className={`relative w-14 h-7 rounded-full transition-colors duration-200 ${
-                  taskAgentsEnabled ? 'bg-emerald-500' : 'bg-gray-600'
-                }`}
+                onClick={() => setGlobalEnabled(!globalEnabled)}
+                className={`relative w-14 h-7 rounded-full transition-colors duration-200 ${globalEnabled ? 'bg-emerald-500' : 'bg-gray-600'}`}
               >
-                <span className={`absolute top-0.5 left-0.5 w-6 h-6 bg-white rounded-full transition-transform duration-200 ${
-                  taskAgentsEnabled ? 'translate-x-7' : 'translate-x-0'
-                }`} />
+                <span className={`absolute top-0.5 left-0.5 w-6 h-6 bg-white rounded-full transition-transform duration-200 ${globalEnabled ? 'translate-x-7' : 'translate-x-0'}`} />
               </button>
             </div>
-
-            <div className={`p-4 rounded-lg border ${taskAgentsEnabled ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-red-500/30 bg-red-500/10'}`}>
+            <div className={`p-3 rounded-lg border ${globalEnabled ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-red-500/30 bg-red-500/10'}`}>
               <div className="flex items-center gap-2">
-                <span className={`w-2.5 h-2.5 rounded-full ${taskAgentsEnabled ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`} />
-                <span className={`text-sm font-medium ${taskAgentsEnabled ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {taskAgentsEnabled ? 'Agents are actively executing tasks' : 'All agent task execution is paused'}
+                <span className={`w-2.5 h-2.5 rounded-full ${globalEnabled ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`} />
+                <span className={`text-sm font-medium ${globalEnabled ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {globalEnabled ? 'Agents are active across all enabled modules' : 'All agent interactions are paused'}
                 </span>
               </div>
-              <p className="text-xs text-[var(--muted)] mt-1 ml-4.5">
-                {taskAgentsEnabled
-                  ? 'The scheduler picks up pending tasks and assigns them to agents automatically.'
-                  : 'No new tasks will be started. Tasks already in progress will finish, but no new ones will begin.'}
-              </p>
             </div>
           </div>
 
-          <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5">
-            <h3 className="font-semibold mb-1">Autonomy Level</h3>
-            <p className="text-xs text-[var(--muted)] mb-4">
-              Controls how agents balance independent work vs team collaboration. Low = agents do everything themselves. High = agents delegate and coordinate with specialists.
-            </p>
+          {/* Module Cards Grid */}
+          <div className={`grid grid-cols-1 md:grid-cols-2 gap-4 ${!globalEnabled ? 'opacity-40 pointer-events-none' : ''}`}>
+            {moduleList.map(({ key: mod, label, icon, desc }) => {
+              const mc = modules[mod];
+              return (
+                <div key={mod} className={`bg-[var(--card)] border rounded-xl p-5 transition-all ${mc.enabled ? 'border-[var(--border)]' : 'border-[var(--border)] opacity-60'}`}>
+                  {/* Header with toggle */}
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">{icon}</span>
+                      <div>
+                        <h3 className="font-semibold">{label}</h3>
+                        <p className="text-xs text-[var(--muted)]">{desc}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => updateModule(mod, { enabled: !mc.enabled })}
+                      className={`relative w-12 h-6 rounded-full transition-colors duration-200 ${mc.enabled ? 'bg-emerald-500' : 'bg-gray-600'}`}
+                    >
+                      <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform duration-200 ${mc.enabled ? 'translate-x-6' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
 
-            <div className="space-y-3">
-              <div className="flex items-center gap-4">
-                <span className="text-xs text-[var(--muted)] w-10">Solo</span>
-                <input
-                  type="range"
-                  min={1}
-                  max={5}
-                  step={1}
-                  value={autonomyLevel}
-                  onChange={(e) => setAutonomyLevel(parseInt(e.target.value))}
-                  className="flex-1 h-2 rounded-lg appearance-none cursor-pointer accent-[var(--accent)]"
-                  style={{ background: `linear-gradient(to right, var(--accent) ${(autonomyLevel - 1) * 25}%, var(--border) ${(autonomyLevel - 1) * 25}%)` }}
-                />
-                <span className="text-xs text-[var(--muted)] w-16 text-right">Full team</span>
-              </div>
+                  {/* Body - activity & autonomy levels */}
+                  <div className={`space-y-4 ${!mc.enabled ? 'opacity-30 pointer-events-none' : ''}`}>
+                    {/* Activity Level */}
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-medium text-[var(--muted)]">Activity Level</span>
+                        <span className="text-xs text-[var(--muted)]">{mc.activityLevel}/5</span>
+                      </div>
+                      <div className="flex gap-1.5">
+                        {[1, 2, 3, 4, 5].map(n => (
+                          <button key={n} onClick={() => updateModule(mod, { activityLevel: n })}
+                            className={`flex-1 h-7 rounded text-xs font-bold transition-all ${
+                              mc.activityLevel === n
+                                ? 'bg-[var(--accent)] text-white scale-105'
+                                : 'bg-[var(--bg)] border border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)]'
+                            }`}
+                          >{n}</button>
+                        ))}
+                      </div>
+                      <div className="flex justify-between mt-1">
+                        <span className="text-[10px] text-[var(--muted)]">Passive</span>
+                        <span className="text-[10px] text-[var(--muted)]">Aggressive</span>
+                      </div>
+                      <div className={`mt-2 p-2 rounded text-xs ${
+                        mc.activityLevel <= 2 ? 'bg-blue-500/10 text-blue-300' : mc.activityLevel === 3 ? 'bg-yellow-500/10 text-yellow-300' : 'bg-orange-500/10 text-orange-300'
+                      }`}>
+                        {activityLabels[mc.activityLevel]}
+                      </div>
+                    </div>
 
-              <div className="flex justify-between px-10">
-                {[1, 2, 3, 4, 5].map(n => (
-                  <button
-                    key={n}
-                    onClick={() => setAutonomyLevel(n)}
-                    className={`w-8 h-8 rounded-full text-xs font-bold transition-all ${
-                      autonomyLevel === n
-                        ? 'bg-[var(--accent)] text-white scale-110'
-                        : 'bg-[var(--bg)] border border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)]'
-                    }`}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
+                    {/* Autonomy Level */}
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-medium text-[var(--muted)]">Autonomy Level</span>
+                        <span className="text-xs text-[var(--muted)]">{mc.autonomyLevel}/5</span>
+                      </div>
+                      <div className="flex gap-1.5">
+                        {[1, 2, 3, 4, 5].map(n => (
+                          <button key={n} onClick={() => updateModule(mod, { autonomyLevel: n })}
+                            className={`flex-1 h-7 rounded text-xs font-bold transition-all ${
+                              mc.autonomyLevel === n
+                                ? 'bg-purple-500 text-white scale-105'
+                                : 'bg-[var(--bg)] border border-[var(--border)] text-[var(--muted)] hover:border-purple-400'
+                            }`}
+                          >{n}</button>
+                        ))}
+                      </div>
+                      <div className="flex justify-between mt-1">
+                        <span className="text-[10px] text-[var(--muted)]">Solo</span>
+                        <span className="text-[10px] text-[var(--muted)]">Full team</span>
+                      </div>
+                      <div className={`mt-2 p-2 rounded text-xs ${
+                        mc.autonomyLevel <= 2 ? 'bg-blue-500/10 text-blue-300' : mc.autonomyLevel === 3 ? 'bg-yellow-500/10 text-yellow-300' : 'bg-purple-500/10 text-purple-300'
+                      }`}>
+                        {autonomyLabels[mc.autonomyLevel]}
+                      </div>
+                    </div>
 
-              <div className={`p-3 rounded-lg border text-sm ${
-                autonomyLevel <= 2
-                  ? 'border-blue-500/30 bg-blue-500/10 text-blue-300'
-                  : autonomyLevel === 3
-                  ? 'border-yellow-500/30 bg-yellow-500/10 text-yellow-300'
-                  : 'border-purple-500/30 bg-purple-500/10 text-purple-300'
-              }`}>
-                {autonomyLevel === 1 && 'Solo — Agents work independently. Only ask for help when they truly cannot do the task.'}
-                {autonomyLevel === 2 && 'Lean — Agents prefer self-reliance. Delegate only when specialized expertise is required.'}
-                {autonomyLevel === 3 && 'Balanced — Agents use judgment. Simple tasks done alone, complex projects involve the team.'}
-                {autonomyLevel === 4 && 'Team-first — Agents default to delegation. Create tasks for specialists even if they could do it.'}
-                {autonomyLevel === 5 && 'Full collaboration — Every project involves all relevant specialists. Maximum coordination.'}
-              </div>
-
-              <button
-                onClick={async () => {
-                  setSavingTasks(true);
-                  try {
-                    const res = await api.setTaskAgentsConfig({ autonomyLevel });
-                    setAutonomyLevel(res.autonomyLevel);
-                    setTasksSaved(true);
-                    setTimeout(() => setTasksSaved(false), 2000);
-                  } finally { setSavingTasks(false); }
-                }}
-                disabled={savingTasks}
-                className="px-6 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90 disabled:opacity-50"
-              >
-                {savingTasks ? 'Saving...' : 'Save Autonomy Level'}
-              </button>
-              {tasksSaved && <span className="text-green-500 text-sm ml-3">Saved!</span>}
-            </div>
-          </div>
-
-          <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5">
-            <h3 className="font-semibold mb-3">Scheduler Interval</h3>
-            <p className="text-xs text-[var(--muted)] mb-3">How often the scheduler checks for pending tasks and recurring task resets</p>
-            <div className="flex items-center gap-3">
-              <input
-                type="number"
-                min={10}
-                max={3600}
-                value={taskInterval}
-                onChange={(e) => setTaskInterval(parseInt(e.target.value) || 60)}
-                className="w-28 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
-              />
-              <span className="text-sm text-[var(--muted)]">seconds</span>
-              <span className="text-xs text-[var(--muted)]">(min 10s)</span>
-            </div>
-            <div className="flex items-center gap-3 mt-4">
-              <button
-                onClick={async () => {
-                  setSavingTasks(true);
-                  try {
-                    const res = await api.setTaskAgentsConfig({ interval: taskInterval });
-                    setTaskInterval(res.interval);
-                    setTasksSaved(true);
-                    setTimeout(() => setTasksSaved(false), 2000);
-                  } finally { setSavingTasks(false); }
-                }}
-                disabled={savingTasks}
-                className="px-6 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90 disabled:opacity-50"
-              >
-                {savingTasks ? 'Saving...' : 'Save Interval'}
-              </button>
-              {tasksSaved && <span className="text-green-500 text-sm">Saved! Scheduler restarted.</span>}
-            </div>
-          </div>
-
-          <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5">
-            <h3 className="font-semibold mb-3">Review Cycle</h3>
-            <p className="text-xs text-[var(--muted)] mb-3">How often agents are reminded to progress IN_PROGRESS tasks, review work, and verify results</p>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Review Interval</label>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="number"
-                    min={30}
-                    max={3600}
-                    value={reviewInterval}
-                    onChange={(e) => setReviewInterval(parseInt(e.target.value) || 300)}
-                    className="w-28 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
-                  />
-                  <span className="text-sm text-[var(--muted)]">seconds</span>
-                  <span className="text-xs text-[var(--muted)]">(min 30s)</span>
+                    {/* Tasks advanced settings (collapsible) */}
+                    {mod === 'tasks' && (
+                      <div className="border-t border-[var(--border)] pt-3 mt-3">
+                        <button onClick={() => setTasksExpanded(!tasksExpanded)}
+                          className="flex items-center gap-1 text-xs font-medium text-[var(--muted)] hover:text-white transition">
+                          <span className={`transition-transform ${tasksExpanded ? 'rotate-90' : ''}`}>{'\u25B6'}</span>
+                          Advanced Settings
+                        </button>
+                        {tasksExpanded && (
+                          <div className="mt-3 space-y-3">
+                            <div>
+                              <label className="block text-xs font-medium mb-1">Scheduler Interval</label>
+                              <div className="flex items-center gap-2">
+                                <input type="number" min={10} max={3600} value={taskInterval}
+                                  onChange={(e) => setTaskInterval(parseInt(e.target.value) || 60)}
+                                  className="w-20 px-2 py-1 rounded border border-[var(--border)] bg-[var(--bg)] text-xs" />
+                                <span className="text-xs text-[var(--muted)]">sec</span>
+                              </div>
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium mb-1">Review Interval</label>
+                              <div className="flex items-center gap-2">
+                                <input type="number" min={30} max={3600} value={reviewInterval}
+                                  onChange={(e) => setReviewInterval(parseInt(e.target.value) || 300)}
+                                  className="w-20 px-2 py-1 rounded border border-[var(--border)] bg-[var(--bg)] text-xs" />
+                                <span className="text-xs text-[var(--muted)]">sec</span>
+                              </div>
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium mb-1">Daily Review Budget</label>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-[var(--muted)]">$</span>
+                                <input type="number" min={0} max={100} step={0.1} value={reviewBudget}
+                                  onChange={(e) => setReviewBudget(parseFloat(e.target.value) || 1.0)}
+                                  className="w-20 px-2 py-1 rounded border border-[var(--border)] bg-[var(--bg)] text-xs" />
+                                <span className="text-xs text-[var(--muted)]">/day (0 = no limit)</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button onClick={handleSaveTaskAdvanced} disabled={savingTaskAdvanced}
+                                className="px-4 py-1.5 bg-[var(--accent)] text-white rounded text-xs hover:opacity-90 disabled:opacity-50">
+                                {savingTaskAdvanced ? 'Saving...' : 'Save Advanced'}
+                              </button>
+                              {taskAdvancedSaved && <span className="text-green-500 text-xs">Saved!</span>}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Daily Review Budget per Agent</label>
-                <div className="flex items-center gap-3">
-                  <span className="text-sm text-[var(--muted)]">$</span>
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    step={0.1}
-                    value={reviewBudget}
-                    onChange={(e) => setReviewBudget(parseFloat(e.target.value) || 1.0)}
-                    className="w-28 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
-                  />
-                  <span className="text-xs text-[var(--muted)]">USD/day per agent (0 = unlimited)</span>
-                </div>
-              </div>
-              <button
-                onClick={async () => {
-                  setSavingTasks(true);
-                  try {
-                    const res = await api.setTaskAgentsConfig({ reviewInterval, reviewBudget });
-                    setReviewInterval(res.reviewInterval);
-                    setReviewBudget(res.reviewBudget);
-                    setTasksSaved(true);
-                    setTimeout(() => setTasksSaved(false), 2000);
-                  } finally { setSavingTasks(false); }
-                }}
-                disabled={savingTasks}
-                className="px-6 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90 disabled:opacity-50"
-              >
-                {savingTasks ? 'Saving...' : 'Save Review Settings'}
-              </button>
-            </div>
+              );
+            })}
+          </div>
+
+          {/* Save All Button */}
+          <div className="flex items-center gap-3">
+            <button onClick={handleSaveModules} disabled={savingModules}
+              className="px-6 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90 disabled:opacity-50">
+              {savingModules ? 'Saving...' : 'Save All Module Settings'}
+            </button>
+            {modulesSaved && <span className="text-green-500 text-sm">All module settings saved!</span>}
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {tab === 'prompts' && (
         <div className="space-y-4">
