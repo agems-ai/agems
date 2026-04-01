@@ -278,12 +278,11 @@ export default function DashboardPage() {
       {/* Mobile tab bar */}
       <div className="flex border-b border-[var(--border)] lg:hidden shrink-0">
         <button onClick={() => setDashTab('activity')} className={`flex-1 py-2.5 text-sm font-medium text-center transition ${dashTab === 'activity' ? 'text-white border-b-2 border-[var(--accent)]' : 'text-[var(--muted)]'}`}>Activity</button>
-        <button onClick={() => setDashTab('chat')} className={`flex-1 py-2.5 text-sm font-medium text-center transition ${dashTab === 'chat' ? 'text-white border-b-2 border-[var(--accent)]' : 'text-[var(--muted)]'}`}>Chat</button>
         <button onClick={() => setDashTab('widgets')} className={`flex-1 py-2.5 text-sm font-medium text-center transition ${dashTab === 'widgets' ? 'text-white border-b-2 border-[var(--accent)]' : 'text-[var(--muted)]'}`}>Widgets</button>
       </div>
 
       {/* ═══════ LEFT: Activity ═══════ */}
-      <div className={`flex-1 flex flex-col min-w-0 overflow-auto lg:border-r border-[var(--border)] ${dashTab !== 'activity' ? 'hidden lg:hidden' : ''} ${dashTab === 'activity' ? '' : 'lg:hidden'}`}>
+      <div className={`flex-1 flex flex-col min-w-0 overflow-auto lg:border-r border-[var(--border)] ${dashTab !== 'activity' ? 'hidden lg:flex' : ''}`}>
         <div className="px-4 py-3 border-b border-[var(--border)] flex items-center gap-2 shrink-0">
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
           <h2 className="font-semibold">Agent Activity</h2>
@@ -326,8 +325,8 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ═══════ LEFT: Chat ═══════ */}
-      <div className={`flex-1 flex flex-col min-w-0 overflow-hidden lg:border-r border-[var(--border)] ${dashTab !== 'chat' ? 'hidden lg:flex' : ''}`}>
+      {/* ═══════ LEFT: Chat (hidden — Gemma is now a floating widget) ═══════ */}
+      <div className="hidden">
         <div className="px-3 md:px-4 py-3 border-b border-[var(--border)] flex items-center gap-2 md:gap-3 shrink-0">
           <BarChart3 size={20} className="text-[var(--accent)] hidden md:block" />
           <h1 className="font-semibold text-lg hidden md:block">Dashboard</h1>
