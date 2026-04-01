@@ -263,6 +263,7 @@ export default function DashboardPage() {
 
   const selectedAgent = agents.find((a) => a.id === selectedAgentId);
   const [dashTab, setDashTab] = useState<'activity' | 'chat' | 'widgets'>('activity');
+  const [expandedExec, setExpandedExec] = useState<string | null>(null);
 
   // Agent Activity data
   const [activityData, setActivityData] = useState<{ running: any[]; recent: any[] }>({ running: [], recent: [] });
@@ -272,6 +273,27 @@ export default function DashboardPage() {
     const iv = setInterval(fetchActivity, 5000);
     return () => clearInterval(iv);
   }, []);
+
+  const triggerLabels: Record<string, string> = {
+    TASK: 'Task', MESSAGE: 'Message', SCHEDULE: 'Schedule', EVENT: 'Goal/Event',
+    MANUAL: 'Manual', MEETING: 'Meeting', TELEGRAM: 'Telegram', APPROVAL: 'Approval',
+  };
+  const getExecLink = (e: any): { label: string; href: string } | null => {
+    if (e.triggerType === 'TASK' && e.triggerId) return { label: 'Open Task', href: `/tasks/${e.triggerId}` };
+    if (e.triggerType === 'MESSAGE' && e.triggerId) return { label: 'Open Channel', href: `/comms?channel=${e.triggerId}` };
+    if (e.triggerType === 'MEETING' && e.triggerId) return { label: 'Open Meeting', href: `/meetings?id=${e.triggerId}` };
+    if (e.triggerType === 'TELEGRAM' && e.triggerId) return { label: 'Open Channel', href: `/comms?channel=${e.triggerId}` };
+    if (e.triggerType === 'EVENT' && e.triggerId) return { label: 'Open Goal', href: `/goals` };
+    if (e.agent?.id) return { label: 'Open Agent', href: `/agents/${e.agent.id}` };
+    return null;
+  };
+  const timeAgo = (date: string) => {
+    const d = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
+    if (d < 60) return `${d}s`;
+    if (d < 3600) return `${Math.floor(d/60)}m`;
+    if (d < 86400) return `${Math.floor(d/3600)}h`;
+    return `${Math.floor(d/86400)}d`;
+  };
 
   return (
     <div className="flex flex-col lg:flex-row h-[calc(100vh-3.5rem)] lg:h-screen overflow-hidden">
@@ -294,33 +316,88 @@ export default function DashboardPage() {
             <h3 className="text-sm font-medium text-[var(--muted)] mb-2">Running Now ({activityData.running.length})</h3>
             {activityData.running.length === 0 ? (
               <div className="text-xs text-[var(--muted)] py-6 text-center">No agents executing right now</div>
-            ) : activityData.running.map((e: any) => (
-              <div key={e.id} className="border border-emerald-500/30 bg-emerald-500/10 rounded-lg p-3 mb-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-medium text-sm">{e.agent?.name || 'Agent'}</span>
-                  <span className="text-xs font-mono text-emerald-400">{Math.floor((Date.now() - new Date(e.startedAt).getTime()) / 1000)}s</span>
+            ) : activityData.running.map((e: any) => {
+              const link = getExecLink(e);
+              const isExpanded = expandedExec === e.id;
+              return (
+                <div key={e.id} className="border border-emerald-500/30 bg-emerald-500/10 rounded-lg mb-2 cursor-pointer hover:border-emerald-400/50 transition"
+                  onClick={() => setExpandedExec(isExpanded ? null : e.id)}>
+                  <div className="flex items-center justify-between p-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                      <span className="font-medium text-sm truncate">{e.agent?.name || 'Agent'}</span>
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 shrink-0">{triggerLabels[e.triggerType] || e.triggerType}</span>
+                    </div>
+                    <span className="text-xs font-mono text-emerald-400 shrink-0">{timeAgo(e.startedAt)}</span>
+                  </div>
+                  {isExpanded && (
+                    <div className="px-3 pb-3 pt-0 space-y-2 border-t border-emerald-500/20">
+                      <div className="grid grid-cols-2 gap-2 text-xs mt-2">
+                        <div><span className="text-[var(--muted)]">Started:</span> {new Date(e.startedAt).toLocaleTimeString()}</div>
+                        <div><span className="text-[var(--muted)]">Trigger:</span> {triggerLabels[e.triggerType] || e.triggerType}</div>
+                        {e.triggerId && <div className="col-span-2"><span className="text-[var(--muted)]">ID:</span> <span className="font-mono">{e.triggerId}</span></div>}
+                        {e.tokensUsed > 0 && <div><span className="text-[var(--muted)]">Tokens:</span> {e.tokensUsed}</div>}
+                        {e.costUsd > 0 && <div><span className="text-[var(--muted)]">Cost:</span> ${e.costUsd.toFixed(4)}</div>}
+                      </div>
+                      {link && (
+                        <a href={link.href} onClick={(ev) => ev.stopPropagation()}
+                          className="inline-flex items-center gap-1 text-xs text-[var(--accent)] hover:underline mt-1">
+                          {link.label} &rarr;
+                        </a>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <div className="text-xs text-[var(--muted)] mt-1">{e.triggerType}{e.triggerId ? ` \u2022 ${e.triggerId.substring(0, 8)}...` : ''}</div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           {/* Recent */}
           <div>
             <h3 className="text-sm font-medium text-[var(--muted)] mb-2">Recent Activity</h3>
             {activityData.recent.length === 0 ? (
               <div className="text-xs text-[var(--muted)] py-4 text-center">No recent activity</div>
-            ) : activityData.recent.map((e: any) => (
-              <div key={e.id} className="flex items-center gap-2 py-2 border-b border-[var(--border)] last:border-0">
-                <span className={`text-xs ${e.status === 'COMPLETED' ? 'text-green-400' : e.status === 'FAILED' ? 'text-red-400' : e.status === 'WAITING_HITL' ? 'text-amber-400' : 'text-gray-400'}`}>
-                  {e.status === 'COMPLETED' ? '\u2713' : e.status === 'FAILED' ? '\u2717' : e.status === 'WAITING_HITL' ? '\u23F3' : '\u25CB'}
-                </span>
-                <span className="text-sm font-medium flex-1 truncate">{e.agent?.name || 'Agent'}</span>
-                <span className="text-[10px] text-[var(--muted)]">{e.triggerType}</span>
-                <span className="text-[10px] text-[var(--muted)]">
-                  {(() => { const d = Math.floor((Date.now() - new Date(e.startedAt).getTime()) / 1000); return d < 60 ? `${d}s` : d < 3600 ? `${Math.floor(d/60)}m` : `${Math.floor(d/3600)}h`; })()}
-                </span>
-              </div>
-            ))}
+            ) : activityData.recent.map((e: any) => {
+              const link = getExecLink(e);
+              const isExpanded = expandedExec === e.id;
+              const statusIcon = e.status === 'COMPLETED' ? '\u2713' : e.status === 'FAILED' ? '\u2717' : e.status === 'WAITING_HITL' ? '\u23F3' : '\u25CB';
+              const statusColor = e.status === 'COMPLETED' ? 'text-green-400' : e.status === 'FAILED' ? 'text-red-400' : e.status === 'WAITING_HITL' ? 'text-amber-400' : 'text-gray-400';
+              return (
+                <div key={e.id} className="border-b border-[var(--border)] last:border-0 cursor-pointer hover:bg-[var(--hover)] transition rounded"
+                  onClick={() => setExpandedExec(isExpanded ? null : e.id)}>
+                  <div className="flex items-center gap-2 py-2.5 px-1">
+                    <span className={`text-xs ${statusColor}`}>{statusIcon}</span>
+                    <span className="text-sm font-medium flex-1 truncate">{e.agent?.name || 'Agent'}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg)] text-[var(--muted)]">{triggerLabels[e.triggerType] || e.triggerType}</span>
+                    <span className="text-[10px] text-[var(--muted)]">{timeAgo(e.startedAt)}</span>
+                  </div>
+                  {isExpanded && (
+                    <div className="px-1 pb-2.5 space-y-2">
+                      <div className="grid grid-cols-2 gap-1.5 text-xs">
+                        <div><span className="text-[var(--muted)]">Status:</span> <span className={statusColor}>{e.status}</span></div>
+                        <div><span className="text-[var(--muted)]">Started:</span> {new Date(e.startedAt).toLocaleTimeString()}</div>
+                        {e.endedAt && <div><span className="text-[var(--muted)]">Ended:</span> {new Date(e.endedAt).toLocaleTimeString()}</div>}
+                        {e.triggerId && <div className="col-span-2"><span className="text-[var(--muted)]">ID:</span> <span className="font-mono text-[10px]">{e.triggerId}</span></div>}
+                        {e.tokensUsed > 0 && <div><span className="text-[var(--muted)]">Tokens:</span> {e.tokensUsed}</div>}
+                        {e.costUsd > 0 && <div><span className="text-[var(--muted)]">Cost:</span> ${e.costUsd.toFixed(4)}</div>}
+                        {e.error && <div className="col-span-2 text-red-400 truncate"><span className="text-[var(--muted)]">Error:</span> {e.error}</div>}
+                      </div>
+                      <div className="flex gap-3">
+                        {link && (
+                          <a href={link.href} onClick={(ev) => ev.stopPropagation()}
+                            className="text-xs text-[var(--accent)] hover:underline">
+                            {link.label} &rarr;
+                          </a>
+                        )}
+                        <a href={`/agents/${e.agent?.id || e.agentId}`} onClick={(ev) => ev.stopPropagation()}
+                          className="text-xs text-[var(--muted)] hover:text-white hover:underline">
+                          Agent profile
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
