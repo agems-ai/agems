@@ -1337,23 +1337,39 @@ export class RuntimeService {
     tools.push({
       name: 'agems_manage_agents',
       description: `Manage AGEMS platform agents. Actions:
-- "list" — list all agents with id, name, mission (role description), status, llmProvider, llmModel
+- "list" — list all agents in the org with id, name, mission, status, llmProvider, llmModel
 - "get" — get agent details by id
 - "update" — update agent fields (name, llmProvider, llmModel, systemPrompt, status, llmConfig, runtimeConfig)
-Use this to change agent models, prompts, configs, or check agent status.`,
+- "create" — create a new agent. Provide: name, slug, systemPrompt, mission. Optional: llmProvider, llmModel, type, values
+- "search_catalog" — search available agents in the catalog to import. Provide: query (search term)
+- "import_catalog" — import an agent from catalog by catalogAgentId. Automatically imports linked skills and tools.
+Use this to build your team: search catalog for specialists, import them, or create custom agents.`,
       parameters: z.object({
-        action: z.enum(['list', 'get', 'update']).describe('Action to perform'),
-        agentId: z.string().optional().describe('Agent ID (required for get/update)'),
+        action: z.enum(['list', 'get', 'update', 'create', 'search_catalog', 'import_catalog']).describe('Action to perform'),
+        agentId: z.string().optional().describe('Agent ID (for get/update)'),
+        catalogAgentId: z.string().optional().describe('Catalog agent ID (for import_catalog)'),
+        query: z.string().optional().describe('Search term (for search_catalog)'),
+        create: z.object({
+          name: z.string().describe('Agent name, e.g. "Alex — Frontend Developer"'),
+          slug: z.string().describe('URL slug, e.g. "alex-frontend-dev"'),
+          systemPrompt: z.string().describe('Instructions for the agent'),
+          mission: z.string().optional().describe('Brief role description'),
+          llmProvider: z.string().optional().describe('ANTHROPIC, OPENAI, GOOGLE, DEEPSEEK, MISTRAL'),
+          llmModel: z.string().optional().describe('e.g. deepseek-chat, claude-sonnet-4-5, gpt-4o'),
+          type: z.string().optional().describe('AUTONOMOUS (default), ASSISTANT, REACTIVE'),
+          values: z.array(z.string()).optional().describe('Agent values, e.g. ["quality", "speed"]'),
+        }).optional().describe('Agent data (for create action)'),
         updates: z.object({
           name: z.string().optional(),
-          llmProvider: z.string().optional().describe('ANTHROPIC, OPENAI, GOOGLE, DEEPSEEK, MISTRAL'),
-          llmModel: z.string().optional().describe('e.g. claude-sonnet-4-5, gpt-4o, etc.'),
+          llmProvider: z.string().optional(),
+          llmModel: z.string().optional(),
           systemPrompt: z.string().optional(),
-          llmConfig: z.string().optional().describe('JSON string of llmConfig overrides'),
-          runtimeConfig: z.string().optional().describe('JSON string of runtimeConfig overrides'),
+          status: z.string().optional().describe('ACTIVE, PAUSED, ARCHIVED'),
+          llmConfig: z.string().optional().describe('JSON string'),
+          runtimeConfig: z.string().optional().describe('JSON string'),
         }).optional().describe('Fields to update (for update action)'),
       }),
-      execute: async (params: { action: string; agentId?: string; updates?: any }) => {
+      execute: async (params: { action: string; agentId?: string; catalogAgentId?: string; query?: string; create?: any; updates?: any }) => {
         switch (params.action) {
           case 'list': {
             const agents = await this.prisma.agent.findMany({
@@ -1371,10 +1387,99 @@ Use this to change agent models, prompts, configs, or check agent status.`,
             });
             return a || { error: 'Agent not found' };
           }
+          case 'create': {
+            if (!params.create) return { error: 'create object is required with name, slug, systemPrompt' };
+            const c = params.create;
+            if (!c.name || !c.slug || !c.systemPrompt) return { error: 'name, slug, and systemPrompt are required' };
+            // Get org default LLM if not specified
+            const defaultProvider = await this.settings.get('default_llm_provider', agent.orgId) || 'DEEPSEEK';
+            const defaultModel = await this.settings.get('default_model', agent.orgId) || 'deepseek-chat';
+            const newAgent = await this.prisma.agent.create({
+              data: {
+                orgId: agent.orgId,
+                name: c.name,
+                slug: c.slug,
+                systemPrompt: c.systemPrompt,
+                mission: c.mission || '',
+                type: (c.type as any) || 'AUTONOMOUS',
+                llmProvider: (c.llmProvider as any) || defaultProvider,
+                llmModel: c.llmModel || defaultModel,
+                values: c.values || [],
+                llmConfig: {},
+                runtimeConfig: {},
+                ownerId: agent.ownerId,
+                status: 'ACTIVE',
+              },
+              select: { id: true, name: true, slug: true, status: true, mission: true, llmProvider: true, llmModel: true },
+            });
+            return { success: true, agent: newAgent, note: 'Agent created and ACTIVE. You can now assign tasks to it.' };
+          }
+          case 'search_catalog': {
+            const q = params.query || '';
+            const results = await this.prisma.catalogAgent.findMany({
+              where: q ? { OR: [
+                { name: { contains: q, mode: 'insensitive' } },
+                { description: { contains: q, mode: 'insensitive' } },
+                { mission: { contains: q, mode: 'insensitive' } },
+                { tags: { hasSome: [q.toLowerCase()] } },
+              ] } : {},
+              select: { id: true, name: true, slug: true, description: true, mission: true, tags: true, llmProvider: true, downloads: true },
+              orderBy: { downloads: 'desc' },
+              take: 10,
+            });
+            return { results, note: 'Use import_catalog with catalogAgentId to import an agent' };
+          }
+          case 'import_catalog': {
+            if (!params.catalogAgentId) return { error: 'catalogAgentId is required' };
+            const item = await this.prisma.catalogAgent.findUnique({ where: { id: params.catalogAgentId } });
+            if (!item) return { error: 'Catalog agent not found' };
+            // Check slug uniqueness
+            const suffix = Math.random().toString(36).substring(2, 8);
+            let slug = item.slug;
+            const existing = await this.prisma.agent.findFirst({ where: { slug, orgId: agent.orgId } });
+            if (existing) slug = `${item.slug}-${suffix}`;
+            const imported = await this.prisma.agent.create({
+              data: {
+                orgId: agent.orgId, name: item.name, slug, avatar: item.avatar,
+                type: item.type, systemPrompt: item.systemPrompt, mission: item.mission,
+                llmProvider: item.llmProvider, llmModel: item.llmModel,
+                llmConfig: item.llmConfig as any, runtimeConfig: item.runtimeConfig as any,
+                values: item.values as any, metadata: item.metadata as any,
+                ownerId: agent.ownerId, status: 'ACTIVE',
+              },
+              select: { id: true, name: true, slug: true, status: true, mission: true, llmProvider: true, llmModel: true },
+            });
+            // Import linked skills
+            if (item.skillSlugs?.length) {
+              for (const skillSlug of item.skillSlugs) {
+                try {
+                  let skill = await this.prisma.skill.findFirst({ where: { slug: skillSlug, orgId: agent.orgId } });
+                  if (!skill) {
+                    const cs = await this.prisma.catalogSkill.findUnique({ where: { slug: skillSlug } });
+                    if (cs) skill = await this.prisma.skill.create({ data: { orgId: agent.orgId, name: cs.name, slug: cs.slug, description: cs.description, content: cs.content, version: cs.version, type: cs.type, entryPoint: cs.entryPoint, configSchema: cs.configSchema as any } });
+                  }
+                  if (skill) await this.prisma.agentSkill.create({ data: { agentId: imported.id, skillId: skill.id } }).catch(() => {});
+                } catch {}
+              }
+            }
+            // Import linked tools
+            if (item.toolSlugs?.length) {
+              for (const toolSlug of item.toolSlugs) {
+                try {
+                  let tool = await this.prisma.tool.findFirst({ where: { name: toolSlug, orgId: agent.orgId } });
+                  if (!tool) {
+                    const ct = await this.prisma.catalogTool.findUnique({ where: { slug: toolSlug } });
+                    if (ct) tool = await this.prisma.tool.create({ data: { orgId: agent.orgId, name: ct.name, type: ct.type, config: ct.configTemplate as any, authType: ct.authType, authConfig: {} } });
+                  }
+                  if (tool) await this.prisma.agentTool.create({ data: { agentId: imported.id, toolId: tool.id, permissions: { read: true, write: false, execute: true } } }).catch(() => {});
+                } catch {}
+              }
+            }
+            return { success: true, agent: imported, note: `Imported "${item.name}" with ${item.skillSlugs?.length || 0} skills and ${item.toolSlugs?.length || 0} tools. Agent is ACTIVE.` };
+          }
           case 'update': {
             if (!params.agentId) return { error: 'agentId is required' };
             if (!params.updates) return { error: 'updates object is required' };
-            // Verify agent belongs to same org
             const target = await this.prisma.agent.findFirst({ where: { id: params.agentId, orgId: agent.orgId } });
             if (!target) return { error: 'Agent not found' };
             const data: any = {};
@@ -1382,18 +1487,18 @@ Use this to change agent models, prompts, configs, or check agent status.`,
             if (params.updates.llmProvider) data.llmProvider = params.updates.llmProvider;
             if (params.updates.llmModel) data.llmModel = params.updates.llmModel;
             if (params.updates.systemPrompt) data.systemPrompt = params.updates.systemPrompt;
+            if (params.updates.status) data.status = params.updates.status;
             if (params.updates.llmConfig) data.llmConfig = JSON.parse(params.updates.llmConfig);
             if (params.updates.runtimeConfig) data.runtimeConfig = JSON.parse(params.updates.runtimeConfig);
             if (Object.keys(data).length === 0) return { error: 'No valid fields to update' };
             const updated = await this.prisma.agent.update({
-              where: { id: params.agentId },
-              data,
-              select: { id: true, name: true, llmProvider: true, llmModel: true },
+              where: { id: params.agentId }, data,
+              select: { id: true, name: true, llmProvider: true, llmModel: true, status: true },
             });
             return { success: true, agent: updated };
           }
           default:
-            return { error: 'Invalid action. Use: list, get, update' };
+            return { error: 'Invalid action. Use: list, get, create, update, search_catalog, import_catalog' };
         }
       },
     });
