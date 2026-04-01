@@ -38,14 +38,15 @@ services:
       WEB_URL: ${WEB_URL:-https://agems.ai}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
-      CATALOG_API_URL: ${CATALOG_API_URL:-https://agems.ai}
+      CATALOG_API_URL: ${CATALOG_API_URL}
+      ALLOW_PRISMA_DB_PUSH_FALLBACK: ${ALLOW_PRISMA_DB_PUSH_FALLBACK:-false}
       NODE_OPTIONS: "--dns-result-order=ipv4first"
     volumes:
       - web_uploads:/app/apps/web/public/uploads
       - web_avatars:/app/apps/web/public/avatars
       - .:/app/host-repo:ro
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3001/api/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:3001/api/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -61,16 +62,18 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+        NEXT_PUBLIC_API_URL: ""
     ports:
       - "3000:3000"
+    environment:
+      HOSTNAME: "0.0.0.0"
     volumes:
       - web_avatars:/app/apps/web/public/avatars
       - web_uploads:/app/apps/web/public/uploads
     depends_on:
       - api
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3000/ || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://0.0.0.0:3000/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

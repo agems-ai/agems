@@ -1,4 +1,5 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
+import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 
@@ -13,9 +14,7 @@ export interface AIProviderConfig {
 export function createProvider(config: AIProviderConfig): any {
   switch (config.provider) {
     case 'ANTHROPIC': {
-      const anthropic = createAnthropic({
-        apiKey: config.apiKey,
-      });
+      const anthropic = createAnthropic({ apiKey: config.apiKey });
       return anthropic(config.model);
     }
     case 'OPENAI': {
@@ -27,9 +26,9 @@ export function createProvider(config: AIProviderConfig): any {
       return google(config.model);
     }
     case 'DEEPSEEK': {
-      const deepseek = createOpenAI({
+      const deepseek = createDeepSeek({
         apiKey: config.apiKey,
-        baseURL: config.baseUrl || 'https://api.deepseek.com',
+        baseURL: config.baseUrl,
       });
       return deepseek(config.model);
     }
@@ -38,7 +37,7 @@ export function createProvider(config: AIProviderConfig): any {
         apiKey: config.apiKey,
         baseURL: config.baseUrl || 'https://api.mistral.ai/v1',
       });
-      return mistral(config.model);
+      return mistral.chat(config.model);
     }
     case 'OLLAMA': {
       const ollama = createOpenAI({

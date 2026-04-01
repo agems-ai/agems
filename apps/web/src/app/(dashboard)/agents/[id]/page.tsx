@@ -772,7 +772,7 @@ export default function AgentDetailPage() {
                   <span className="text-xs text-[var(--muted)]">{ex.triggerType}</span>
                   {ex.tokensUsed > 0 && <span className="text-xs text-[var(--muted)]">{ex.tokensUsed} tok</span>}
                   {ex.costUsd > 0 && <span className="text-xs text-[var(--muted)]">${ex.costUsd.toFixed(4)}</span>}
-                  <span className="text-xs text-[var(--muted)]">{(() => { const d = new Date(ex.startedAt || ex.endedAt); return isNaN(d.getTime()) ? '—' : d.toLocaleDateString('ru', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }); })()}</span>
+                  <span className="text-xs text-[var(--muted)]">{new Date(ex.createdAt).toLocaleString()}</span>
                   <span className="text-xs text-[var(--muted)]">{expandedExec === ex.id ? '▲' : '▼'}</span>
                 </button>
                 {expandedExec === ex.id && (

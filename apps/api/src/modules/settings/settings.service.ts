@@ -75,7 +75,7 @@ export class SettingsService {
 
   async getAll(orgId?: string) {
     const rows = await this.prisma.setting.findMany({
-      where: orgId ? { orgId } : {},
+      where: orgId ? { orgId } : { orgId: null },
     });
     const map: Record<string, string> = {};
     for (const r of rows) {
@@ -85,12 +85,16 @@ export class SettingsService {
   }
 
   async get(key: string, orgId?: string): Promise<string | null> {
-    const row = await this.prisma.setting.findFirst({ where: { key, ...(orgId ? { orgId } : {}) } });
+    const row = await this.prisma.setting.findFirst({
+      where: { key, ...(orgId ? { orgId } : { orgId: null }) },
+    });
     return row?.value ?? null;
   }
 
   async set(key: string, value: string, orgId?: string) {
-    const existing = await this.prisma.setting.findFirst({ where: { key, ...(orgId ? { orgId } : {}) } });
+    const existing = await this.prisma.setting.findFirst({
+      where: { key, ...(orgId ? { orgId } : { orgId: null }) },
+    });
     if (existing) {
       return this.prisma.setting.update({ where: { id: existing.id }, data: { value } });
     }
@@ -105,14 +109,16 @@ export class SettingsService {
   }
 
   async delete(key: string, orgId?: string) {
-    return this.prisma.setting.deleteMany({ where: { key, ...(orgId ? { orgId } : {}) } });
+    return this.prisma.setting.deleteMany({
+      where: { key, ...(orgId ? { orgId } : { orgId: null }) },
+    });
   }
 
   // ── LLM Keys (masked for reading) ──
 
   async getLlmKeys(orgId?: string) {
     const keys = ['llm_key_openai', 'llm_key_anthropic', 'llm_key_google', 'llm_key_deepseek', 'llm_key_mistral'];
-    const rows = await this.prisma.setting.findMany({ where: { key: { in: keys }, ...(orgId ? { orgId } : {}) } });
+    const rows = await this.prisma.setting.findMany({ where: { key: { in: keys }, ...(orgId ? { orgId } : { orgId: null }) } });
     const result: Record<string, { set: boolean; masked: string }> = {};
     for (const k of keys) {
       const provider = k.replace('llm_key_', '');
@@ -237,7 +243,7 @@ export class SettingsService {
 
   async getCompanyProfile(orgId?: string): Promise<Record<string, string>> {
     const rows = await this.prisma.setting.findMany({
-      where: { key: { in: this.companyKeys }, ...(orgId ? { orgId } : {}) },
+      where: { key: { in: this.companyKeys }, ...(orgId ? { orgId } : { orgId: null }) },
     });
     const result: Record<string, string> = {};
     for (const k of this.companyKeys) {
@@ -432,7 +438,7 @@ MAXIMUM teamwork. Every project involves the full relevant team.
     }
 
     const rows = await this.prisma.setting.findMany({
-      where: { key: { in: keys }, ...(orgId ? { orgId } : {}) },
+      where: { key: { in: keys }, ...(orgId ? { orgId } : { orgId: null }) },
     });
     const map: Record<string, string> = {};
     for (const r of rows) map[r.key] = r.value;
