@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import * as crypto from 'crypto';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../config/prisma.service';
+import { SettingsService } from '../settings/settings.service';
 import type { CreateAgentInput, UpdateAgentInput, AgentFilters } from '@agems/shared';
 
 @Injectable()
@@ -9,9 +10,14 @@ export class AgentsService {
   constructor(
     private prisma: PrismaService,
     private events: EventEmitter2,
+    private settings: SettingsService,
   ) {}
 
   async create(input: CreateAgentInput, ownerId: string, orgId: string) {
+    // Apply org defaults if provider/model not specified
+    const llmProvider = input.llmProvider || await this.settings.get('default_llm_provider', orgId) || 'ANTHROPIC';
+    const llmModel = input.llmModel || await this.settings.get('default_model', orgId) || 'claude-sonnet-4-5-20250929';
+
     const agent = await this.prisma.agent.create({
       data: {
         orgId,
@@ -19,8 +25,8 @@ export class AgentsService {
         slug: input.slug,
         avatar: input.avatar,
         type: input.type ?? 'AUTONOMOUS',
-        llmProvider: input.llmProvider,
-        llmModel: input.llmModel,
+        llmProvider,
+        llmModel,
         llmConfig: (input.llmConfig ?? {}) as any,
         systemPrompt: input.systemPrompt,
         mission: input.mission,

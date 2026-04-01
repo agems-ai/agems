@@ -62,6 +62,13 @@ export default function NewAgentPage() {
       .then(setTemplates)
       .catch(() => {})
       .finally(() => setLoadingTemplates(false));
+    // Load platform defaults for new agents
+    api.getSettings().then((s) => {
+      const updates: Record<string, any> = {};
+      if (s.default_llm_provider) updates.llmProvider = s.default_llm_provider;
+      if (s.default_model) updates.llmModel = s.default_model;
+      if (Object.keys(updates).length) setForm((f) => ({ ...f, ...updates }));
+    }).catch(() => {});
   }, []);
 
   const isExternal = form.type === 'EXTERNAL';
