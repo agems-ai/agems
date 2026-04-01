@@ -1391,9 +1391,15 @@ Use this to build your team: search catalog for specialists, import them, or cre
             if (!params.create) return { error: 'create object is required with name, slug, systemPrompt' };
             const c = params.create;
             if (!c.name || !c.slug || !c.systemPrompt) return { error: 'name, slug, and systemPrompt are required' };
-            // Get org default LLM if not specified
-            const defaultProvider = await this.settings.get('default_llm_provider', agent.orgId) || 'DEEPSEEK';
-            const defaultModel = await this.settings.get('default_model', agent.orgId) || 'deepseek-chat';
+            // Only allow providers that have API keys configured in this org
+            const availableKeys = await this.prisma.setting.findMany({
+              where: { orgId: agent.orgId, key: { startsWith: 'llm_key_' }, value: { not: '' } },
+              select: { key: true },
+            });
+            const availableProviders = availableKeys.map(k => k.key.replace('llm_key_', '').toUpperCase());
+            // Use creator's provider as default (guaranteed to have a key)
+            const safeProvider = availableProviders.includes(c.llmProvider?.toUpperCase()) ? c.llmProvider : agent.llmProvider;
+            const safeModel = safeProvider === agent.llmProvider ? (c.llmModel || agent.llmModel) : (c.llmModel || 'deepseek-chat');
             const newAgent = await this.prisma.agent.create({
               data: {
                 orgId: agent.orgId,
@@ -1402,8 +1408,8 @@ Use this to build your team: search catalog for specialists, import them, or cre
                 systemPrompt: c.systemPrompt,
                 mission: c.mission || '',
                 type: (c.type as any) || 'AUTONOMOUS',
-                llmProvider: (c.llmProvider as any) || defaultProvider,
-                llmModel: c.llmModel || defaultModel,
+                llmProvider: safeProvider as any,
+                llmModel: safeModel,
                 values: c.values || [],
                 llmConfig: {},
                 runtimeConfig: {},
@@ -1438,11 +1444,19 @@ Use this to build your team: search catalog for specialists, import them, or cre
             let slug = item.slug;
             const existing = await this.prisma.agent.findFirst({ where: { slug, orgId: agent.orgId } });
             if (existing) slug = `${item.slug}-${suffix}`;
+            // Override LLM provider to match what's available in this org
+            const orgKeys = await this.prisma.setting.findMany({
+              where: { orgId: agent.orgId, key: { startsWith: 'llm_key_' }, value: { not: '' } },
+              select: { key: true },
+            });
+            const orgProviders = orgKeys.map(k => k.key.replace('llm_key_', '').toUpperCase());
+            const importProvider = orgProviders.includes(item.llmProvider) ? item.llmProvider : agent.llmProvider;
+            const importModel = importProvider === item.llmProvider ? item.llmModel : agent.llmModel;
             const imported = await this.prisma.agent.create({
               data: {
                 orgId: agent.orgId, name: item.name, slug, avatar: item.avatar,
                 type: item.type, systemPrompt: item.systemPrompt, mission: item.mission,
-                llmProvider: item.llmProvider, llmModel: item.llmModel,
+                llmProvider: importProvider, llmModel: importModel,
                 llmConfig: item.llmConfig as any, runtimeConfig: item.runtimeConfig as any,
                 values: item.values as any, metadata: item.metadata as any,
                 ownerId: agent.ownerId, status: 'ACTIVE',
