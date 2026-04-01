@@ -21,6 +21,7 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   server: Server;
 
   private clients = new Map<string, { userId: string; orgId: string; socket: Socket }>();
+  private agentOrgCache = new Map<string, string>(); // agentId → orgId
 
   constructor(
     private jwtService: JwtService,
@@ -134,6 +135,25 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.events.emit('agent.execution.stop', { channelId: data.channelId, executionId: data.executionId });
   }
 
+  // ── Helpers ──
+
+  /** Broadcast event to agent's org room (for Dashboard live feed) */
+  private async broadcastToOrg(agentId: string, event: string, data: any) {
+    try {
+      let orgId = this.agentOrgCache.get(agentId);
+      if (!orgId) {
+        const agent = await this.prisma.agent.findUnique({ where: { id: agentId }, select: { orgId: true } });
+        if (agent?.orgId) {
+          orgId = agent.orgId;
+          this.agentOrgCache.set(agentId, orgId);
+        }
+      }
+      if (orgId) {
+        this.server.to(`org:${orgId}`).emit(event, data);
+      }
+    } catch {}
+  }
+
   // ── Agent Execution Live Updates ──
 
   @OnEvent('agent.execution.start')
@@ -150,18 +170,20 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @OnEvent('agent.tool.start')
-  handleToolStart(payload: { channelId: string; agentId: string; agentName: string; executionId: string; toolName: string; toolInput: any }) {
+  async handleToolStart(payload: { channelId: string; agentId: string; agentName: string; executionId: string; toolName: string; toolInput: any }) {
+    const data = {
+      channelId: payload.channelId,
+      agentId: payload.agentId,
+      agentName: payload.agentName,
+      executionId: payload.executionId,
+      toolName: payload.toolName,
+      toolInput: payload.toolInput,
+      status: 'running',
+    };
     if (payload.channelId) {
-      this.server.to(`channel:${payload.channelId}`).emit('agent_tool_update', {
-        channelId: payload.channelId,
-        agentId: payload.agentId,
-        agentName: payload.agentName,
-        executionId: payload.executionId,
-        toolName: payload.toolName,
-        toolInput: payload.toolInput,
-        status: 'running',
-      });
+      this.server.to(`channel:${payload.channelId}`).emit('agent_tool_update', data);
     }
+    await this.broadcastToOrg(payload.agentId, 'agent_tool_update_org', data);
   }
 
   @OnEvent('agent.tool.complete')
@@ -181,27 +203,32 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @OnEvent('agent.thinking.chunk')
-  handleThinkingChunk(payload: { channelId: string; agentId: string; executionId: string; chunk: string }) {
+  async handleThinkingChunk(payload: { channelId: string; agentId: string; executionId: string; chunk: string }) {
+    const data = {
+      channelId: payload.channelId,
+      agentId: payload.agentId,
+      executionId: payload.executionId,
+      chunk: payload.chunk,
+    };
     if (payload.channelId) {
-      this.server.to(`channel:${payload.channelId}`).emit('agent_thinking_chunk', {
-        channelId: payload.channelId,
-        agentId: payload.agentId,
-        executionId: payload.executionId,
-        chunk: payload.chunk,
-      });
+      this.server.to(`channel:${payload.channelId}`).emit('agent_thinking_chunk', data);
     }
+    await this.broadcastToOrg(payload.agentId, 'agent_thinking_chunk_org', data);
   }
 
   @OnEvent('agent.text.chunk')
-  handleTextChunk(payload: { channelId: string; agentId: string; executionId: string; chunk: string }) {
+  async handleTextChunk(payload: { channelId: string; agentId: string; executionId: string; chunk: string }) {
+    const data = {
+      channelId: payload.channelId,
+      agentId: payload.agentId,
+      executionId: payload.executionId,
+      chunk: payload.chunk,
+    };
     if (payload.channelId) {
-      this.server.to(`channel:${payload.channelId}`).emit('agent_text_chunk', {
-        channelId: payload.channelId,
-        agentId: payload.agentId,
-        executionId: payload.executionId,
-        chunk: payload.chunk,
-      });
+      this.server.to(`channel:${payload.channelId}`).emit('agent_text_chunk', data);
     }
+    // Also broadcast to org room for Dashboard activity feed
+    await this.broadcastToOrg(payload.agentId, 'agent_text_chunk_org', data);
   }
 
   @OnEvent('agent.execution.done')

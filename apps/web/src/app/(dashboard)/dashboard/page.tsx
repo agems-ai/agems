@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '@/lib/api';
+import { getCommsSocket } from '@/lib/socket';
 import { Plus, Pencil, Trash2, Play, X, Code2, BarChart3, RefreshCw, ChevronDown, ChevronUp, MessageSquare } from 'lucide-react';
 import ChatPanel, { Avatar } from '@/components/ChatPanel';
 
@@ -274,6 +275,46 @@ export default function DashboardPage() {
     return () => clearInterval(iv);
   }, []);
 
+  // Live streaming text from agents (org-level socket events)
+  const [liveStreams, setLiveStreams] = useState<Record<string, { text: string; thinking: string; tool: string }>>({});
+  useEffect(() => {
+    const socket = getCommsSocket();
+    if (!socket.connected) socket.connect();
+
+    const onTextChunk = (data: any) => {
+      setLiveStreams(prev => {
+        const key = data.executionId || data.agentId;
+        const existing = prev[key] || { text: '', thinking: '', tool: '' };
+        return { ...prev, [key]: { ...existing, text: (existing.text + (data.chunk || '')).slice(-300) } };
+      });
+    };
+    const onThinkingChunk = (data: any) => {
+      setLiveStreams(prev => {
+        const key = data.executionId || data.agentId;
+        const existing = prev[key] || { text: '', thinking: '', tool: '' };
+        return { ...prev, [key]: { ...existing, thinking: (existing.thinking + (data.chunk || '')).slice(-200) } };
+      });
+    };
+    const onToolUpdate = (data: any) => {
+      setLiveStreams(prev => {
+        const key = data.executionId || data.agentId;
+        const existing = prev[key] || { text: '', thinking: '', tool: '' };
+        const toolStr = data.status === 'running' ? `Using ${data.toolName}...` : data.status === 'completed' ? `${data.toolName} done` : `${data.toolName} error`;
+        return { ...prev, [key]: { ...existing, tool: toolStr } };
+      });
+    };
+
+    socket.on('agent_text_chunk_org', onTextChunk);
+    socket.on('agent_thinking_chunk_org', onThinkingChunk);
+    socket.on('agent_tool_update_org', onToolUpdate);
+
+    return () => {
+      socket.off('agent_text_chunk_org', onTextChunk);
+      socket.off('agent_thinking_chunk_org', onThinkingChunk);
+      socket.off('agent_tool_update_org', onToolUpdate);
+    };
+  }, []);
+
   const triggerLabels: Record<string, string> = {
     TASK: 'Task', MESSAGE: 'Message', SCHEDULE: 'Schedule', EVENT: 'Goal/Event',
     MANUAL: 'Manual', MEETING: 'Meeting', TELEGRAM: 'Telegram', APPROVAL: 'Approval',
@@ -330,6 +371,23 @@ export default function DashboardPage() {
                     </div>
                     <span className="text-xs font-mono text-emerald-400 shrink-0">{timeAgo(e.startedAt)}</span>
                   </div>
+                  {/* Live streaming text */}
+                  {(() => {
+                    const stream = liveStreams[e.id] || liveStreams[e.agentId];
+                    if (!stream) return null;
+                    const display = stream.text || stream.thinking || stream.tool;
+                    if (!display) return null;
+                    return (
+                      <div className="px-3 pb-2">
+                        {stream.tool && <div className="text-[10px] text-amber-400 mb-0.5">{stream.tool}</div>}
+                        <div className="text-xs text-[var(--muted)] leading-relaxed max-h-16 overflow-hidden" style={{ wordBreak: 'break-word' }}>
+                          {stream.thinking && <span className="text-purple-400 italic">{stream.thinking.slice(-150)}</span>}
+                          {stream.text && <span className="text-emerald-300">{stream.text.slice(-200)}</span>}
+                          <span className="animate-pulse">|</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
                   {isExpanded && (
                     <div className="px-3 pb-3 pt-0 space-y-2 border-t border-emerald-500/20">
                       <div className="grid grid-cols-2 gap-2 text-xs mt-2">
