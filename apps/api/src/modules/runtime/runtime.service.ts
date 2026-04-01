@@ -516,6 +516,64 @@ export class RuntimeService {
     return `[System: Recent activity in your OTHER channels for context. You participated in these conversations.]\n${lines.join('\n')}\n[End of cross-channel context]`;
   }
 
+  /** Estimate token count for a message (~4 chars per token) */
+  private estimateMessageTokens(msg: UserMessage): number {
+    const content = typeof msg.content === 'string'
+      ? msg.content
+      : (msg.content as any[]).map((p: any) => p.type === 'text' ? p.text : '[image:1000tokens]').join(' ');
+    return Math.ceil(content.length / 4);
+  }
+
+  /** Trim conversation context to fit within model's token limit */
+  private trimContextToFit(messages: UserMessage[], provider: string, model: string): UserMessage[] {
+    // Known context limits (tokens)
+    const modelLimits: Record<string, number> = {
+      'deepseek-chat': 131072,
+      'deepseek-reasoner': 131072,
+      'gpt-4-turbo': 128000,
+      'gpt-4o': 128000,
+      'gpt-4o-mini': 128000,
+      'claude-sonnet-4-20250514': 200000,
+      'claude-opus-4-20250514': 200000,
+    };
+    const providerDefaults: Record<string, number> = {
+      DEEPSEEK: 131072,
+      OPENAI: 128000,
+      ANTHROPIC: 200000,
+      GOOGLE: 1048576,
+      MISTRAL: 128000,
+    };
+    const contextLimit = modelLimits[model] || providerDefaults[provider] || 131072;
+    // Reserve tokens for: system prompt (~5K), tools (~10K), output (~5K), safety margin
+    const reserveTokens = 25000;
+    const maxInputTokens = contextLimit - reserveTokens;
+
+    let totalTokens = messages.reduce((sum, m) => sum + this.estimateMessageTokens(m), 0);
+
+    if (totalTokens <= maxInputTokens) return messages;
+
+    // Trim older messages (keep first=preamble + last 4 messages for recency)
+    const trimmed = [...messages];
+    const keepLast = 4;
+    let removed = 0;
+    while (totalTokens > maxInputTokens && trimmed.length > keepLast + 2) {
+      // Remove second message (right after preamble)
+      const msg = trimmed.splice(1, 1)[0];
+      totalTokens -= this.estimateMessageTokens(msg);
+      removed++;
+    }
+
+    if (removed > 0) {
+      this.logger.warn(`Trimmed ${removed} older messages from context (est. tokens now: ${totalTokens}, limit: ${maxInputTokens})`);
+      trimmed.splice(1, 0, {
+        role: 'user' as const,
+        content: `[System: ${removed} older messages were trimmed to fit the context window. Focus on the recent messages below.]`,
+      });
+    }
+
+    return trimmed;
+  }
+
   /** When a human adds a meeting entry, trigger agent participants to respond */
   @OnEvent('meeting.entry.human')
   async handleMeetingEntry(payload: { meetingId: string; entry: any }) {
@@ -770,6 +828,11 @@ export class RuntimeService {
         },
       } : undefined;
 
+      // Trim context to fit model's token limit (prevents context overflow errors)
+      if (Array.isArray(input)) {
+        input = this.trimContextToFit(input as UserMessage[], agent.llmProvider, agent.llmModel);
+      }
+
       let result = await runner.run(input, abortController.signal, streamCallbacks);
 
       // Self-correction: if result is empty and there were tool errors, retry with a hint
@@ -846,6 +909,7 @@ export class RuntimeService {
             toolCalls: result.toolCalls as any,
             tokensUsed: result.tokensUsed.input + result.tokensUsed.output,
             costUsd: this.estimateCost(agent.llmProvider, result.tokensUsed),
+            endedAt: new Date(),
           },
         });
 
@@ -1338,17 +1402,23 @@ export class RuntimeService {
       name: 'agems_manage_agents',
       description: `Manage AGEMS platform agents. Actions:
 - "list" — list all agents in the org with id, name, mission, status, llmProvider, llmModel
-- "get" — get agent details by id
+- "get" — get agent details by id (includes assigned skills and tools)
 - "update" — update agent fields (name, llmProvider, llmModel, systemPrompt, status, llmConfig, runtimeConfig)
-- "create" — create a new agent. Provide: name, slug, systemPrompt, mission. Optional: llmProvider, llmModel, type, values
-- "search_catalog" — search available agents in the catalog to import. Provide: query (search term)
-- "import_catalog" — import an agent from catalog by catalogAgentId. Automatically imports linked skills and tools.
-Use this to build your team: search catalog for specialists, import them, or create custom agents.`,
+- "create" — create a new agent. IMPORTANT: always use check_existing first to avoid duplicates, and search_catalog to prefer imports.
+- "check_existing" — search existing org agents by role/mission similarity. Use BEFORE creating to avoid duplicates.
+- "search_catalog" — search catalog for ready-made agents. Returns skills/tools included. ALWAYS try this before creating from scratch.
+- "import_catalog" — import an agent from catalog by catalogAgentId. Auto-imports linked skills and tools.
+- "archive" — archive an agent (set status ARCHIVED). Use to clean up duplicates or unused agents.
+- "assign_tools" — assign a tool to an agent. Provide agentId and toolId.
+- "list_tools" — list all available tools in the org.
+
+WORKFLOW: search_catalog → check_existing → import or create → assign skills/tools.`,
       parameters: z.object({
-        action: z.enum(['list', 'get', 'update', 'create', 'search_catalog', 'import_catalog']).describe('Action to perform'),
-        agentId: z.string().optional().describe('Agent ID (for get/update)'),
+        action: z.enum(['list', 'get', 'update', 'create', 'check_existing', 'search_catalog', 'import_catalog', 'archive', 'assign_tools', 'list_tools']).describe('Action to perform'),
+        agentId: z.string().optional().describe('Agent ID (for get/update/archive/assign_tools)'),
         catalogAgentId: z.string().optional().describe('Catalog agent ID (for import_catalog)'),
-        query: z.string().optional().describe('Search term (for search_catalog)'),
+        toolId: z.string().optional().describe('Tool ID (for assign_tools)'),
+        query: z.string().optional().describe('Search term (for search_catalog, check_existing)'),
         create: z.object({
           name: z.string().describe('Agent name, e.g. "Alex — Frontend Developer"'),
           slug: z.string().describe('URL slug, e.g. "alex-frontend-dev"'),
@@ -1369,7 +1439,7 @@ Use this to build your team: search catalog for specialists, import them, or cre
           runtimeConfig: z.string().optional().describe('JSON string'),
         }).optional().describe('Fields to update (for update action)'),
       }),
-      execute: async (params: { action: string; agentId?: string; catalogAgentId?: string; query?: string; create?: any; updates?: any }) => {
+      execute: async (params: { action: string; agentId?: string; catalogAgentId?: string; toolId?: string; query?: string; create?: any; updates?: any }) => {
         switch (params.action) {
           case 'list': {
             const agents = await this.prisma.agent.findMany({
@@ -1383,14 +1453,76 @@ Use this to build your team: search catalog for specialists, import them, or cre
             if (!params.agentId) return { error: 'agentId is required' };
             const a = await this.prisma.agent.findFirst({
               where: { id: params.agentId, orgId: agent.orgId },
-              select: { id: true, name: true, slug: true, status: true, llmProvider: true, llmModel: true, llmConfig: true, runtimeConfig: true, systemPrompt: true, mission: true },
+              select: {
+                id: true, name: true, slug: true, status: true, llmProvider: true, llmModel: true,
+                llmConfig: true, runtimeConfig: true, systemPrompt: true, mission: true,
+                skills: { include: { skill: { select: { id: true, name: true, slug: true, description: true } } } },
+                tools: { include: { tool: { select: { id: true, name: true, type: true } } } },
+              },
             });
-            return a || { error: 'Agent not found' };
+            if (!a) return { error: 'Agent not found' };
+            return {
+              ...a,
+              skills: (a.skills as any[]).map(s => ({ ...s.skill, enabled: s.enabled })),
+              tools: (a.tools as any[]).map(t => ({ ...t.tool, enabled: t.enabled, permissions: t.permissions })),
+            };
+          }
+          case 'check_existing': {
+            const q = params.query || '';
+            if (!q) return { error: 'query is required — describe the role/mission you need' };
+            const existing = await this.prisma.agent.findMany({
+              where: {
+                orgId: agent.orgId,
+                status: { not: 'ARCHIVED' },
+                OR: [
+                  { name: { contains: q, mode: 'insensitive' } },
+                  { mission: { contains: q, mode: 'insensitive' } },
+                  { systemPrompt: { contains: q, mode: 'insensitive' } },
+                ],
+              },
+              select: { id: true, name: true, slug: true, status: true, mission: true, llmProvider: true, llmModel: true },
+              orderBy: { name: 'asc' },
+            });
+            if (existing.length > 0) {
+              return { found: existing, warning: `Found ${existing.length} existing agent(s) matching "${q}". Consider using/updating these instead of creating a new one.` };
+            }
+            return { found: [], note: `No existing agents match "${q}". Safe to create or import.` };
           }
           case 'create': {
             if (!params.create) return { error: 'create object is required with name, slug, systemPrompt' };
             const c = params.create;
             if (!c.name || !c.slug || !c.systemPrompt) return { error: 'name, slug, and systemPrompt are required' };
+            // Auto-check for duplicates before creating
+            const duplicates = await this.prisma.agent.findMany({
+              where: {
+                orgId: agent.orgId,
+                status: { not: 'ARCHIVED' },
+                OR: [
+                  { name: { contains: c.name.split(/[—\-–]/)[0].trim(), mode: 'insensitive' } },
+                  ...(c.mission ? [{ mission: { contains: c.mission.substring(0, 50), mode: 'insensitive' as const } }] : []),
+                ],
+              },
+              select: { id: true, name: true, mission: true },
+              take: 5,
+            });
+            // Auto-check catalog for similar agents
+            const searchTerm = c.mission || c.name;
+            const catalogMatches = await this.prisma.catalogAgent.findMany({
+              where: { OR: [
+                { name: { contains: searchTerm.split(/[—\-–]/)[0].trim(), mode: 'insensitive' } },
+                { mission: { contains: searchTerm.substring(0, 50), mode: 'insensitive' } },
+                { tags: { hasSome: searchTerm.toLowerCase().split(/\s+/).filter((w: string) => w.length > 3) } },
+              ] },
+              select: { id: true, name: true, mission: true, tags: true },
+              take: 3,
+            });
+            const warnings: string[] = [];
+            if (duplicates.length > 0) {
+              warnings.push(`⚠️ DUPLICATE WARNING: Found ${duplicates.length} similar agent(s): ${duplicates.map(d => `"${d.name}" (${d.id})`).join(', ')}. Consider using check_existing + update instead of creating.`);
+            }
+            if (catalogMatches.length > 0) {
+              warnings.push(`💡 CATALOG TIP: Found ${catalogMatches.length} catalog agent(s) that may fit: ${catalogMatches.map(m => `"${m.name}" (${m.id})`).join(', ')}. Consider import_catalog for pre-configured agents with skills/tools.`);
+            }
             // Only allow providers that have API keys configured in this org
             const availableKeys = await this.prisma.setting.findMany({
               where: { orgId: agent.orgId, key: { startsWith: 'llm_key_' }, value: { not: '' } },
@@ -1418,7 +1550,12 @@ Use this to build your team: search catalog for specialists, import them, or cre
               },
               select: { id: true, name: true, slug: true, status: true, mission: true, llmProvider: true, llmModel: true },
             });
-            return { success: true, agent: newAgent, note: 'Agent created and ACTIVE. You can now assign tasks to it.' };
+            return {
+              success: true,
+              agent: newAgent,
+              ...(warnings.length > 0 ? { warnings } : {}),
+              note: 'Agent created and ACTIVE. Next: use agems_manage_skills to assign skills, and assign_tools to give it tools.',
+            };
           }
           case 'search_catalog': {
             const q = params.query || '';
@@ -1429,11 +1566,22 @@ Use this to build your team: search catalog for specialists, import them, or cre
                 { mission: { contains: q, mode: 'insensitive' } },
                 { tags: { hasSome: [q.toLowerCase()] } },
               ] } : {},
-              select: { id: true, name: true, slug: true, description: true, mission: true, tags: true, llmProvider: true, downloads: true },
+              select: {
+                id: true, name: true, slug: true, description: true, mission: true,
+                tags: true, llmProvider: true, downloads: true,
+                skillSlugs: true, toolSlugs: true,
+              },
               orderBy: { downloads: 'desc' },
               take: 10,
             });
-            return { results, note: 'Use import_catalog with catalogAgentId to import an agent' };
+            return {
+              results: results.map(r => ({
+                ...r,
+                skillsIncluded: r.skillSlugs?.length || 0,
+                toolsIncluded: r.toolSlugs?.length || 0,
+              })),
+              note: 'Use import_catalog with catalogAgentId to import. Agents with skills/tools included are pre-configured and ready to work.',
+            };
           }
           case 'import_catalog': {
             if (!params.catalogAgentId) return { error: 'catalogAgentId is required' };
@@ -1489,7 +1637,18 @@ Use this to build your team: search catalog for specialists, import them, or cre
                 } catch {}
               }
             }
-            return { success: true, agent: imported, note: `Imported "${item.name}" with ${item.skillSlugs?.length || 0} skills and ${item.toolSlugs?.length || 0} tools. Agent is ACTIVE.` };
+            // Auto-create default approval policy (SUPERVISED)
+            await this.prisma.approvalPolicy.create({
+              data: { agentId: imported.id, preset: 'SUPERVISED' },
+            }).catch(() => {}); // ignore if already exists
+            const skillCount = item.skillSlugs?.length || 0;
+            const toolCount = item.toolSlugs?.length || 0;
+            return {
+              success: true,
+              agent: imported,
+              configured: { skills: skillCount, tools: toolCount, approvalPolicy: 'SUPERVISED' },
+              note: `Imported "${item.name}" with ${skillCount} skills, ${toolCount} tools, and SUPERVISED approval policy. Agent is ACTIVE. Next: assign a position with agems_org_structure → assign_position.`,
+            };
           }
           case 'update': {
             if (!params.agentId) return { error: 'agentId is required' };
@@ -1511,8 +1670,37 @@ Use this to build your team: search catalog for specialists, import them, or cre
             });
             return { success: true, agent: updated };
           }
+          case 'archive': {
+            if (!params.agentId) return { error: 'agentId is required' };
+            const toArchive = await this.prisma.agent.findFirst({ where: { id: params.agentId, orgId: agent.orgId } });
+            if (!toArchive) return { error: 'Agent not found' };
+            if (toArchive.status === 'ARCHIVED') return { error: 'Agent is already archived' };
+            await this.prisma.agent.update({ where: { id: params.agentId }, data: { status: 'ARCHIVED' } });
+            return { success: true, note: `Agent "${toArchive.name}" archived. It will no longer appear in lists or receive tasks.` };
+          }
+          case 'assign_tools': {
+            if (!params.agentId || !params.toolId) return { error: 'agentId and toolId are required' };
+            const targetAgent = await this.prisma.agent.findFirst({ where: { id: params.agentId, orgId: agent.orgId } });
+            if (!targetAgent) return { error: 'Agent not found' };
+            const tool = await this.prisma.tool.findFirst({ where: { id: params.toolId, orgId: agent.orgId } });
+            if (!tool) return { error: 'Tool not found in this org' };
+            const existingLink = await this.prisma.agentTool.findUnique({ where: { agentId_toolId: { agentId: params.agentId, toolId: params.toolId } } });
+            if (existingLink) return { error: 'Tool already assigned to this agent', agentToolId: existingLink.id };
+            const at = await this.prisma.agentTool.create({
+              data: { agentId: params.agentId, toolId: params.toolId, permissions: { read: true, write: false, execute: true } },
+            });
+            return { success: true, agentToolId: at.id, note: `Tool "${tool.name}" assigned to agent "${targetAgent.name}".` };
+          }
+          case 'list_tools': {
+            const orgTools = await this.prisma.tool.findMany({
+              where: { orgId: agent.orgId },
+              select: { id: true, name: true, type: true, authType: true },
+              orderBy: { name: 'asc' },
+            });
+            return { tools: orgTools };
+          }
           default:
-            return { error: 'Invalid action. Use: list, get, create, update, search_catalog, import_catalog' };
+            return { error: 'Invalid action. Use: list, get, create, update, check_existing, search_catalog, import_catalog, archive, assign_tools, list_tools' };
         }
       },
     });
@@ -1574,6 +1762,191 @@ Use agems_manage_agents to get agent IDs first.`,
           }
           default:
             return { error: 'Invalid action' };
+        }
+      },
+    });
+
+    // ── AGEMS Org Structure management ──
+    tools.push({
+      name: 'agems_org_structure',
+      description: `Manage organization structure: departments, positions, and hierarchy. Actions:
+- "get_structure" — view the full org tree (departments → positions → agents/humans)
+- "create_department" — create a new department. Provide: title
+- "create_position" — create a position. Provide: title, department (optional), parentId (optional), holderType (AGENT/HUMAN/HYBRID)
+- "assign_position" — assign an agent or user to a position. Provide: positionId, agentId or userId
+- "get_gaps" — analyze what positions are unfilled or what roles are missing
+- "remove_position" — delete a position (must be unoccupied)
+Use this to build a clear org hierarchy. Every agent should have a position.`,
+      parameters: z.object({
+        action: z.enum(['get_structure', 'create_department', 'create_position', 'assign_position', 'get_gaps', 'remove_position']).describe('Action to perform'),
+        title: z.string().optional().describe('Department or position title (for create_department/create_position)'),
+        department: z.string().optional().describe('Department name (for create_position)'),
+        parentId: z.string().optional().describe('Parent position ID for hierarchy (for create_position)'),
+        holderType: z.string().optional().describe('AGENT, HUMAN, or HYBRID (for create_position)'),
+        positionId: z.string().optional().describe('Position ID (for assign_position/remove_position)'),
+        agentId: z.string().optional().describe('Agent ID (for assign_position)'),
+        userId: z.string().optional().describe('User ID (for assign_position)'),
+      }),
+      execute: async (params: { action: string; title?: string; department?: string; parentId?: string; holderType?: string; positionId?: string; agentId?: string; userId?: string }) => {
+        switch (params.action) {
+          case 'get_structure': {
+            const positions = await this.prisma.orgPosition.findMany({
+              where: { orgId: agent.orgId },
+              include: {
+                agent: { select: { id: true, name: true, status: true, mission: true } },
+                user: { select: { id: true, name: true, email: true } },
+              },
+              orderBy: [{ department: 'asc' }, { title: 'asc' }],
+            });
+            // Group by department
+            const departments: Record<string, any[]> = {};
+            for (const pos of positions) {
+              const dept = pos.department || 'Unassigned';
+              if (!departments[dept]) departments[dept] = [];
+              departments[dept].push({
+                id: pos.id,
+                title: pos.title,
+                holderType: pos.holderType,
+                parentId: pos.parentId,
+                agent: pos.agent ? { id: pos.agent.id, name: pos.agent.name, status: pos.agent.status } : null,
+                user: pos.user ? { id: pos.user.id, name: pos.user.name } : null,
+                filled: !!(pos.agentId || pos.userId),
+              });
+            }
+            // Also list agents WITHOUT positions
+            const agentsWithPositions = positions.filter(p => p.agentId).map(p => p.agentId);
+            const unassignedAgents = await this.prisma.agent.findMany({
+              where: { orgId: agent.orgId, status: { not: 'ARCHIVED' }, id: { notIn: agentsWithPositions as string[] } },
+              select: { id: true, name: true, mission: true },
+            });
+            return {
+              departments,
+              unassignedAgents,
+              summary: {
+                totalPositions: positions.length,
+                filledPositions: positions.filter(p => p.agentId || p.userId).length,
+                unfilledPositions: positions.filter(p => !p.agentId && !p.userId).length,
+                agentsWithoutPosition: unassignedAgents.length,
+              },
+            };
+          }
+          case 'create_department': {
+            if (!params.title) return { error: 'title is required for department name' };
+            // Create a root position representing the department head
+            const pos = await this.prisma.orgPosition.create({
+              data: {
+                orgId: agent.orgId,
+                title: `${params.title} — Head`,
+                department: params.title,
+                holderType: 'AGENT' as any,
+              },
+            });
+            return { success: true, department: params.title, headPositionId: pos.id, note: `Department "${params.title}" created with head position. Use create_position to add roles under it.` };
+          }
+          case 'create_position': {
+            if (!params.title) return { error: 'title is required' };
+            const pos = await this.prisma.orgPosition.create({
+              data: {
+                orgId: agent.orgId,
+                title: params.title,
+                department: params.department || null,
+                parentId: params.parentId || null,
+                holderType: (params.holderType as any) || 'AGENT',
+              },
+            });
+            return { success: true, position: { id: pos.id, title: pos.title, department: pos.department }, note: 'Position created. Use assign_position to assign an agent or user.' };
+          }
+          case 'assign_position': {
+            if (!params.positionId) return { error: 'positionId is required' };
+            if (!params.agentId && !params.userId) return { error: 'agentId or userId is required' };
+            const pos = await this.prisma.orgPosition.findFirst({ where: { id: params.positionId, orgId: agent.orgId } });
+            if (!pos) return { error: 'Position not found' };
+            const updateData: any = {};
+            if (params.agentId) {
+              const targetAgent = await this.prisma.agent.findFirst({ where: { id: params.agentId, orgId: agent.orgId } });
+              if (!targetAgent) return { error: 'Agent not found' };
+              updateData.agentId = params.agentId;
+              updateData.holderType = 'AGENT';
+            }
+            if (params.userId) {
+              updateData.userId = params.userId;
+              updateData.holderType = params.agentId ? 'HYBRID' : 'HUMAN';
+            }
+            await this.prisma.orgPosition.update({ where: { id: params.positionId }, data: updateData });
+            return { success: true, note: `Position "${pos.title}" assigned.` };
+          }
+          case 'get_gaps': {
+            const positions = await this.prisma.orgPosition.findMany({
+              where: { orgId: agent.orgId },
+              include: { agent: { select: { id: true, name: true, status: true } } },
+            });
+            const unfilled = positions.filter(p => !p.agentId && !p.userId);
+            const filledWithInactive = positions.filter(p => p.agent && p.agent.status !== 'ACTIVE');
+            const allAgents = await this.prisma.agent.findMany({
+              where: { orgId: agent.orgId, status: 'ACTIVE' },
+              select: { id: true, name: true, mission: true },
+            });
+            const agentIdsWithPos = new Set(positions.filter(p => p.agentId).map(p => p.agentId));
+            const orphanAgents = allAgents.filter(a => !agentIdsWithPos.has(a.id));
+            return {
+              unfilledPositions: unfilled.map(p => ({ id: p.id, title: p.title, department: p.department })),
+              inactiveHolders: filledWithInactive.map(p => ({ positionId: p.id, title: p.title, agent: p.agent })),
+              agentsWithoutPosition: orphanAgents,
+              recommendations: [
+                ...(unfilled.length > 0 ? [`${unfilled.length} position(s) need agents — use search_catalog or check_existing to fill them.`] : []),
+                ...(orphanAgents.length > 0 ? [`${orphanAgents.length} agent(s) have no position — assign them or archive if unused.`] : []),
+                ...(filledWithInactive.length > 0 ? [`${filledWithInactive.length} position(s) held by non-ACTIVE agents — replace or reactivate.`] : []),
+              ],
+            };
+          }
+          case 'remove_position': {
+            if (!params.positionId) return { error: 'positionId is required' };
+            const pos = await this.prisma.orgPosition.findFirst({ where: { id: params.positionId, orgId: agent.orgId } });
+            if (!pos) return { error: 'Position not found' };
+            if (pos.agentId || pos.userId) return { error: 'Position is occupied. Unassign the holder first (assign_position with empty agentId).' };
+            // Check for children
+            const children = await this.prisma.orgPosition.findMany({ where: { parentId: params.positionId } });
+            if (children.length > 0) return { error: `Position has ${children.length} child position(s). Remove or reassign them first.` };
+            await this.prisma.orgPosition.delete({ where: { id: params.positionId } });
+            return { success: true, note: `Position "${pos.title}" removed.` };
+          }
+          default:
+            return { error: 'Invalid action. Use: get_structure, create_department, create_position, assign_position, get_gaps, remove_position' };
+        }
+      },
+    });
+
+    // ── AGEMS Company Profile management ──
+    tools.push({
+      name: 'agems_company_profile',
+      description: `View and update the company profile. This context is injected into EVERY agent's system prompt — accurate info makes all agents smarter. Actions:
+- "get" — view current company profile (all fields)
+- "set" — update one or more fields. Fields: company_name, company_industry, company_description, company_mission, company_vision, company_goals, company_values, company_products, company_target_audience, company_tone, company_languages, company_website
+If the profile is mostly empty, proactively ask the user about their company and fill it in.`,
+      parameters: z.object({
+        action: z.enum(['get', 'set']).describe('Action to perform'),
+        data: z.record(z.string()).optional().describe('Key-value pairs to set (for set action). Keys must be from the allowed fields list.'),
+      }),
+      execute: async (params: { action: string; data?: Record<string, string> }) => {
+        switch (params.action) {
+          case 'get': {
+            const profile = await this.settings.getCompanyProfile(agent.orgId);
+            const filled = Object.entries(profile).filter(([, v]) => v).length;
+            const total = Object.keys(profile).length;
+            return {
+              profile,
+              completeness: `${filled}/${total} fields filled`,
+              ...(filled < 3 ? { warning: 'Company profile is mostly empty! Ask the user about their company (name, industry, mission, products, audience) and fill it in. All agents use this context.' } : {}),
+            };
+          }
+          case 'set': {
+            if (!params.data || Object.keys(params.data).length === 0) return { error: 'data object is required with key-value pairs' };
+            const updated = await this.settings.setCompanyProfile(params.data, agent.orgId);
+            const filled = Object.entries(updated).filter(([, v]) => v).length;
+            return { success: true, profile: updated, completeness: `${filled}/${Object.keys(updated).length} fields filled` };
+          }
+          default:
+            return { error: 'Invalid action. Use: get, set' };
         }
       },
     });
