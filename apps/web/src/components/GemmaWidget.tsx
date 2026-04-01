@@ -17,9 +17,9 @@ export default function GemmaWidget() {
   const [channelId, setChannelId] = useState<string | null>(null);
   const [unread, setUnread] = useState(false);
 
-  // Find Gemma (META agent) on mount
+  // Find Gemma (META agent) and existing channel on mount
   useEffect(() => {
-    api.getAgents().then((agents: any) => {
+    api.getAgents().then(async (agents: any) => {
       const arr = Array.isArray(agents) ? agents : agents?.data || [];
       const meta = arr.find((a: any) => a.type === 'META' && a.status === 'ACTIVE')
         || arr.find((a: any) => a.name?.toLowerCase().includes('gemma'));
@@ -27,6 +27,12 @@ export default function GemmaWidget() {
         setGemmaId(meta.id);
         setGemmaName(meta.name || 'Gemma');
         setGemmaAvatar(meta.avatarUrl || null);
+
+        // Try to find existing direct channel with Gemma to load history
+        try {
+          const found = await api.findDirectChannel('AGENT', meta.id) as any;
+          if (found?.id) setChannelId(found.id);
+        } catch {}
       }
     }).catch(() => {});
 
