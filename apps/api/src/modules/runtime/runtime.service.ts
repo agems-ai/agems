@@ -604,7 +604,10 @@ export class RuntimeService {
     await this.generateMeetingSummary(meetingId, meeting, agents);
   }
 
-  /** When a human adds a meeting entry, trigger agent participants to respond */
+  /** When a human adds a meeting entry, trigger agent participants to respond.
+   *  Rounds and auto-finish are driven by module settings:
+   *    Activity (1-5) → max rounds (1-5)
+   *    Autonomy (1-2) → no auto-finish; (3) → auto-finish with summary; (4-5) → summary + auto-create tasks */
   @OnEvent('meeting.entry.human')
   async handleMeetingEntry(payload: { meetingId: string; entry: any; round?: number }) {
     const { meetingId, entry } = payload;
@@ -612,13 +615,17 @@ export class RuntimeService {
 
     if (entry.speakerType !== 'HUMAN' || entry.entryType !== 'SPEECH') return;
 
-    // Check if meetings module is enabled for this meeting's org
     const meeting = await this.prisma.meeting.findUnique({
       where: { id: meetingId },
       select: { title: true, agenda: true, orgId: true, status: true },
     });
     if (!meeting || meeting.status !== 'IN_PROGRESS') return;
     if (meeting.orgId && !(await this.settings.isModuleEnabled('meetings', meeting.orgId))) return;
+
+    // Get module settings
+    const moduleConfig = await this.settings.getModuleConfig('meetings', meeting.orgId ?? undefined);
+    const maxRounds = moduleConfig.activityLevel; // Activity 1-5 → rounds 1-5
+    const autonomy = moduleConfig.autonomyLevel;  // Autonomy 1-5
 
     const participants = await this.prisma.meetingParticipant.findMany({
       where: { meetingId, participantType: 'AGENT' },
@@ -636,15 +643,14 @@ export class RuntimeService {
     }
     if (agents.length === 0) return;
 
-    this.logger.log(`Meeting "${meeting.title}" round ${round}: triggering ${agents.length} agents`);
+    this.logger.log(`Meeting "${meeting.title}" round ${round}/${maxRounds} (activity=${moduleConfig.activityLevel}, autonomy=${autonomy}): triggering ${agents.length} agents`);
 
-    // Emit expected agent count so frontend knows how many responses to wait for
     this.events.emit('meeting.agents.pending', { meetingId, count: agents.length });
 
-    // Run all agents in parallel for faster responses
+    // Run all agents in parallel
     await Promise.allSettled(agents.map(async (agent) => {
       try {
-        const context = await this.buildMeetingContext(meetingId, agent, agents, meeting, round);
+        const context = await this.buildMeetingContext(meetingId, agent, agents, meeting, round, maxRounds);
 
         const result = await this.execute(agent.id, context, { type: 'MEETING', id: meetingId });
 
@@ -679,16 +685,13 @@ export class RuntimeService {
       }
     }));
 
-    // After all agents responded in this round, decide: continue discussion or wrap up
-    const maxRounds = 3;
+    // After all agents responded: continue or wrap up
     if (round < maxRounds) {
-      // Trigger next round — agents react to each other's responses
       const nextRoundEntry = await this.prisma.meetingEntry.findFirst({
         where: { meetingId }, orderBy: { order: 'desc' },
       });
       if (nextRoundEntry) {
-        this.logger.log(`Meeting "${meeting.title}": starting round ${round + 1}`);
-        // Small delay to let DB settle
+        this.logger.log(`Meeting "${meeting.title}": starting round ${round + 1}/${maxRounds}`);
         setTimeout(() => {
           this.events.emit('meeting.entry.human', {
             meetingId,
@@ -697,17 +700,20 @@ export class RuntimeService {
           });
         }, 2000);
       }
+    } else if (autonomy >= 3) {
+      // Autonomy 3+ → auto-finish with summary (and tasks if autonomy 4+)
+      this.logger.log(`Meeting "${meeting.title}": all ${maxRounds} rounds complete, generating summary (autonomy=${autonomy})`);
+      setTimeout(() => this.generateMeetingSummary(meetingId, meeting, agents, autonomy), 3000);
     } else {
-      // Final round done — generate summary and close meeting
-      this.logger.log(`Meeting "${meeting.title}": all ${maxRounds} rounds complete, generating summary`);
-      setTimeout(() => this.generateMeetingSummary(meetingId, meeting, agents), 3000);
+      // Autonomy 1-2 → just log, wait for human to end manually
+      this.logger.log(`Meeting "${meeting.title}": all ${maxRounds} rounds complete, waiting for human to end (autonomy=${autonomy})`);
     }
   }
 
-  /** Generate meeting summary using the CHAIR agent, then end the meeting */
-  private async generateMeetingSummary(meetingId: string, meeting: any, agents: any[]) {
+  /** Generate meeting summary using the CHAIR agent, then end the meeting.
+   *  autonomy 3: summary only; autonomy 4-5: summary + auto-create tasks from action items */
+  private async generateMeetingSummary(meetingId: string, meeting: any, agents: any[], autonomy = 3) {
     try {
-      // Find CHAIR agent, or use first agent
       const chairParticipant = await this.prisma.meetingParticipant.findFirst({
         where: { meetingId, participantType: 'AGENT', role: 'CHAIR' },
       });
@@ -723,6 +729,16 @@ export class RuntimeService {
         if (e.speakerType === 'SYSTEM') return `[System]: ${e.content}`;
         return `[${nameMap.get(e.speakerId) || e.speakerType}]: ${e.content}`;
       });
+
+      const taskInstructions = autonomy >= 4
+        ? `\n\n## Action Items (JSON)
+After the summary, output a JSON array of action items in this exact format (for automatic task creation):
+\`\`\`json
+[{"assignee": "AgentName", "title": "Task title", "priority": "HIGH"}]
+\`\`\`
+Use exact agent names from the meeting: ${agents.map((a: any) => a.name).join(', ')}.
+Only include concrete, actionable tasks discussed in the meeting.`
+        : '';
 
       const summaryPrompt = `You are ${chairAgent.name}, the meeting chair. The meeting "${meeting.title}" has concluded.
 
@@ -744,17 +760,17 @@ For each action item, use this exact format:
 ## Next Steps
 What should happen after this meeting.
 
-Be concise but comprehensive. Write in the same language as the meeting transcript.`;
+Be concise but comprehensive. Write in the same language as the meeting transcript.${taskInstructions}`;
 
       const result = await this.execute(chairAgent.id, summaryPrompt, { type: 'MEETING', id: meetingId });
 
-      // Save summary to meeting
+      // Save summary
       await this.prisma.meeting.update({
         where: { id: meetingId },
         data: { summary: result.text },
       });
 
-      // Add summary as meeting entry
+      // Add summary entry
       const lastEntry = await this.prisma.meetingEntry.findFirst({
         where: { meetingId }, orderBy: { order: 'desc' },
       });
@@ -767,6 +783,11 @@ Be concise but comprehensive. Write in the same language as the meeting transcri
         },
       });
       this.events.emit('meeting.entry.new', { meetingId, entry: summaryEntry });
+
+      // Autonomy 4-5: auto-create tasks from action items
+      if (autonomy >= 4) {
+        await this.createTasksFromSummary(meetingId, meeting, result.text, agents);
+      }
 
       // End the meeting
       const endEntry = await this.prisma.meetingEntry.create({
@@ -784,13 +805,60 @@ Be concise but comprehensive. Write in the same language as the meeting transcri
         data: { status: 'COMPLETED', endedAt: new Date() },
       });
 
-      this.logger.log(`Meeting "${meeting.title}" completed with summary`);
+      this.logger.log(`Meeting "${meeting.title}" completed with summary (autonomy=${autonomy})`);
     } catch (err) {
       this.logger.error(`Failed to generate meeting summary for ${meetingId}: ${err}`);
+      // Even if summary fails, close the meeting
+      try {
+        await this.prisma.meeting.update({
+          where: { id: meetingId },
+          data: { status: 'COMPLETED', endedAt: new Date(), summary: 'Summary generation failed.' },
+        });
+      } catch {}
     }
   }
 
-  private async buildMeetingContext(meetingId: string, currentAgent: any, allAgents: any[], meeting: any, round = 1): Promise<string> {
+  /** Parse action items from summary JSON block and create tasks */
+  private async createTasksFromSummary(meetingId: string, meeting: any, summaryText: string, agents: any[]) {
+    try {
+      const jsonMatch = summaryText.match(/```json\s*\n?([\s\S]*?)\n?```/);
+      if (!jsonMatch) return;
+
+      const items = JSON.parse(jsonMatch[1]);
+      if (!Array.isArray(items)) return;
+
+      const agentByName = new Map(agents.map((a: any) => [a.name.toLowerCase(), a]));
+
+      for (const item of items) {
+        const agent = agentByName.get((item.assignee || '').toLowerCase());
+        if (!agent || !item.title) continue;
+
+        const task = await this.prisma.task.create({
+          data: {
+            title: item.title,
+            description: `Created from meeting: ${meeting.title}`,
+            priority: (item.priority || 'MEDIUM') as any,
+            type: 'ONE_TIME',
+            creatorType: 'AGENT',
+            creatorId: agents[0].id, // CHAIR creates tasks
+            assigneeType: 'AGENT',
+            assigneeId: agent.id,
+            orgId: meeting.orgId,
+          },
+        });
+
+        await this.prisma.meetingTask.create({
+          data: { meetingId, taskId: task.id },
+        });
+
+        this.logger.log(`Created task "${item.title}" → ${agent.name} from meeting`);
+      }
+    } catch (err) {
+      this.logger.warn(`Failed to parse tasks from meeting summary: ${err}`);
+    }
+  }
+
+  private async buildMeetingContext(meetingId: string, currentAgent: any, allAgents: any[], meeting: any, round = 1, maxRounds = 3): Promise<string> {
     const entries = await this.prisma.meetingEntry.findMany({
       where: { meetingId }, orderBy: { order: 'asc' }, take: 100,
     });
@@ -809,13 +877,18 @@ Be concise but comprehensive. Write in the same language as the meeting transcri
 
     const agenda = meeting?.agenda ? `\nAgenda: ${meeting.agenda}` : '';
 
-    const roundInstructions = round === 1
-      ? 'Share your initial thoughts and expertise on the agenda topics.'
-      : round === 2
-        ? 'React to what other participants said. Build on their ideas, raise concerns, or propose specific actions. Reference other speakers by name.'
-        : 'This is the final round. Summarize your position, state any remaining concerns, and propose concrete action items or decisions.';
+    let roundInstructions: string;
+    if (round === 1) {
+      roundInstructions = 'Share your initial thoughts and expertise on the agenda topics.';
+    } else if (round === maxRounds) {
+      roundInstructions = 'This is the final round. Summarize your position, state any remaining concerns, and propose concrete action items or decisions.';
+    } else if (round === 2) {
+      roundInstructions = 'React to what other participants said. Build on their ideas, raise concerns, or propose specific actions. Reference other speakers by name.';
+    } else {
+      roundInstructions = `Round ${round}/${maxRounds}. Continue the discussion: address open questions, refine proposals, resolve disagreements. Be specific and actionable.`;
+    }
 
-    return `You are ${currentAgent.name}, participating in meeting "${meeting?.title || 'Meeting'}" (Round ${round}/3).${agenda}
+    return `You are ${currentAgent.name}, participating in meeting "${meeting?.title || 'Meeting'}" (Round ${round}/${maxRounds}).${agenda}
 
 Transcript so far:
 ${lines.join('\n')}

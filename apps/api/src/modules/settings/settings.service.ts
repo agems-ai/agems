@@ -525,6 +525,12 @@ MAXIMUM teamwork. Every project involves the full relevant team.
     return config.globalEnabled && config.modules[module].enabled;
   }
 
+  /** Get module config (activity + autonomy levels) */
+  async getModuleConfig(module: ModuleName, orgId?: string): Promise<ModuleConfig> {
+    const config = await this.getAllModulesConfig(orgId);
+    return config.modules[module];
+  }
+
   /** Invalidate module config cache for an org */
   private invalidateModuleCache(orgId?: string) {
     const cacheKey = orgId || '__global__';
