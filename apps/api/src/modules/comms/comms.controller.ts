@@ -13,8 +13,18 @@ import type { RequestUser } from '../../common/types';
 export class CommsController {
   constructor(private commsService: CommsService, private prisma: PrismaService) {}
 
-  /** Verify channel belongs to user's org and the user participates in it */
-  private async verifyChannelAccess(channelId: string, userId: string, orgId: string) {
+  /** Verify channel belongs to user's org and the user participates in it.
+   *  ADMIN and MANAGER roles can access any channel in their org (needed for A2A chat monitoring). */
+  private async verifyChannelAccess(channelId: string, userId: string, orgId: string, role?: string) {
+    // ADMIN and MANAGER can read any channel in their org
+    if (role === 'ADMIN' || role === 'MANAGER') {
+      const channel = await this.prisma.channel.findFirst({
+        where: { id: channelId, orgId },
+        select: { id: true },
+      });
+      if (!channel) throw new ForbiddenException('Access denied');
+      return;
+    }
     const participant = await this.prisma.channelParticipant.findFirst({
       where: {
         channelId,
@@ -48,6 +58,10 @@ export class CommsController {
 
   @Get(':id')
   findOne(@Param('id') id: string, @Req() req: { user: RequestUser }) {
+    // ADMIN/MANAGER can view any channel in their org (including A2A)
+    if (req.user.role === 'ADMIN' || req.user.role === 'MANAGER') {
+      return this.commsService.findOneChannel(id, req.user.orgId);
+    }
     return this.commsService.findOneChannel(id, req.user.orgId, 'HUMAN', req.user.id);
   }
 
@@ -63,7 +77,7 @@ export class CommsController {
     },
   }))
   async uploadFile(@Param('id') channelId: string, @UploadedFile() file: any, @Req() req: { user: RequestUser }) {
-    await this.verifyChannelAccess(channelId, req.user.id, req.user.orgId);
+    await this.verifyChannelAccess(channelId, req.user.id, req.user.orgId, req.user.role);
     if (!file) throw new BadRequestException('No file provided');
     const ext = extname(file.originalname).toLowerCase() || '.bin';
     const filename = `${randomUUID()}${ext}`;
@@ -112,7 +126,7 @@ export class CommsController {
 
   @Get(':id/messages')
   async getMessages(@Param('id') channelId: string, @Query() filters: any, @Req() req: { user: RequestUser }) {
-    await this.verifyChannelAccess(channelId, req.user.id, req.user.orgId);
+    await this.verifyChannelAccess(channelId, req.user.id, req.user.orgId, req.user.role);
     return this.commsService.getMessages(channelId, filters);
   }
 
@@ -122,26 +136,26 @@ export class CommsController {
     @Body() body: { participantType: string; participantId: string; role?: string },
     @Req() req: { user: RequestUser },
   ) {
-    await this.verifyChannelAccess(channelId, req.user.id, req.user.orgId);
+    await this.verifyChannelAccess(channelId, req.user.id, req.user.orgId, req.user.role);
     return this.commsService.addParticipant(channelId, body.participantType, body.participantId, body.role);
   }
 
   @Delete(':id/participants/:pid')
   async removeParticipant(@Param('id') channelId: string, @Param('pid') participantId: string, @Req() req: { user: RequestUser }) {
-    await this.verifyChannelAccess(channelId, req.user.id, req.user.orgId);
+    await this.verifyChannelAccess(channelId, req.user.id, req.user.orgId, req.user.role);
     return this.commsService.removeParticipant(channelId, participantId);
   }
 
   @Patch(':id')
   async updateChannel(@Param('id') id: string, @Body() body: { name?: string; metadata?: any }, @Req() req: { user: RequestUser }) {
-    await this.verifyChannelAccess(id, req.user.id, req.user.orgId);
+    await this.verifyChannelAccess(id, req.user.id, req.user.orgId, req.user.role);
     return this.commsService.updateChannel(id, body);
   }
 
   @Delete(':id')
   @Roles('ADMIN')
   async deleteChannel(@Param('id') id: string, @Req() req: { user: RequestUser }) {
-    await this.verifyChannelAccess(id, req.user.id, req.user.orgId);
+    await this.verifyChannelAccess(id, req.user.id, req.user.orgId, req.user.role);
     return this.commsService.deleteChannel(id);
   }
 

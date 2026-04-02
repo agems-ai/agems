@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject, forwardRef, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from '../../config/prisma.service';
 import { AgentsService } from '../agents/agents.service';
@@ -8,7 +8,6 @@ import { CommsService } from '../comms/comms.service';
 import { TelegramAccountService } from '../telegram/telegram-account.service';
 import { ApprovalsService } from '../approvals/approvals.service';
 import { DashboardService } from '../dashboard/dashboard.service';
-import { BudgetsService } from '../budgets/budgets.service';
 import { categorizeToolName } from '../approvals/tool-categories';
 import { AgentRunner, type MCPServerConfig, type RunResult, type UserMessage, type MessagePart } from '@agems/ai';
 import { z } from 'zod';
@@ -19,7 +18,7 @@ import { decryptJson } from '../../common/crypto.util';
 import { RedisLockService } from '../../common/redis-lock.service';
 
 @Injectable()
-export class RuntimeService implements OnModuleInit {
+export class RuntimeService {
   private readonly logger = new Logger(RuntimeService.name);
   /** Abort controllers for running executions — keyed by executionId */
   private readonly abortControllers = new Map<string, AbortController>();
@@ -63,19 +62,8 @@ export class RuntimeService implements OnModuleInit {
     @Inject(forwardRef(() => ApprovalsService))
     private approvals: ApprovalsService,
     private dashboard: DashboardService,
-    private budgets: BudgetsService,
     private redisLock: RedisLockService,
   ) {}
-
-  async onModuleInit() {
-    const orphaned = await this.prisma.agentExecution.updateMany({
-      where: { status: 'RUNNING' },
-      data: { status: 'CANCELLED', error: 'Orphaned after server restart', endedAt: new Date() },
-    });
-    if (orphaned.count > 0) {
-      this.logger.warn(`Cleaned up ${orphaned.count} orphaned RUNNING executions on startup`);
-    }
-  }
 
   // ========== Redis queue helpers ==========
   private async enqueueMessage(channelId: string, message: any): Promise<void> {
@@ -588,17 +576,19 @@ export class RuntimeService implements OnModuleInit {
 
   /** When a human adds a meeting entry, trigger agent participants to respond */
   @OnEvent('meeting.entry.human')
-  async handleMeetingEntry(payload: { meetingId: string; entry: any }) {
+  async handleMeetingEntry(payload: { meetingId: string; entry: any; round?: number }) {
     const { meetingId, entry } = payload;
+    const round = payload.round ?? 1;
 
     if (entry.speakerType !== 'HUMAN' || entry.entryType !== 'SPEECH') return;
 
     // Check if meetings module is enabled for this meeting's org
     const meeting = await this.prisma.meeting.findUnique({
       where: { id: meetingId },
-      select: { title: true, agenda: true, orgId: true },
+      select: { title: true, agenda: true, orgId: true, status: true },
     });
-    if (meeting?.orgId && !(await this.settings.isModuleEnabled('meetings', meeting.orgId))) return;
+    if (!meeting || meeting.status !== 'IN_PROGRESS') return;
+    if (meeting.orgId && !(await this.settings.isModuleEnabled('meetings', meeting.orgId))) return;
 
     const participants = await this.prisma.meetingParticipant.findMany({
       where: { meetingId, participantType: 'AGENT' },
@@ -616,13 +606,15 @@ export class RuntimeService implements OnModuleInit {
     }
     if (agents.length === 0) return;
 
+    this.logger.log(`Meeting "${meeting.title}" round ${round}: triggering ${agents.length} agents`);
+
     // Emit expected agent count so frontend knows how many responses to wait for
     this.events.emit('meeting.agents.pending', { meetingId, count: agents.length });
 
     // Run all agents in parallel for faster responses
     await Promise.allSettled(agents.map(async (agent) => {
       try {
-        const context = await this.buildMeetingContext(meetingId, agent, agents, meeting);
+        const context = await this.buildMeetingContext(meetingId, agent, agents, meeting, round);
 
         const result = await this.execute(agent.id, context, { type: 'MEETING', id: meetingId });
 
@@ -642,7 +634,6 @@ export class RuntimeService implements OnModuleInit {
       } catch (err) {
         this.logger.error(`Agent ${agent.name} failed in meeting ${meetingId}: ${err}`);
 
-        // Create a visible error entry so the user knows what happened
         const lastEntry = await this.prisma.meetingEntry.findFirst({
           where: { meetingId }, orderBy: { order: 'desc' },
         });
@@ -657,11 +648,121 @@ export class RuntimeService implements OnModuleInit {
         this.events.emit('meeting.entry.new', { meetingId, entry: errorEntry });
       }
     }));
+
+    // After all agents responded in this round, decide: continue discussion or wrap up
+    const maxRounds = 3;
+    if (round < maxRounds) {
+      // Trigger next round — agents react to each other's responses
+      const nextRoundEntry = await this.prisma.meetingEntry.findFirst({
+        where: { meetingId }, orderBy: { order: 'desc' },
+      });
+      if (nextRoundEntry) {
+        this.logger.log(`Meeting "${meeting.title}": starting round ${round + 1}`);
+        // Small delay to let DB settle
+        setTimeout(() => {
+          this.events.emit('meeting.entry.human', {
+            meetingId,
+            entry: { ...nextRoundEntry, speakerType: 'HUMAN', entryType: 'SPEECH' },
+            round: round + 1,
+          });
+        }, 2000);
+      }
+    } else {
+      // Final round done — generate summary and close meeting
+      this.logger.log(`Meeting "${meeting.title}": all ${maxRounds} rounds complete, generating summary`);
+      setTimeout(() => this.generateMeetingSummary(meetingId, meeting, agents), 3000);
+    }
   }
 
-  private async buildMeetingContext(meetingId: string, currentAgent: any, allAgents: any[], meeting: any): Promise<string> {
+  /** Generate meeting summary using the CHAIR agent, then end the meeting */
+  private async generateMeetingSummary(meetingId: string, meeting: any, agents: any[]) {
+    try {
+      // Find CHAIR agent, or use first agent
+      const chairParticipant = await this.prisma.meetingParticipant.findFirst({
+        where: { meetingId, participantType: 'AGENT', role: 'CHAIR' },
+      });
+      const chairAgent = agents.find(a => a.id === chairParticipant?.participantId) || agents[0];
+      if (!chairAgent) return;
+
+      const entries = await this.prisma.meetingEntry.findMany({
+        where: { meetingId }, orderBy: { order: 'asc' }, take: 100,
+      });
+
+      const nameMap = new Map(agents.map((a: any) => [a.id, a.name]));
+      const lines = entries.map((e: any) => {
+        if (e.speakerType === 'SYSTEM') return `[System]: ${e.content}`;
+        return `[${nameMap.get(e.speakerId) || e.speakerType}]: ${e.content}`;
+      });
+
+      const summaryPrompt = `You are ${chairAgent.name}, the meeting chair. The meeting "${meeting.title}" has concluded.
+
+Full transcript:
+${lines.join('\n')}
+
+Please provide a structured meeting summary in the following format:
+
+## Meeting Summary
+Brief overview of what was discussed and achieved.
+
+## Key Decisions
+- List each decision made during the meeting
+
+## Action Items
+For each action item, use this exact format:
+- **[Agent Name]**: Task description
+
+## Next Steps
+What should happen after this meeting.
+
+Be concise but comprehensive. Write in the same language as the meeting transcript.`;
+
+      const result = await this.execute(chairAgent.id, summaryPrompt, { type: 'MEETING', id: meetingId });
+
+      // Save summary to meeting
+      await this.prisma.meeting.update({
+        where: { id: meetingId },
+        data: { summary: result.text },
+      });
+
+      // Add summary as meeting entry
+      const lastEntry = await this.prisma.meetingEntry.findFirst({
+        where: { meetingId }, orderBy: { order: 'desc' },
+      });
+      const summaryEntry = await this.prisma.meetingEntry.create({
+        data: {
+          meetingId, speakerType: 'SYSTEM', speakerId: 'system',
+          content: `## Meeting Summary\n\n${result.text}`,
+          entryType: 'SYSTEM',
+          order: (lastEntry?.order ?? 0) + 1,
+        },
+      });
+      this.events.emit('meeting.entry.new', { meetingId, entry: summaryEntry });
+
+      // End the meeting
+      const endEntry = await this.prisma.meetingEntry.create({
+        data: {
+          meetingId, speakerType: 'SYSTEM', speakerId: 'system',
+          content: 'Meeting ended',
+          entryType: 'SYSTEM',
+          order: (lastEntry?.order ?? 0) + 2,
+        },
+      });
+      this.events.emit('meeting.entry.new', { meetingId, entry: endEntry });
+
+      await this.prisma.meeting.update({
+        where: { id: meetingId },
+        data: { status: 'COMPLETED', endedAt: new Date() },
+      });
+
+      this.logger.log(`Meeting "${meeting.title}" completed with summary`);
+    } catch (err) {
+      this.logger.error(`Failed to generate meeting summary for ${meetingId}: ${err}`);
+    }
+  }
+
+  private async buildMeetingContext(meetingId: string, currentAgent: any, allAgents: any[], meeting: any, round = 1): Promise<string> {
     const entries = await this.prisma.meetingEntry.findMany({
-      where: { meetingId }, orderBy: { order: 'asc' }, take: 50,
+      where: { meetingId }, orderBy: { order: 'asc' }, take: 100,
     });
 
     const nameMap = new Map(allAgents.map(a => [a.id, a.name]));
@@ -677,7 +778,21 @@ export class RuntimeService implements OnModuleInit {
     });
 
     const agenda = meeting?.agenda ? `\nAgenda: ${meeting.agenda}` : '';
-    return `You are ${currentAgent.name}, participating in a meeting "${meeting?.title || 'Meeting'}".${agenda}\n\nTranscript:\n${lines.join('\n')}\n\nRespond as ${currentAgent.name}. Be concise and professional. Focus on the topic discussed. Share your expertise if relevant.`;
+
+    const roundInstructions = round === 1
+      ? 'Share your initial thoughts and expertise on the agenda topics.'
+      : round === 2
+        ? 'React to what other participants said. Build on their ideas, raise concerns, or propose specific actions. Reference other speakers by name.'
+        : 'This is the final round. Summarize your position, state any remaining concerns, and propose concrete action items or decisions.';
+
+    return `You are ${currentAgent.name}, participating in meeting "${meeting?.title || 'Meeting'}" (Round ${round}/3).${agenda}
+
+Transcript so far:
+${lines.join('\n')}
+
+Instructions for this round: ${roundInstructions}
+
+Respond as ${currentAgent.name}. Be concise and professional. Write in the same language as the agenda/transcript.`;
   }
 
   async execute(
@@ -925,12 +1040,9 @@ export class RuntimeService implements OnModuleInit {
           },
         });
 
-        const hitlCost = this.estimateCost(agent.llmProvider, result.tokensUsed);
-        this.recordCostToBudget(agentId, hitlCost);
         return { executionId: execution.id, ...result, waitingForApproval: true };
       }
 
-      const executionCost = this.estimateCost(agent.llmProvider, result.tokensUsed);
       await this.prisma.agentExecution.update({
         where: { id: execution.id },
         data: {
@@ -938,13 +1050,10 @@ export class RuntimeService implements OnModuleInit {
           output: { text: result.text },
           toolCalls: result.toolCalls as any,
           tokensUsed: result.tokensUsed.input + result.tokensUsed.output,
-          costUsd: executionCost,
+          costUsd: this.estimateCost(agent.llmProvider, result.tokensUsed),
           endedAt: new Date(),
         },
       });
-
-      // Auto-record cost to budget
-      this.recordCostToBudget(agentId, executionCost);
 
       this.events.emit('audit.create', {
         actorType: 'AGENT',
@@ -995,14 +1104,7 @@ export class RuntimeService implements OnModuleInit {
       this.abortControllers.delete(executionId);
       return true;
     }
-
-    // No AbortController means execution is not running on this instance.
-    // Mark it as cancelled directly in the DB (handles orphaned/stuck executions).
-    await this.prisma.agentExecution.updateMany({
-      where: { id: executionId, status: 'RUNNING' },
-      data: { status: 'CANCELLED', error: 'Stopped by user', endedAt: new Date() },
-    });
-    return true;
+    return true; // may be running on another pod and will be stopped via Redis flag
   }
 
   /** Stop all running executions in a channel */
@@ -4213,24 +4315,6 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     });
 
     return { success: true, toolName, enabled };
-  }
-
-  /** Auto-record execution cost to agent's active budget (if any) */
-  private async recordCostToBudget(agentId: string, costUsd: number) {
-    if (!costUsd || costUsd <= 0) return;
-    try {
-      const now = new Date();
-      const budget = await this.prisma.agentBudget.findFirst({
-        where: { agentId, hardStopTriggered: false, periodEnd: { gte: now }, periodStart: { lte: now } },
-        include: { agent: { select: { orgId: true } } },
-        orderBy: { createdAt: 'desc' },
-      });
-      if (budget) {
-        await this.budgets.recordSpend(budget.id, costUsd, 'Auto-recorded from execution', budget.agent.orgId);
-      }
-    } catch (err) {
-      this.logger.warn(`Failed to record cost to budget for agent ${agentId}: ${err}`);
-    }
   }
 
   private estimateCost(provider: string, tokens: { input: number; output: number }): number {
