@@ -6,7 +6,8 @@ import { MeetingsService } from './meetings.service';
 @Injectable()
 export class MeetingsSchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MeetingsSchedulerService.name);
-  private intervalRef: ReturnType<typeof setInterval> | null = null;
+  private startInterval: ReturnType<typeof setInterval> | null = null;
+  private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private prisma: PrismaService,
@@ -16,42 +17,36 @@ export class MeetingsSchedulerService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     // Check every 30 seconds for meetings that should be started
-    this.intervalRef = setInterval(() => this.autoStartMeetings(), 30_000);
-    this.logger.log('Meeting auto-start scheduler initialized (30s interval)');
+    this.startInterval = setInterval(() => this.autoStartMeetings(), 30_000);
 
-    // On startup, check for stalled meetings (started but no agent responses)
-    setTimeout(() => this.retriggerStalledMeetings(), 10_000);
+    // Check every 2 minutes for stuck IN_PROGRESS meetings that need to be finished
+    this.cleanupInterval = setInterval(() => this.finishStuckMeetings(), 120_000);
+
+    this.logger.log('Meeting scheduler initialized (auto-start 30s, cleanup 120s)');
+
+    // On startup, handle all stalled meetings
+    setTimeout(() => this.handleStalledMeetings(), 10_000);
   }
 
   onModuleDestroy() {
-    if (this.intervalRef) {
-      clearInterval(this.intervalRef);
-      this.intervalRef = null;
-    }
+    if (this.startInterval) { clearInterval(this.startInterval); this.startInterval = null; }
+    if (this.cleanupInterval) { clearInterval(this.cleanupInterval); this.cleanupInterval = null; }
   }
+
+  // ── Auto-start SCHEDULED meetings ──
 
   private async autoStartMeetings() {
     try {
-      const now = new Date();
-
       const dueMeetings = await this.prisma.meeting.findMany({
-        where: {
-          status: 'SCHEDULED',
-          scheduledAt: { lte: now },
-        },
-        include: {
-          participants: true,
-        },
+        where: { status: 'SCHEDULED', scheduledAt: { lte: new Date() } },
+        include: { participants: true },
       });
 
       for (const meeting of dueMeetings) {
         try {
           this.logger.log(`Auto-starting meeting "${meeting.title}" (${meeting.id})`);
-
           await this.meetingsService.startMeeting(meeting.id);
-
           await this.triggerAgents(meeting);
-
           this.logger.log(`Meeting "${meeting.title}" auto-started successfully`);
         } catch (err) {
           this.logger.error(`Failed to auto-start meeting ${meeting.id}: ${err}`);
@@ -62,9 +57,9 @@ export class MeetingsSchedulerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Trigger agent participants to start discussing */
+  // ── Trigger agents to discuss ──
+
   private async triggerAgents(meeting: { id: string; title: string; agenda: string | null; participants: any[] }) {
-    // If there are agent participants, trigger them to open the discussion
     const chairAgent = meeting.participants.find(
       (p: any) => p.participantType === 'AGENT' && p.role === 'CHAIR',
     );
@@ -74,7 +69,6 @@ export class MeetingsSchedulerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    // Add a system prompt to kick off the discussion
     await this.meetingsService.addEntry(meeting.id, {
       speakerType: 'SYSTEM',
       speakerId: 'system',
@@ -82,7 +76,6 @@ export class MeetingsSchedulerService implements OnModuleInit, OnModuleDestroy {
       entryType: 'SPEECH',
     });
 
-    // Emit as if a human spoke so agents respond
     const lastEntry = await this.prisma.meetingEntry.findFirst({
       where: { meetingId: meeting.id },
       orderBy: { order: 'desc' },
@@ -97,52 +90,104 @@ export class MeetingsSchedulerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Re-trigger IN_PROGRESS meetings where agents never responded (e.g. after server restart) */
-  private async retriggerStalledMeetings() {
+  // ── Handle stalled meetings on startup ──
+
+  private async handleStalledMeetings() {
     try {
-      const stalledMeetings = await this.prisma.meeting.findMany({
-        where: {
-          status: 'IN_PROGRESS',
-        },
-        include: {
-          participants: true,
-        },
+      const inProgressMeetings = await this.prisma.meeting.findMany({
+        where: { status: 'IN_PROGRESS' },
+        include: { participants: true },
       });
 
-      for (const meeting of stalledMeetings) {
-        // Check if any agent has responded
-        const agentEntries = await this.prisma.meetingEntry.count({
-          where: { meetingId: meeting.id, speakerType: 'AGENT' },
-        });
-
-        if (agentEntries > 0) continue; // agents already responded
-
-        // Check if there are agent participants
+      for (const meeting of inProgressMeetings) {
         const agentParticipants = meeting.participants.filter(
           (p: any) => p.participantType === 'AGENT',
         );
         if (agentParticipants.length === 0) continue;
 
-        this.logger.warn(`Re-triggering stalled meeting "${meeting.title}" (${meeting.id}) — ${agentParticipants.length} agents never responded`);
+        const agentEntries = await this.prisma.meetingEntry.count({
+          where: { meetingId: meeting.id, speakerType: 'AGENT' },
+        });
 
-        // Find the last SPEECH entry to use as trigger
-        const lastSpeech = await this.prisma.meetingEntry.findFirst({
-          where: { meetingId: meeting.id, entryType: 'SPEECH' },
+        const lastEntry = await this.prisma.meetingEntry.findFirst({
+          where: { meetingId: meeting.id },
           orderBy: { order: 'desc' },
         });
 
-        if (lastSpeech) {
-          this.events.emit('meeting.entry.human', {
-            meetingId: meeting.id,
-            entry: { ...lastSpeech, speakerType: 'HUMAN', entryType: 'SPEECH' },
+        const lastEntryAge = lastEntry
+          ? Date.now() - new Date(lastEntry.createdAt).getTime()
+          : Infinity;
+        const fiveMinutes = 5 * 60 * 1000;
+
+        if (agentEntries === 0) {
+          // No agent responses at all — re-trigger from scratch
+          this.logger.warn(`Re-triggering stalled meeting "${meeting.title}" (${meeting.id}) — 0 agent responses`);
+          const lastSpeech = await this.prisma.meetingEntry.findFirst({
+            where: { meetingId: meeting.id, entryType: 'SPEECH' },
+            orderBy: { order: 'desc' },
           });
-        } else {
-          // No speech entry exists, create one and trigger
-          await this.triggerAgents(meeting);
+          if (lastSpeech) {
+            this.events.emit('meeting.entry.human', {
+              meetingId: meeting.id,
+              entry: { ...lastSpeech, speakerType: 'HUMAN', entryType: 'SPEECH' },
+            });
+          } else {
+            await this.triggerAgents(meeting);
+          }
+        } else if (lastEntryAge > fiveMinutes && !(meeting as any).summary) {
+          // Has agent responses but no activity for 5+ min and no summary — force finish
+          this.logger.warn(`Force-finishing stuck meeting "${meeting.title}" (${meeting.id}) — ${agentEntries} agent entries, idle ${Math.round(lastEntryAge / 60000)}min`);
+          this.events.emit('meeting.force.finish', { meetingId: meeting.id });
         }
       }
     } catch (err) {
-      this.logger.error(`Retrigger stalled meetings error: ${err}`);
+      this.logger.error(`Handle stalled meetings error: ${err}`);
+    }
+  }
+
+  // ── Periodic cleanup: finish any IN_PROGRESS meeting idle for too long ──
+
+  private async finishStuckMeetings() {
+    try {
+      const inProgressMeetings = await this.prisma.meeting.findMany({
+        where: { status: 'IN_PROGRESS' },
+        select: { id: true, title: true, summary: true },
+      });
+
+      for (const meeting of inProgressMeetings) {
+        // Already has summary — just needs to be marked COMPLETED
+        if (meeting.summary) {
+          this.logger.log(`Closing meeting "${meeting.title}" — summary exists but status was IN_PROGRESS`);
+          await this.prisma.meeting.update({
+            where: { id: meeting.id },
+            data: { status: 'COMPLETED', endedAt: new Date() },
+          });
+          continue;
+        }
+
+        const lastEntry = await this.prisma.meetingEntry.findFirst({
+          where: { meetingId: meeting.id },
+          orderBy: { order: 'desc' },
+        });
+
+        if (!lastEntry) continue;
+
+        const idleMinutes = (Date.now() - new Date(lastEntry.createdAt).getTime()) / 60000;
+
+        // If idle for 10+ minutes, force finish
+        if (idleMinutes >= 10) {
+          const agentEntries = await this.prisma.meetingEntry.count({
+            where: { meetingId: meeting.id, speakerType: 'AGENT' },
+          });
+
+          if (agentEntries > 0) {
+            this.logger.warn(`Force-finishing idle meeting "${meeting.title}" (idle ${Math.round(idleMinutes)}min, ${agentEntries} agent entries)`);
+            this.events.emit('meeting.force.finish', { meetingId: meeting.id });
+          }
+        }
+      }
+    } catch (err) {
+      this.logger.error(`Finish stuck meetings error: ${err}`);
     }
   }
 }

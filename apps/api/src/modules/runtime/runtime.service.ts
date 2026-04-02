@@ -574,6 +574,36 @@ export class RuntimeService {
     return trimmed;
   }
 
+  /** Force-finish a stuck meeting: generate summary and close */
+  @OnEvent('meeting.force.finish')
+  async handleForceFinishMeeting(payload: { meetingId: string }) {
+    const { meetingId } = payload;
+    const meeting = await this.prisma.meeting.findUnique({
+      where: { id: meetingId },
+      select: { title: true, agenda: true, orgId: true, status: true, summary: true },
+    });
+    if (!meeting || meeting.status !== 'IN_PROGRESS') return;
+    if (meeting.summary) {
+      // Already has summary, just close
+      await this.prisma.meeting.update({ where: { id: meetingId }, data: { status: 'COMPLETED', endedAt: new Date() } });
+      return;
+    }
+
+    const participants = await this.prisma.meetingParticipant.findMany({
+      where: { meetingId, participantType: 'AGENT' },
+    });
+    const agents: any[] = [];
+    for (const p of participants) {
+      try {
+        const agent = await this.agentsService.findOne(p.participantId);
+        if (agent.status === 'ACTIVE') agents.push(agent);
+      } catch {}
+    }
+
+    this.logger.log(`Force-finishing meeting "${meeting.title}" with summary generation`);
+    await this.generateMeetingSummary(meetingId, meeting, agents);
+  }
+
   /** When a human adds a meeting entry, trigger agent participants to respond */
   @OnEvent('meeting.entry.human')
   async handleMeetingEntry(payload: { meetingId: string; entry: any; round?: number }) {
