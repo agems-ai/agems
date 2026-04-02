@@ -778,6 +778,14 @@ class ApiClient {
     });
   }
 
+  stopExecution(executionId: string) {
+    return this.fetch<{ stopped: boolean }>(`/dashboard/stop-execution/${executionId}`, { method: 'POST' });
+  }
+
+  stopAllExecutions() {
+    return this.fetch<{ stopped: number; total: number }>('/dashboard/stop-all', { method: 'POST' });
+  }
+
   // Folders
   getFolders(parentId?: string) {
     const qs = parentId ? `?parentId=${parentId}` : '';
@@ -870,8 +878,16 @@ class ApiClient {
     return this.fetch<any[]>(`/budgets/${id}/incidents`);
   }
 
-  resetBudget(id: string) {
-    return this.fetch(`/budgets/${id}/reset`, { method: 'POST' });
+  resetBudget(id: string, body?: { periodStart: string; periodEnd: string }) {
+    return this.fetch(`/budgets/${id}/reset`, { method: 'POST', body: JSON.stringify(body || {}) });
+  }
+
+  getOrgCostStats(period: 'daily' | 'weekly' | 'monthly' = 'daily', days = 30) {
+    return this.fetch<any>(`/budgets/cost-stats?period=${period}&days=${days}`);
+  }
+
+  getAgentCostStats(agentId: string, period: 'daily' | 'weekly' | 'monthly' = 'daily', days = 30) {
+    return this.fetch<any>(`/agents/${agentId}/cost-stats?period=${period}&days=${days}`);
   }
 
   // Approvals

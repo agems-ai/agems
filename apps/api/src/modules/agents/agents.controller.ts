@@ -140,6 +140,16 @@ export class AgentsController {
     return this.agentsService.getExecutions(id, req.user.orgId, limit ? parseInt(limit, 10) : 20);
   }
 
+  @Get(':id/cost-stats')
+  getCostStats(
+    @Param('id') id: string,
+    @Query('period') period: 'daily' | 'weekly' | 'monthly' | undefined,
+    @Query('days') days: string | undefined,
+    @Request() req: { user: RequestUser },
+  ) {
+    return this.agentsService.getCostStats(id, req.user.orgId, period || 'daily', days ? parseInt(days, 10) : 30);
+  }
+
   @Post(':id/spawn')
   @Roles('ADMIN')
   spawn(@Param('id') id: string, @Body() body: any, @Request() req: { user: RequestUser }) {

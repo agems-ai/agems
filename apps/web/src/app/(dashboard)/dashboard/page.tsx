@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '@/lib/api';
 import { getCommsSocket } from '@/lib/socket';
-import { Plus, Pencil, Trash2, Play, X, Code2, BarChart3, RefreshCw, ChevronDown, ChevronUp, MessageSquare } from 'lucide-react';
+import { Plus, Pencil, Trash2, Play, X, Code2, BarChart3, RefreshCw, ChevronDown, ChevronUp, MessageSquare, Square, Settings2 } from 'lucide-react';
 import ChatPanel, { Avatar } from '@/components/ChatPanel';
 
 /* ═══════════════════════════════════════════════════════════
@@ -265,6 +265,81 @@ export default function DashboardPage() {
   const selectedAgent = agents.find((a) => a.id === selectedAgentId);
   const [dashTab, setDashTab] = useState<'activity' | 'chat' | 'widgets'>('activity');
   const [expandedExec, setExpandedExec] = useState<string | null>(null);
+  const [stoppingExec, setStoppingExec] = useState<Record<string, boolean>>({});
+  const [stoppingAll, setStoppingAll] = useState(false);
+  const [showModulesModal, setShowModulesModal] = useState(false);
+
+  // AI Modules state
+  type ModuleName = 'tasks' | 'comms' | 'meetings' | 'goals' | 'projects';
+  interface ModuleConfig { enabled: boolean; activityLevel: number; autonomyLevel: number; }
+  const [globalEnabled, setGlobalEnabled] = useState(true);
+  const [crossChannelEnabled, setCrossChannelEnabled] = useState(false);
+  const [crossChannelMessages, setCrossChannelMessages] = useState(10);
+  const [aiModules, setAiModules] = useState<Record<ModuleName, ModuleConfig>>({
+    tasks: { enabled: true, activityLevel: 3, autonomyLevel: 3 },
+    comms: { enabled: true, activityLevel: 3, autonomyLevel: 3 },
+    meetings: { enabled: true, activityLevel: 3, autonomyLevel: 3 },
+    goals: { enabled: true, activityLevel: 3, autonomyLevel: 3 },
+    projects: { enabled: true, activityLevel: 3, autonomyLevel: 3 },
+  });
+  const [savingModules, setSavingModules] = useState(false);
+  const [modulesSaved, setModulesSaved] = useState(false);
+
+  // Load modules config
+  useEffect(() => {
+    api.getModulesConfig().then((c) => {
+      setGlobalEnabled(c.globalEnabled);
+      if (c.crossChannel) {
+        setCrossChannelEnabled(c.crossChannel.enabled);
+        setCrossChannelMessages(c.crossChannel.messageCount);
+      }
+      setAiModules(c.modules as Record<ModuleName, ModuleConfig>);
+    }).catch(() => {});
+  }, []);
+
+  const handleStopExecution = async (execId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setStoppingExec(prev => ({ ...prev, [execId]: true }));
+    try {
+      await api.stopExecution(execId);
+      setTimeout(() => setStoppingExec(prev => ({ ...prev, [execId]: false })), 2000);
+    } catch {
+      setStoppingExec(prev => ({ ...prev, [execId]: false }));
+    }
+  };
+
+  const handleStopAll = async () => {
+    setStoppingAll(true);
+    try {
+      await api.stopAllExecutions();
+      setTimeout(() => setStoppingAll(false), 2000);
+    } catch {
+      setStoppingAll(false);
+    }
+  };
+
+  const handleSaveModules = async () => {
+    setSavingModules(true);
+    try {
+      const res = await api.setModulesConfig({
+        globalEnabled,
+        crossChannel: { enabled: crossChannelEnabled, messageCount: crossChannelMessages },
+        modules: aiModules,
+      });
+      setGlobalEnabled(res.globalEnabled);
+      if (res.crossChannel) {
+        setCrossChannelEnabled(res.crossChannel.enabled);
+        setCrossChannelMessages(res.crossChannel.messageCount);
+      }
+      setAiModules(res.modules as Record<ModuleName, ModuleConfig>);
+      setModulesSaved(true);
+      setTimeout(() => setModulesSaved(false), 2000);
+    } finally { setSavingModules(false); }
+  };
+
+  const updateModule = (mod: ModuleName, patch: Partial<ModuleConfig>) => {
+    setAiModules(prev => ({ ...prev, [mod]: { ...prev[mod], ...patch } }));
+  };
 
   // Agent Activity data
   const [activityData, setActivityData] = useState<{ running: any[]; recent: any[] }>({ running: [], recent: [] });
@@ -350,6 +425,26 @@ export default function DashboardPage() {
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
           <h2 className="font-semibold">Agent Activity</h2>
           <span className="text-xs text-[var(--muted)]">Live</span>
+          <div className="ml-auto flex items-center gap-1.5">
+            {activityData.running.length > 0 && (
+              <button
+                onClick={handleStopAll}
+                disabled={stoppingAll}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs bg-red-500/15 text-red-400 hover:bg-red-500/25 transition disabled:opacity-50"
+                title="Stop all running executions"
+              >
+                <Square size={12} fill="currentColor" />
+                <span>{stoppingAll ? 'Stopping...' : 'Stop All'}</span>
+              </button>
+            )}
+            <button
+              onClick={() => setShowModulesModal(true)}
+              className="p-1.5 rounded-lg hover:bg-[var(--hover)] text-[var(--muted)] hover:text-white transition"
+              title="AI Modules Settings"
+            >
+              <Settings2 size={16} />
+            </button>
+          </div>
         </div>
         <div className="p-4 space-y-4 overflow-auto flex-1">
           {/* Running Now */}
@@ -369,7 +464,17 @@ export default function DashboardPage() {
                       <span className="font-medium text-sm truncate">{e.agent?.name || 'Agent'}</span>
                       <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 shrink-0">{triggerLabels[e.triggerType] || e.triggerType}</span>
                     </div>
-                    <span className="text-xs font-mono text-emerald-400 shrink-0">{timeAgo(e.startedAt)}</span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className="text-xs font-mono text-emerald-400">{timeAgo(e.startedAt)}</span>
+                      <button
+                        onClick={(ev) => handleStopExecution(e.id, ev)}
+                        disabled={stoppingExec[e.id]}
+                        className="p-1 rounded hover:bg-red-500/20 text-red-400/60 hover:text-red-400 transition disabled:opacity-50"
+                        title="Stop execution"
+                      >
+                        <Square size={12} fill="currentColor" />
+                      </button>
+                    </div>
                   </div>
                   {/* Live streaming text */}
                   {(() => {
@@ -409,6 +514,9 @@ export default function DashboardPage() {
               );
             })}
           </div>
+          {/* Cost Overview */}
+          <CostOverviewSection />
+
           {/* Recent */}
           <div>
             <h3 className="text-sm font-medium text-[var(--muted)] mb-2">Recent Activity</h3>
@@ -636,6 +744,143 @@ export default function DashboardPage() {
           onClose={() => { setEditWidget(null); setShowAddWidget(false); }}
         />
       )}
+
+      {/* ═══════ AI Modules Modal ═══════ */}
+      {showModulesModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowModulesModal(false)}>
+          <div className="bg-[var(--card)] rounded-xl w-full max-w-[680px] mx-4 max-h-[90vh] overflow-y-auto border border-[var(--border)] shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-[var(--border)] flex items-center gap-3">
+              <Settings2 size={18} className="text-[var(--accent)]" />
+              <h3 className="font-semibold flex-1">AI Modules</h3>
+              <button onClick={() => setShowModulesModal(false)} className="p-1 rounded-lg hover:bg-[var(--card-hover)] text-[var(--muted)]"><X size={18} /></button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Global Master Switch */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="font-semibold text-sm">AI Agent Execution</h4>
+                  <p className="text-xs text-[var(--muted)]">Master switch for all agent interactions</p>
+                </div>
+                <button
+                  onClick={async () => {
+                    const next = !globalEnabled;
+                    setGlobalEnabled(next);
+                    try { await api.setModulesConfig({ globalEnabled: next }); } catch { setGlobalEnabled(!next); }
+                  }}
+                  className={`relative w-14 h-7 rounded-full transition-colors duration-200 ${globalEnabled ? 'bg-emerald-500' : 'bg-gray-600'}`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-6 h-6 bg-white rounded-full transition-transform duration-200 ${globalEnabled ? 'translate-x-7' : 'translate-x-0'}`} />
+                </button>
+              </div>
+              <div className={`p-2.5 rounded-lg border ${globalEnabled ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-red-500/30 bg-red-500/10'}`}>
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${globalEnabled ? 'bg-emerald-400 animate-pulse' : 'bg-red-400'}`} />
+                  <span className={`text-xs font-medium ${globalEnabled ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {globalEnabled ? 'Agents are active across all enabled modules' : 'All agent interactions are paused'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Cross-Channel Context */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="font-semibold text-sm">Cross-Channel Context</h4>
+                  <p className="text-xs text-[var(--muted)]">Inject recent messages from other channels</p>
+                </div>
+                <button
+                  onClick={() => setCrossChannelEnabled(!crossChannelEnabled)}
+                  className={`relative w-12 h-6 rounded-full transition-colors duration-200 ${crossChannelEnabled ? 'bg-emerald-500' : 'bg-gray-600'}`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform duration-200 ${crossChannelEnabled ? 'translate-x-6' : 'translate-x-0'}`} />
+                </button>
+              </div>
+
+              {/* Module Cards */}
+              <div className={`grid grid-cols-1 md:grid-cols-2 gap-3 ${!globalEnabled ? 'opacity-40 pointer-events-none' : ''}`}>
+                {([
+                  { key: 'tasks' as ModuleName, label: 'Tasks', desc: 'Execute, review, and create tasks' },
+                  { key: 'comms' as ModuleName, label: 'Comms', desc: 'Respond to messages in channels' },
+                  { key: 'meetings' as ModuleName, label: 'Meetings', desc: 'Participate in meetings and vote' },
+                  { key: 'goals' as ModuleName, label: 'Goals', desc: 'Track and advance goals' },
+                  { key: 'projects' as ModuleName, label: 'Projects', desc: 'Manage project work' },
+                ]).map(({ key: mod, label, desc }) => {
+                  const mc = aiModules[mod];
+                  const activityLabels: Record<number, string> = {
+                    1: 'Passive', 2: 'Reactive', 3: 'Balanced', 4: 'Proactive', 5: 'Aggressive',
+                  };
+                  const autonomyLabels: Record<number, string> = {
+                    1: 'Solo', 2: 'Lean', 3: 'Balanced', 4: 'Team-first', 5: 'Full team',
+                  };
+                  return (
+                    <div key={mod} className={`bg-[var(--bg)] border rounded-xl p-4 transition-all ${mc.enabled ? 'border-[var(--border)]' : 'border-[var(--border)] opacity-60'}`}>
+                      <div className="flex items-center justify-between mb-3">
+                        <div>
+                          <h4 className="font-semibold text-sm">{label}</h4>
+                          <p className="text-[10px] text-[var(--muted)]">{desc}</p>
+                        </div>
+                        <button
+                          onClick={() => updateModule(mod, { enabled: !mc.enabled })}
+                          className={`relative w-10 h-5 rounded-full transition-colors duration-200 ${mc.enabled ? 'bg-emerald-500' : 'bg-gray-600'}`}
+                        >
+                          <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform duration-200 ${mc.enabled ? 'translate-x-5' : 'translate-x-0'}`} />
+                        </button>
+                      </div>
+                      <div className={`space-y-3 ${!mc.enabled ? 'opacity-30 pointer-events-none' : ''}`}>
+                        {/* Activity Level */}
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px] font-medium text-[var(--muted)]">Activity</span>
+                            <span className="text-[10px] text-[var(--muted)]">{activityLabels[mc.activityLevel]}</span>
+                          </div>
+                          <div className="flex gap-1">
+                            {[1, 2, 3, 4, 5].map(n => (
+                              <button key={n} onClick={() => updateModule(mod, { activityLevel: n })}
+                                className={`flex-1 h-6 rounded text-[10px] font-bold transition-all ${
+                                  mc.activityLevel === n
+                                    ? 'bg-[var(--accent)] text-white scale-105'
+                                    : 'bg-[var(--card)] border border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)]'
+                                }`}
+                              >{n}</button>
+                            ))}
+                          </div>
+                        </div>
+                        {/* Autonomy Level */}
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px] font-medium text-[var(--muted)]">Autonomy</span>
+                            <span className="text-[10px] text-[var(--muted)]">{autonomyLabels[mc.autonomyLevel]}</span>
+                          </div>
+                          <div className="flex gap-1">
+                            {[1, 2, 3, 4, 5].map(n => (
+                              <button key={n} onClick={() => updateModule(mod, { autonomyLevel: n })}
+                                className={`flex-1 h-6 rounded text-[10px] font-bold transition-all ${
+                                  mc.autonomyLevel === n
+                                    ? 'bg-purple-500 text-white scale-105'
+                                    : 'bg-[var(--card)] border border-[var(--border)] text-[var(--muted)] hover:border-purple-400'
+                                }`}
+                              >{n}</button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Save Button */}
+              <div className="flex items-center gap-3 pt-2">
+                <button onClick={handleSaveModules} disabled={savingModules}
+                  className="px-6 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90 disabled:opacity-50 text-sm">
+                  {savingModules ? 'Saving...' : 'Save Changes'}
+                </button>
+                {modulesSaved && <span className="text-green-500 text-sm">Saved!</span>}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -836,4 +1081,102 @@ function fmtNum(val: any): string {
   if (num >= 1_000_000) return (num / 1_000_000).toFixed(1) + 'M';
   if (num >= 1_000) return (num / 1_000).toFixed(1) + 'K';
   return num.toLocaleString();
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Cost Overview Section — Org-wide spending stats on dashboard
+   ═══════════════════════════════════════════════════════════ */
+function CostOverviewSection() {
+  const [stats, setStats] = useState<any>(null);
+  const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    const days = period === 'monthly' ? 365 : period === 'weekly' ? 90 : 30;
+    api.getOrgCostStats(period, days).then((data) => {
+      setStats(data);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [period]);
+
+  if (loading && !stats) return null;
+  if (!stats || (!stats.totalCost && !stats.timeline?.length)) return null;
+
+  const maxCost = stats.timeline?.length > 0 ? Math.max(...stats.timeline.map((t: any) => t.cost), 0.0001) : 1;
+
+  return (
+    <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-medium text-[var(--muted)]">Cost Overview</h3>
+        <div className="flex gap-1">
+          {(['daily', 'weekly', 'monthly'] as const).map((p) => (
+            <button
+              key={p}
+              onClick={() => setPeriod(p)}
+              className={`text-[10px] px-2 py-0.5 rounded ${
+                period === p ? 'bg-[var(--accent)] text-white' : 'text-[var(--muted)] hover:text-white'
+              }`}
+            >
+              {p === 'daily' ? '30D' : p === 'weekly' ? '90D' : '12M'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Summary row */}
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="text-center">
+          <div className="text-lg font-bold" style={{ color: 'var(--accent)' }}>${stats.totalCost?.toFixed(2)}</div>
+          <div className="text-[9px] text-[var(--muted)] uppercase">Total Cost</div>
+        </div>
+        <div className="text-center">
+          <div className="text-lg font-bold">{(stats.totalTokens || 0).toLocaleString()}</div>
+          <div className="text-[9px] text-[var(--muted)] uppercase">Tokens</div>
+        </div>
+        <div className="text-center">
+          <div className="text-lg font-bold">{stats.totalExecutions || 0}</div>
+          <div className="text-[9px] text-[var(--muted)] uppercase">Executions</div>
+        </div>
+      </div>
+
+      {/* Mini bar chart */}
+      {stats.timeline?.length > 0 && (
+        <div className="flex items-end gap-px h-16">
+          {stats.timeline.map((t: any, i: number) => (
+            <div key={i} className="flex-1 flex flex-col items-center justify-end h-full group relative">
+              <div
+                className="w-full rounded-t-sm hover:opacity-80"
+                style={{
+                  height: `${Math.max((t.cost / maxCost) * 100, 3)}%`,
+                  backgroundColor: 'var(--accent)',
+                  minHeight: '1px',
+                }}
+              />
+              <div className="absolute bottom-full mb-1 hidden group-hover:block bg-[var(--card)] border border-[var(--border)] rounded px-2 py-1 text-[9px] whitespace-nowrap z-10 shadow-lg">
+                <div className="font-medium">{t.date}</div>
+                <div>${t.cost?.toFixed(4)} &middot; {t.tokens?.toLocaleString()} tok</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Top agents by cost */}
+      {stats.agentBreakdown?.length > 0 && (
+        <div className="mt-3 pt-3 border-t border-[var(--border)]">
+          <div className="text-[9px] text-[var(--muted)] uppercase mb-1.5">Top Agents by Cost</div>
+          <div className="space-y-1">
+            {stats.agentBreakdown.slice(0, 5).map((a: any, i: number) => (
+              <div key={a.agentId} className="flex items-center gap-2 text-xs">
+                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
+                <span className="flex-1 truncate text-[var(--muted)]">{a.name || a.agentId.slice(0, 8)}</span>
+                <span className="font-medium tabular-nums">${a.cost?.toFixed(4)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }

@@ -31,6 +31,15 @@ export class BudgetsController {
     return this.budgetsService.getSummary(req.user.orgId);
   }
 
+  @Get('cost-stats')
+  getCostStats(
+    @Query('period') period: 'daily' | 'weekly' | 'monthly' | undefined,
+    @Query('days') days: string | undefined,
+    @Request() req: { user: RequestUser },
+  ) {
+    return this.budgetsService.getOrgCostStats(req.user.orgId, period || 'daily', days ? parseInt(days, 10) : 30);
+  }
+
   @Get()
   findAll(
     @Query() filters: { agentId?: string; page?: string; pageSize?: string },

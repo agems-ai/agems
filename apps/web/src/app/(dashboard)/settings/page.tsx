@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 
 export default function SettingsPage() {
-  const [tab, setTab] = useState<'llm' | 'platform' | 'n8n' | 'modules' | 'prompts' | 'system'>('llm');
+  const [tab, setTab] = useState<'llm' | 'platform' | 'n8n' | 'modules' | 'prompts' | 'system' | 'usage'>('llm');
 
   // LLM Keys
   const [llmKeys, setLlmKeys] = useState<Record<string, { set: boolean; masked: string }>>({});
@@ -154,6 +154,7 @@ export default function SettingsPage() {
           { key: 'modules', label: 'AI Modules' },
           { key: 'prompts', label: 'System Prompts' },
           { key: 'n8n', label: 'N8N' },
+          { key: 'usage', label: 'Usage & Costs' },
           { key: 'system', label: 'System' },
         ].map((t) => (
           <button key={t.key} onClick={() => setTab(t.key as any)}
@@ -603,6 +604,8 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {tab === 'usage' && <UsageCostsTab />}
+
       {tab === 'system' && (
         <div className="space-y-4">
           <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5">
@@ -830,6 +833,197 @@ docker compose pull && docker compose up -d`}
         </div>
       )}
 
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Usage & Costs Tab — Extended token/cost statistics
+   ═══════════════════════════════════════════════════════════ */
+function UsageCostsTab() {
+  const [stats, setStats] = useState<any>(null);
+  const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+  const [loading, setLoading] = useState(true);
+  const [budgetSummary, setBudgetSummary] = useState<any>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    const days = period === 'monthly' ? 365 : period === 'weekly' ? 90 : 30;
+    Promise.all([
+      api.getOrgCostStats(period, days),
+      api.getBudgetSummary(),
+    ]).then(([costData, summary]) => {
+      setStats(costData);
+      setBudgetSummary(summary);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [period]);
+
+  const maxCost = stats?.timeline?.length > 0 ? Math.max(...stats.timeline.map((t: any) => t.cost), 0.0001) : 1;
+
+  return (
+    <div className="space-y-4">
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4">
+          <div className="text-xs text-[var(--muted)] uppercase mb-1">Total Spend</div>
+          <div className="text-2xl font-bold" style={{ color: 'var(--accent)' }}>
+            {loading ? '...' : `$${(stats?.totalCost || 0).toFixed(2)}`}
+          </div>
+          <div className="text-[10px] text-[var(--muted)]">
+            {period === 'daily' ? 'Last 30 days' : period === 'weekly' ? 'Last 90 days' : 'Last 12 months'}
+          </div>
+        </div>
+        <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4">
+          <div className="text-xs text-[var(--muted)] uppercase mb-1">Total Tokens</div>
+          <div className="text-2xl font-bold">{loading ? '...' : (stats?.totalTokens || 0).toLocaleString()}</div>
+          <div className="text-[10px] text-[var(--muted)]">{stats?.totalExecutions || 0} executions</div>
+        </div>
+        <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4">
+          <div className="text-xs text-[var(--muted)] uppercase mb-1">Budget Limit</div>
+          <div className="text-2xl font-bold">${(budgetSummary?.totalLimitUsd || 0).toFixed(2)}</div>
+          <div className="text-[10px] text-[var(--muted)]">{budgetSummary?.totalBudgets || 0} budgets configured</div>
+        </div>
+        <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4">
+          <div className="text-xs text-[var(--muted)] uppercase mb-1">Utilization</div>
+          <div className={`text-2xl font-bold ${
+            (budgetSummary?.utilizationPercent || 0) >= 100 ? 'text-red-400' :
+            (budgetSummary?.utilizationPercent || 0) >= 80 ? 'text-yellow-400' : 'text-emerald-400'
+          }`}>
+            {(budgetSummary?.utilizationPercent || 0).toFixed(1)}%
+          </div>
+          <div className="text-[10px] text-[var(--muted)]">
+            {(budgetSummary?.agentsOverBudget?.length || 0)} agent(s) over budget
+          </div>
+        </div>
+      </div>
+
+      {/* Cost Timeline Chart */}
+      <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-semibold">Cost Timeline</h3>
+          <div className="flex gap-1">
+            {(['daily', 'weekly', 'monthly'] as const).map((p) => (
+              <button
+                key={p}
+                onClick={() => setPeriod(p)}
+                className={`text-xs px-3 py-1.5 rounded-lg ${
+                  period === p
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'bg-[var(--bg)] text-[var(--muted)] hover:text-white border border-[var(--border)]'
+                }`}
+              >
+                {p === 'daily' ? 'Daily (30d)' : p === 'weekly' ? 'Weekly (90d)' : 'Monthly (12m)'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="h-40 flex items-center justify-center text-[var(--muted)] text-sm animate-pulse">Loading...</div>
+        ) : stats?.timeline?.length > 0 ? (
+          <div className="flex items-end gap-1 h-40">
+            {stats.timeline.map((t: any, i: number) => (
+              <div key={i} className="flex-1 flex flex-col items-center justify-end h-full group relative">
+                <div
+                  className="w-full rounded-t transition-all hover:opacity-80"
+                  style={{
+                    height: `${Math.max((t.cost / maxCost) * 100, 2)}%`,
+                    backgroundColor: 'var(--accent)',
+                    minHeight: '2px',
+                  }}
+                />
+                <div className="absolute bottom-full mb-1 hidden group-hover:block bg-[var(--card)] border border-[var(--border)] rounded px-2 py-1 text-[10px] whitespace-nowrap z-10 shadow-lg">
+                  <div className="font-medium">{t.date}</div>
+                  <div>${t.cost?.toFixed(4)} &middot; {t.tokens?.toLocaleString()} tokens &middot; {t.executions} exec</div>
+                </div>
+                {(i === 0 || i === stats.timeline.length - 1 || stats.timeline.length <= 12 || i % Math.ceil(stats.timeline.length / 8) === 0) && (
+                  <span className="text-[8px] text-[var(--muted)] mt-1 truncate w-full text-center">
+                    {t.date?.slice(5)}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="h-40 flex items-center justify-center text-[var(--muted)] text-sm">No cost data yet</div>
+        )}
+      </div>
+
+      {/* Agent Breakdown */}
+      {stats?.agentBreakdown?.length > 0 && (
+        <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5">
+          <h3 className="font-semibold mb-4">Cost by Agent</h3>
+          <div className="space-y-2">
+            {stats.agentBreakdown.map((a: any) => {
+              const percent = stats.totalCost > 0 ? (a.cost / stats.totalCost) * 100 : 0;
+              return (
+                <div key={a.agentId} className="flex items-center gap-3">
+                  <span className="text-sm w-40 truncate font-medium">{a.name || a.agentId.slice(0, 8)}</span>
+                  <div className="flex-1 h-4 bg-[var(--border)] rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full"
+                      style={{ width: `${percent}%`, backgroundColor: 'var(--accent)' }}
+                    />
+                  </div>
+                  <span className="text-xs font-mono w-20 text-right">${a.cost?.toFixed(4)}</span>
+                  <span className="text-[10px] text-[var(--muted)] w-16 text-right">{a.tokens?.toLocaleString()} tok</span>
+                  <span className="text-[10px] text-[var(--muted)] w-12 text-right">{a.executions} ex</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Agents Over Budget */}
+      {budgetSummary?.agentsOverBudget?.length > 0 && (
+        <div className="bg-[var(--card)] border border-red-500/30 rounded-xl p-5">
+          <h3 className="font-semibold text-red-400 mb-3">Agents Over Budget</h3>
+          <div className="space-y-2">
+            {budgetSummary.agentsOverBudget.map((a: any) => (
+              <div key={a.agentId} className="flex items-center justify-between text-sm">
+                <span className="font-medium">{a.agentName}</span>
+                <span className="text-red-400 font-mono">${a.spendUsd?.toFixed(2)} / ${a.limitUsd?.toFixed(2)} ({a.percent?.toFixed(0)}%)</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Token Rates Reference */}
+      <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5">
+        <h3 className="font-semibold mb-3">Token Cost Rates (per 1M tokens)</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-[var(--border)]">
+                <th className="text-left py-2 text-[var(--muted)] font-medium">Provider</th>
+                <th className="text-right py-2 text-[var(--muted)] font-medium">Input</th>
+                <th className="text-right py-2 text-[var(--muted)] font-medium">Output</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                { name: 'Anthropic', input: 15, output: 75 },
+                { name: 'OpenAI', input: 10, output: 30 },
+                { name: 'Google', input: 7, output: 21 },
+                { name: 'DeepSeek', input: 0.14, output: 0.28 },
+                { name: 'Mistral', input: 2, output: 6 },
+              ].map((r) => (
+                <tr key={r.name} className="border-b border-[var(--border)]/50">
+                  <td className="py-2 font-medium">{r.name}</td>
+                  <td className="py-2 text-right font-mono text-[var(--muted)]">${r.input.toFixed(2)}</td>
+                  <td className="py-2 text-right font-mono text-[var(--muted)]">${r.output.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-xs text-[var(--muted)] mt-3">
+          These rates are used to estimate execution costs. Actual costs may vary based on model version and provider pricing changes.
+        </p>
+      </div>
     </div>
   );
 }

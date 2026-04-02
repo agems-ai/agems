@@ -317,6 +317,68 @@ export class BudgetsService {
     };
   }
 
+  async getOrgCostStats(orgId: string, period: 'daily' | 'weekly' | 'monthly' = 'daily', days = 30) {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    const executions = await this.prisma.agentExecution.findMany({
+      where: { agent: { orgId }, startedAt: { gte: since }, costUsd: { not: null } },
+      select: { agentId: true, startedAt: true, costUsd: true, tokensUsed: true },
+      orderBy: { startedAt: 'asc' },
+    });
+
+    // Aggregate by period
+    const buckets: Record<string, { cost: number; tokens: number; executions: number }> = {};
+    const byAgent: Record<string, { name?: string; cost: number; tokens: number; executions: number }> = {};
+
+    for (const ex of executions) {
+      const d = new Date(ex.startedAt);
+      let key: string;
+      if (period === 'daily') {
+        key = d.toISOString().slice(0, 10);
+      } else if (period === 'weekly') {
+        const day = d.getDay();
+        const weekStart = new Date(d);
+        weekStart.setDate(d.getDate() - day);
+        key = weekStart.toISOString().slice(0, 10);
+      } else {
+        key = d.toISOString().slice(0, 7);
+      }
+
+      if (!buckets[key]) buckets[key] = { cost: 0, tokens: 0, executions: 0 };
+      buckets[key].cost += ex.costUsd ?? 0;
+      buckets[key].tokens += ex.tokensUsed ?? 0;
+      buckets[key].executions += 1;
+
+      if (!byAgent[ex.agentId]) byAgent[ex.agentId] = { cost: 0, tokens: 0, executions: 0 };
+      byAgent[ex.agentId].cost += ex.costUsd ?? 0;
+      byAgent[ex.agentId].tokens += ex.tokensUsed ?? 0;
+      byAgent[ex.agentId].executions += 1;
+    }
+
+    // Resolve agent names
+    const agentIds = Object.keys(byAgent);
+    if (agentIds.length > 0) {
+      const agents = await this.prisma.agent.findMany({
+        where: { id: { in: agentIds } },
+        select: { id: true, name: true },
+      });
+      for (const a of agents) {
+        if (byAgent[a.id]) byAgent[a.id].name = a.name;
+      }
+    }
+
+    const timeline = Object.entries(buckets).map(([date, data]) => ({ date, ...data }));
+    const agentBreakdown = Object.entries(byAgent)
+      .map(([agentId, data]) => ({ agentId, ...data }))
+      .sort((a, b) => b.cost - a.cost);
+
+    const totalCost = executions.reduce((s, e) => s + (e.costUsd ?? 0), 0);
+    const totalTokens = executions.reduce((s, e) => s + (e.tokensUsed ?? 0), 0);
+
+    return { timeline, agentBreakdown, totalCost, totalTokens, totalExecutions: executions.length, period, days };
+  }
+
   async getIncidents(
     budgetId: string,
     filters: { page?: string; pageSize?: string },

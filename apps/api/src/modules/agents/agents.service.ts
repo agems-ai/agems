@@ -206,6 +206,51 @@ export class AgentsService {
     return this.prisma.agentExecution.findMany({ where: { agentId: id }, orderBy: { startedAt: 'desc' }, take: limit });
   }
 
+  async getCostStats(id: string, orgId: string, period: 'daily' | 'weekly' | 'monthly' = 'daily', days = 30) {
+    await this.findOne(id, orgId);
+
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    const executions = await this.prisma.agentExecution.findMany({
+      where: { agentId: id, startedAt: { gte: since }, costUsd: { not: null } },
+      select: { startedAt: true, costUsd: true, tokensUsed: true, status: true },
+      orderBy: { startedAt: 'asc' },
+    });
+
+    // Aggregate by period
+    const buckets: Record<string, { cost: number; tokens: number; executions: number }> = {};
+
+    for (const ex of executions) {
+      const d = new Date(ex.startedAt);
+      let key: string;
+      if (period === 'daily') {
+        key = d.toISOString().slice(0, 10);
+      } else if (period === 'weekly') {
+        const day = d.getDay();
+        const weekStart = new Date(d);
+        weekStart.setDate(d.getDate() - day);
+        key = weekStart.toISOString().slice(0, 10);
+      } else {
+        key = d.toISOString().slice(0, 7);
+      }
+
+      if (!buckets[key]) buckets[key] = { cost: 0, tokens: 0, executions: 0 };
+      buckets[key].cost += ex.costUsd ?? 0;
+      buckets[key].tokens += ex.tokensUsed ?? 0;
+      buckets[key].executions += 1;
+    }
+
+    const timeline = Object.entries(buckets).map(([date, data]) => ({ date, ...data }));
+
+    // Totals
+    const totalCost = executions.reduce((s, e) => s + (e.costUsd ?? 0), 0);
+    const totalTokens = executions.reduce((s, e) => s + (e.tokensUsed ?? 0), 0);
+    const totalExecutions = executions.length;
+
+    return { timeline, totalCost, totalTokens, totalExecutions, period, days };
+  }
+
   async spawn(parentId: string, input: any, ownerId: string, orgId: string) {
     const parent = await this.findOne(parentId, orgId);
     const child = await this.prisma.agent.create({

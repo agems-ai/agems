@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef, OnModuleInit } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from '../../config/prisma.service';
 import { AgentsService } from '../agents/agents.service';
@@ -8,6 +8,7 @@ import { CommsService } from '../comms/comms.service';
 import { TelegramAccountService } from '../telegram/telegram-account.service';
 import { ApprovalsService } from '../approvals/approvals.service';
 import { DashboardService } from '../dashboard/dashboard.service';
+import { BudgetsService } from '../budgets/budgets.service';
 import { categorizeToolName } from '../approvals/tool-categories';
 import { AgentRunner, type MCPServerConfig, type RunResult, type UserMessage, type MessagePart } from '@agems/ai';
 import { z } from 'zod';
@@ -18,7 +19,7 @@ import { decryptJson } from '../../common/crypto.util';
 import { RedisLockService } from '../../common/redis-lock.service';
 
 @Injectable()
-export class RuntimeService {
+export class RuntimeService implements OnModuleInit {
   private readonly logger = new Logger(RuntimeService.name);
   /** Abort controllers for running executions — keyed by executionId */
   private readonly abortControllers = new Map<string, AbortController>();
@@ -62,8 +63,19 @@ export class RuntimeService {
     @Inject(forwardRef(() => ApprovalsService))
     private approvals: ApprovalsService,
     private dashboard: DashboardService,
+    private budgets: BudgetsService,
     private redisLock: RedisLockService,
   ) {}
+
+  async onModuleInit() {
+    const orphaned = await this.prisma.agentExecution.updateMany({
+      where: { status: 'RUNNING' },
+      data: { status: 'CANCELLED', error: 'Orphaned after server restart', endedAt: new Date() },
+    });
+    if (orphaned.count > 0) {
+      this.logger.warn(`Cleaned up ${orphaned.count} orphaned RUNNING executions on startup`);
+    }
+  }
 
   // ========== Redis queue helpers ==========
   private async enqueueMessage(channelId: string, message: any): Promise<void> {
@@ -913,9 +925,12 @@ export class RuntimeService {
           },
         });
 
+        const hitlCost = this.estimateCost(agent.llmProvider, result.tokensUsed);
+        this.recordCostToBudget(agentId, hitlCost);
         return { executionId: execution.id, ...result, waitingForApproval: true };
       }
 
+      const executionCost = this.estimateCost(agent.llmProvider, result.tokensUsed);
       await this.prisma.agentExecution.update({
         where: { id: execution.id },
         data: {
@@ -923,10 +938,13 @@ export class RuntimeService {
           output: { text: result.text },
           toolCalls: result.toolCalls as any,
           tokensUsed: result.tokensUsed.input + result.tokensUsed.output,
-          costUsd: this.estimateCost(agent.llmProvider, result.tokensUsed),
+          costUsd: executionCost,
           endedAt: new Date(),
         },
       });
+
+      // Auto-record cost to budget
+      this.recordCostToBudget(agentId, executionCost);
 
       this.events.emit('audit.create', {
         actorType: 'AGENT',
@@ -977,7 +995,14 @@ export class RuntimeService {
       this.abortControllers.delete(executionId);
       return true;
     }
-    return true; // may be running on another pod and will be stopped via Redis flag
+
+    // No AbortController means execution is not running on this instance.
+    // Mark it as cancelled directly in the DB (handles orphaned/stuck executions).
+    await this.prisma.agentExecution.updateMany({
+      where: { id: executionId, status: 'RUNNING' },
+      data: { status: 'CANCELLED', error: 'Stopped by user', endedAt: new Date() },
+    });
+    return true;
   }
 
   /** Stop all running executions in a channel */
@@ -4188,6 +4213,24 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     });
 
     return { success: true, toolName, enabled };
+  }
+
+  /** Auto-record execution cost to agent's active budget (if any) */
+  private async recordCostToBudget(agentId: string, costUsd: number) {
+    if (!costUsd || costUsd <= 0) return;
+    try {
+      const now = new Date();
+      const budget = await this.prisma.agentBudget.findFirst({
+        where: { agentId, hardStopTriggered: false, periodEnd: { gte: now }, periodStart: { lte: now } },
+        include: { agent: { select: { orgId: true } } },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (budget) {
+        await this.budgets.recordSpend(budget.id, costUsd, 'Auto-recorded from execution', budget.agent.orgId);
+      }
+    } catch (err) {
+      this.logger.warn(`Failed to record cost to budget for agent ${agentId}: ${err}`);
+    }
   }
 
   private estimateCost(provider: string, tokens: { input: number; output: number }): number {
