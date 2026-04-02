@@ -26,9 +26,9 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
     private settings: SettingsService,
   ) {}
 
-  private async isEnabled(): Promise<boolean> {
-    const val = await this.settings.get('task_agents_enabled');
-    return val !== 'false';
+  /** Check if task agents are enabled for a specific org (respects master switch) */
+  private async isEnabledForOrg(orgId: string): Promise<boolean> {
+    return this.settings.isModuleEnabled('tasks', orgId);
   }
 
   async onModuleInit() {
@@ -69,7 +69,6 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   /** Main scheduler tick — recurring resets + pending task pickup + review cycles */
   private async tick() {
     try {
-      if (!(await this.isEnabled())) return;
       await this.checkRecurringTasks();
       await this.pickupPendingAgentTasks();
 
@@ -94,7 +93,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
     if (task.assigneeType !== 'AGENT' || !task.assigneeId) return;
     // Small delay to let the transaction complete
     setTimeout(async () => {
-      if (!(await this.isEnabled())) return;
+      // executeAgentTask already checks isModuleEnabled per-org inside
       this.executeAgentTask(task);
     }, 2000);
   }
@@ -103,8 +102,6 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   @OnEvent('task.comment')
   async onTaskComment(payload: { taskId: string; comment: any }) {
     try {
-      if (!(await this.isEnabled())) return;
-
       const { taskId, comment } = payload;
 
       // Don't trigger for system comments
@@ -331,6 +328,9 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
     });
     if (!agent || agent.status !== 'ACTIVE') return;
 
+    // Check if tasks module is enabled for this agent's org (respects master switch)
+    if (!(await this.settings.isModuleEnabled('tasks', agent.orgId))) return;
+
     // Skip agents that have failed too many review cycles consecutively
     const reviewFailKey = `review-fail:${agentId}`;
     if ((this.failureCounters.get(reviewFailKey) || 0) >= 3) {
@@ -534,8 +534,6 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
 
   /** Generic helper: trigger an agent with a prompt in context of a task */
   private async triggerAgentForTask(agentId: string, task: any, prompt: string) {
-    if (!(await this.isEnabled())) return;
-
     const agent = await this.prisma.agent.findUnique({
       where: { id: agentId },
       select: { id: true, name: true, status: true, orgId: true },

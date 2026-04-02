@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/commo
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../config/prisma.service';
 import { MeetingsService } from './meetings.service';
+import { SettingsService } from '../settings/settings.service';
 
 @Injectable()
 export class MeetingsSchedulerService implements OnModuleInit, OnModuleDestroy {
@@ -13,6 +14,7 @@ export class MeetingsSchedulerService implements OnModuleInit, OnModuleDestroy {
     private prisma: PrismaService,
     private meetingsService: MeetingsService,
     private events: EventEmitter2,
+    private settings: SettingsService,
   ) {}
 
   onModuleInit() {
@@ -44,6 +46,11 @@ export class MeetingsSchedulerService implements OnModuleInit, OnModuleDestroy {
 
       for (const meeting of dueMeetings) {
         try {
+          // Check if meetings module is enabled for this org (respects master switch)
+          if (meeting.orgId && !(await this.settings.isModuleEnabled('meetings', meeting.orgId))) {
+            this.logger.debug(`Skipping meeting "${meeting.title}" — meetings module disabled for org`);
+            continue;
+          }
           this.logger.log(`Auto-starting meeting "${meeting.title}" (${meeting.id})`);
           await this.meetingsService.startMeeting(meeting.id);
           await this.triggerAgents(meeting);
@@ -100,6 +107,9 @@ export class MeetingsSchedulerService implements OnModuleInit, OnModuleDestroy {
       });
 
       for (const meeting of inProgressMeetings) {
+        // Check if meetings module is enabled for this org (respects master switch)
+        if (meeting.orgId && !(await this.settings.isModuleEnabled('meetings', meeting.orgId))) continue;
+
         const agentParticipants = meeting.participants.filter(
           (p: any) => p.participantType === 'AGENT',
         );

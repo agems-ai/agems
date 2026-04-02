@@ -1207,7 +1207,17 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       this.abortControllers.delete(executionId);
       return true;
     }
-    return true; // may be running on another pod and will be stopped via Redis flag
+
+    // No local AbortController — execution may be orphaned (process restarted).
+    // Force-update DB status so it doesn't stay RUNNING forever.
+    try {
+      await this.prisma.agentExecution.updateMany({
+        where: { id: executionId, status: 'RUNNING' },
+        data: { status: 'CANCELLED' as any, error: 'Stopped by user', endedAt: new Date() },
+      });
+    } catch { /* ignore if already updated */ }
+
+    return true;
   }
 
   /** Stop all running executions in a channel */
