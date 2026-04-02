@@ -325,7 +325,15 @@ export default function SettingsPage() {
                 <p className="text-xs text-[var(--muted)]">Master switch for all agent interactions across all modules</p>
               </div>
               <button
-                onClick={() => setGlobalEnabled(!globalEnabled)}
+                onClick={async () => {
+                  const next = !globalEnabled;
+                  setGlobalEnabled(next);
+                  try {
+                    await api.setModulesConfig({ globalEnabled: next });
+                  } catch {
+                    setGlobalEnabled(!next);
+                  }
+                }}
                 className={`relative w-14 h-7 rounded-full transition-colors duration-200 ${globalEnabled ? 'bg-emerald-500' : 'bg-gray-600'}`}
               >
                 <span className={`absolute top-0.5 left-0.5 w-6 h-6 bg-white rounded-full transition-transform duration-200 ${globalEnabled ? 'translate-x-7' : 'translate-x-0'}`} />
@@ -738,7 +746,7 @@ export default function SettingsPage() {
               <pre className="text-xs bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3 font-mono mt-1">
 {`cd /path/to/agems
 git pull origin main
-docker compose up -d --build`}
+docker compose pull && docker compose up -d`}
               </pre>
             </div>
           )}
