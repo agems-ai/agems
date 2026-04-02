@@ -22,6 +22,7 @@ services:
       retries: 5
 
   api:
+    image: ghcr.io/agems-ai/agems-api:${AGEMS_VERSION:-latest}
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -58,6 +59,7 @@ services:
         condition: service_healthy
 
   web:
+    image: ghcr.io/agems-ai/agems-web:${AGEMS_VERSION:-latest}
     build:
       context: .
       dockerfile: apps/web/Dockerfile

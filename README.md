@@ -82,7 +82,23 @@ Everything is transparent: every chat message, every tool call, every dollar spe
 
 ## 🚀 Quick Start
 
-### Docker (Recommended)
+### One-Line Setup (Recommended)
+
+The fastest way to get AGEMS running. Requires only **Docker** — nothing else to install.
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/agems-ai/agems/main/scripts/setup.sh)
+```
+
+This will:
+1. Check that Docker is installed and running
+2. Clone the repository
+3. Create `.env` and ask for your AI provider API key
+4. Pull pre-built images and start all services
+
+Once complete, open **http://localhost:3000** and create your account.
+
+### Docker (Manual)
 
 ```bash
 git clone https://github.com/agems-ai/agems.git
@@ -94,9 +110,25 @@ cp .env.example .env
 docker compose up -d
 ```
 
+Pre-built images are pulled automatically from GitHub Container Registry. If you prefer to build locally, use `docker compose up -d --build`.
+
 Database migrations run automatically. Visit `http://localhost:3000` for the web UI and `http://localhost:3001` for the API.
 
+<details>
+<summary><strong>Useful commands</strong></summary>
+
+```bash
+docker compose logs -f          # View logs
+docker compose down             # Stop all services
+docker compose pull && docker compose up -d  # Update to latest version
+```
+
+</details>
+
 ### From Source
+
+<details>
+<summary>For contributors and advanced users</summary>
 
 **Prerequisites:** Node.js ≥ 20, PostgreSQL 16+ (with pgvector), Redis 7+, pnpm 10+
 
@@ -114,6 +146,14 @@ pnpm db:push
 
 pnpm dev
 ```
+
+Or use the interactive setup wizard:
+
+```bash
+bash scripts/onboard.sh
+```
+
+</details>
 
 ## 🏗 Architecture
 
