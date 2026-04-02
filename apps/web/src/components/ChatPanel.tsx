@@ -115,7 +115,7 @@ function ExecutionDetails({ execution }: { execution: any }) {
               {expandedThinking && (
                 <div className="space-y-1.5 ml-1">
                   {thinking.map((t: string, i: number) => (
-                    <pre key={i} className="text-[10px] text-purple-300/80 bg-purple-500/5 rounded px-2 py-1.5 whitespace-pre-wrap font-mono max-h-40 overflow-y-auto">
+                    <pre key={i} className="text-[10px] text-purple-300/80 bg-purple-500/5 rounded px-2 py-1.5 whitespace-pre-wrap break-all font-mono max-h-40 overflow-y-auto overflow-x-hidden">
                       {t}
                     </pre>
                   ))}
@@ -207,6 +207,7 @@ export default function ChatPanel({
   const prevChannelRef = useRef('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const channelIdRef = useRef(externalChannelId);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   channelIdRef.current = externalChannelId;
 
   // Load messages when channel changes
@@ -391,6 +392,7 @@ export default function ChatPanel({
       } catch {}
     }
     setInput('');
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
     setSending(false);
   }, [input, pendingFiles, externalChannelId, autoCreateChannel, onChannelCreated]);
 
@@ -487,9 +489,9 @@ export default function ChatPanel({
       const files = meta.files as any[];
       const textContent = meta.text;
       return (
-        <div key={msg.id || i} className={`flex items-end gap-2 w-full overflow-hidden ${isMe ? 'justify-end' : 'justify-start'}`}>
+        <div key={msg.id || i} className={`flex items-end gap-2 ${isMe ? 'justify-end' : 'justify-start'}`}>
           {!isMe && <Avatar name={senderInfo.name} avatar={senderInfo.avatar} size={28} />}
-          <div className={`max-w-[70%] min-w-0 overflow-hidden rounded-xl px-4 py-2 ${
+          <div className={`max-w-[70%] rounded-xl px-4 py-2 ${
             isMe ? 'bg-[var(--accent)] text-white' : 'bg-[var(--card)] border border-[var(--border)]'
           }`}>
             {!isMe && <div className="text-xs opacity-70 mb-1">{senderInfo.name}{senderInfo.role ? <span className="ml-1 opacity-60">· {senderInfo.role}</span> : ''}</div>}
@@ -522,20 +524,20 @@ export default function ChatPanel({
 
     // Regular TEXT messages
     return (
-      <div key={msg.id || i} className={`flex items-end gap-2 w-full overflow-hidden ${isMe ? 'justify-end' : 'justify-start'}`}>
+      <div key={msg.id || i} className={`flex items-end gap-2 ${isMe ? 'justify-end' : 'justify-start'}`}>
         {!isMe && <Avatar name={senderInfo.name} avatar={senderInfo.avatar} size={28} />}
-        <div className={`max-w-[70%] min-w-0 overflow-hidden rounded-xl px-4 py-2 ${
+        <div className={`max-w-[70%] rounded-xl px-4 py-2 overflow-hidden ${
           isMe ? 'bg-[var(--accent)] text-white' : 'bg-[var(--card)] border border-[var(--border)]'
         }`}>
           {!isMe && <div className="text-xs opacity-70 mb-1">{senderInfo.name}{senderInfo.role ? <span className="ml-1 opacity-60">· {senderInfo.role}</span> : ''}</div>}
-          <div className="text-sm whitespace-pre-wrap break-words prose prose-sm prose-invert max-w-none [word-break:break-word]
+          <div className="text-sm whitespace-pre-wrap break-words prose prose-sm prose-invert max-w-none
             prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5
             prose-headings:my-2 prose-headings:font-semibold
             prose-a:text-[var(--accent)] prose-a:underline
             prose-img:rounded-lg prose-img:max-w-[300px] prose-img:max-h-[300px]
             prose-strong:text-inherit prose-em:text-inherit
             prose-code:text-[var(--accent)] prose-code:bg-[var(--bg)] prose-code:px-1 prose-code:rounded
-            prose-pre:bg-[var(--bg)] prose-pre:rounded-lg prose-pre:p-3">
+            prose-pre:bg-[var(--bg)] prose-pre:rounded-lg prose-pre:p-3 prose-pre:overflow-x-auto">
             <ReactMarkdown remarkPlugins={[remarkGfm]}
               components={{
                 img: ({ src, alt }) => (
@@ -569,7 +571,8 @@ export default function ChatPanel({
   return (
     <div className={`flex flex-col min-h-0 ${className}`} style={height ? { height } : { flex: 1 }}>
       {/* Messages */}
-      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 space-y-3">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 flex flex-col">
+        <div className="mt-auto space-y-3">
         {messages.length === 0 && emptyState ? (
           emptyState
         ) : messages.length === 0 ? (
@@ -586,7 +589,7 @@ export default function ChatPanel({
           return (
             <div key={agentId} className="flex items-start gap-2">
               <Avatar name={info.name} avatar={info.avatar} size={28} />
-              <div className="max-w-[80%] rounded-xl px-4 py-3 bg-[var(--card)] border border-[var(--border)] border-dashed">
+              <div className="max-w-[80%] rounded-xl px-4 py-3 bg-[var(--card)] border border-[var(--border)] border-dashed overflow-hidden">
                 <div className="text-xs opacity-70 mb-1 flex items-center justify-between">
                   <span>{info.name}</span>
                   <button
@@ -600,18 +603,18 @@ export default function ChatPanel({
 
                 {/* Thinking text (reasoning) */}
                 {state.thinkingText && (
-                  <div className="mb-2 text-xs text-purple-300/80 bg-purple-500/5 rounded-lg px-3 py-2 max-h-[120px] overflow-y-auto border border-purple-500/10">
+                  <div className="mb-2 text-xs text-purple-300/80 bg-purple-500/5 rounded-lg px-3 py-2 max-h-[120px] overflow-y-auto overflow-x-hidden border border-purple-500/10 min-w-0">
                     <div className="flex items-center gap-1 mb-1 text-purple-400/60 text-[10px] font-medium">
                       <Brain size={10} />
                       <span>Thinking</span>
                     </div>
-                    <div className="whitespace-pre-wrap break-words">{state.thinkingText}</div>
+                    <div className="whitespace-pre-wrap break-all">{state.thinkingText}</div>
                   </div>
                 )}
 
                 {/* Streaming response text */}
                 {state.streamingText ? (
-                  <div className="text-sm whitespace-pre-wrap break-words mb-1">{state.streamingText}<span className="inline-block w-1.5 h-4 bg-[var(--accent)] animate-pulse ml-0.5 align-text-bottom" /></div>
+                  <div className="text-sm whitespace-pre-wrap break-all mb-1">{state.streamingText}<span className="inline-block w-1.5 h-4 bg-[var(--accent)] animate-pulse ml-0.5 align-text-bottom" /></div>
                 ) : !state.thinkingText && (
                   <div className="flex items-center gap-2 text-sm text-[var(--muted)] animate-pulse">
                     <div className="flex gap-1">
@@ -648,6 +651,7 @@ export default function ChatPanel({
           );
         })}
         <div ref={messagesEndRef} />
+        </div>
       </div>
 
       {/* Input area */}
@@ -694,14 +698,27 @@ export default function ChatPanel({
             >
               <Paperclip size={18} />
             </button>
-            <input
+            <textarea
+              ref={textareaRef}
               value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+              onChange={e => {
+                setInput(e.target.value);
+                const el = e.target;
+                el.style.height = 'auto';
+                el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+              }}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  sendMessage();
+                }
+              }}
               onPaste={handlePaste}
               placeholder={pendingFiles.length > 0 ? 'Add a caption...' : placeholder}
               disabled={sending}
-              className="flex-1 px-4 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] focus:outline-none focus:border-[var(--accent)] text-sm disabled:opacity-50"
+              rows={1}
+              className="flex-1 px-4 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] focus:outline-none focus:border-[var(--accent)] text-sm disabled:opacity-50 resize-none overflow-y-auto overflow-x-hidden"
+              style={{ maxHeight: '120px', lineHeight: '1.5' }}
             />
             <button
               onClick={sendMessage}

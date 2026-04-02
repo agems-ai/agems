@@ -11,6 +11,8 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   private intervalId: NodeJS.Timeout | null = null;
   /** Prevent concurrent execution of same agent for tasks */
   private readonly runningAgents = new Set<string>();
+  /** Track consecutive failures per task/agent to avoid infinite retries */
+  private readonly failureCounters = new Map<string, number>();
   /** Review cycle counter — triggers review every N ticks */
   private reviewTickCounter = 0;
 
@@ -329,6 +331,13 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
     });
     if (!agent || agent.status !== 'ACTIVE') return;
 
+    // Skip agents that have failed too many review cycles consecutively
+    const reviewFailKey = `review-fail:${agentId}`;
+    if ((this.failureCounters.get(reviewFailKey) || 0) >= 3) {
+      this.logger.debug(`Agent ${agent.name} has ${this.failureCounters.get(reviewFailKey)} consecutive review failures — skipping`);
+      return;
+    }
+
     // Check daily budget
     const budgetOk = await this.checkReviewBudget(agentId);
     if (!budgetOk) {
@@ -361,8 +370,21 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
           agentId,
         );
       }
+
+      // Reset failure counter on success
+      this.failureCounters.delete(reviewFailKey);
     } catch (err) {
       this.logger.error(`Review cycle failed for ${agent.name}: ${err}`);
+
+      // Track consecutive review failures — skip agent after 3 failures in a row
+      const failKey = `review-fail:${agentId}`;
+      const failCount = (this.failureCounters.get(failKey) || 0) + 1;
+      this.failureCounters.set(failKey, failCount);
+
+      if (failCount >= 3) {
+        this.logger.warn(`Agent ${agent.name}: review cycle failed ${failCount} times — skipping until next restart or success`);
+        // Don't delete — the high count will cause findAgentsWithReviewWork to skip this agent
+      }
     } finally {
       this.runningAgents.delete(agentId);
     }
@@ -551,6 +573,9 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
+      // Reset failure counter on success
+      this.failureCounters.delete(`task-fail:${task.id}`);
+
       // Add response as task comment
       if (result.text?.trim()) {
         await this.prisma.taskComment.create({
@@ -564,6 +589,28 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
       }
     } catch (err) {
       this.logger.error(`Task trigger failed for ${agent.name}: ${err}`);
+
+      // Track consecutive failures and mark task FAILED after too many
+      const failKey = `task-fail:${task.id}`;
+      const failCount = (this.failureCounters.get(failKey) || 0) + 1;
+      this.failureCounters.set(failKey, failCount);
+
+      if (failCount >= 3) {
+        this.logger.warn(`Task "${task.title}" failed ${failCount} times — marking FAILED`);
+        await this.prisma.task.update({
+          where: { id: task.id },
+          data: { status: 'FAILED' },
+        }).catch(() => {});
+        await this.prisma.taskComment.create({
+          data: {
+            taskId: task.id,
+            authorType: 'SYSTEM',
+            authorId: 'system',
+            content: `Task trigger failed ${failCount} times: ${String(err).substring(0, 500)}`,
+          },
+        }).catch(() => {});
+        this.failureCounters.delete(failKey);
+      }
     } finally {
       this.runningAgents.delete(agentId);
     }

@@ -294,4 +294,14 @@ export class DashboardService {
     await this.settings.set('dashboard_widgets', JSON.stringify(widgets), orgId);
     return widgets;
   }
+
+  /** Get IDs of all running executions for an org */
+  async getRunningExecutionIds(orgId?: string): Promise<string[]> {
+    const orgFilter = orgId ? { agent: { orgId } } : {};
+    const running = await this.prisma.agentExecution.findMany({
+      where: { status: 'RUNNING', ...orgFilter },
+      select: { id: true },
+    });
+    return running.map((e) => e.id);
+  }
 }

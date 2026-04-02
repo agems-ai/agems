@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Body, Request, UsePipes } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Request, UsePipes } from '@nestjs/common';
 import { z } from 'zod';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { DashboardService } from './dashboard.service';
+import { RuntimeService } from '../runtime/runtime.service';
 import { RequestUser } from '../../common/types';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 
@@ -20,7 +21,10 @@ const HttpSchema = z.object({
 
 @Controller('dashboard')
 export class DashboardController {
-  constructor(private readonly dashboardService: DashboardService) {}
+  constructor(
+    private readonly dashboardService: DashboardService,
+    private readonly runtimeService: RuntimeService,
+  ) {}
 
   /** Real-time agent activity: running + recent executions */
   @Get('activity')
@@ -66,5 +70,26 @@ export class DashboardController {
   @Post('widgets')
   saveWidgets(@Body() body: { widgets: any[] }, @Request() req: { user: RequestUser }) {
     return this.dashboardService.saveWidgets(body.widgets, req.user.orgId);
+  }
+
+  /** Stop a single running execution */
+  @Post('stop-execution/:id')
+  @Roles('MANAGER')
+  async stopExecution(@Param('id') id: string) {
+    const stopped = await this.runtimeService.stopExecution(id);
+    return { stopped };
+  }
+
+  /** Stop all running executions */
+  @Post('stop-all')
+  @Roles('MANAGER')
+  async stopAll(@Request() req: { user: RequestUser }) {
+    const running = await this.dashboardService.getRunningExecutionIds(req.user.orgId);
+    let stopped = 0;
+    for (const execId of running) {
+      const ok = await this.runtimeService.stopExecution(execId);
+      if (ok) stopped++;
+    }
+    return { stopped, total: running.length };
   }
 }
