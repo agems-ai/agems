@@ -228,6 +228,7 @@ export default function ChatPanel({
     browserFrame?: string;
   }>>(new Map());
   const [chatBrowserExpanded, setChatBrowserExpanded] = useState<string | null>(null);
+  const [browserFullscreen, setBrowserFullscreen] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<any>(null);
@@ -690,14 +691,21 @@ export default function ChatPanel({
                 {/* Browser Live Preview */}
                 {state.browserFrame && (
                   <div className="mt-2">
-                    <div className="flex items-center gap-1 text-[10px] text-[var(--muted)] mb-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                      <span>Browser Live</span>
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-1.5 text-[10px] text-[var(--muted)]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                        <span className="text-cyan-400 font-medium">Browser Live</span>
+                      </div>
+                      <button
+                        onClick={() => setBrowserFullscreen(true)}
+                        className="text-[10px] text-cyan-400/60 hover:text-cyan-300 transition px-1.5 py-0.5 rounded hover:bg-cyan-500/10"
+                      >Fullscreen</button>
                     </div>
                     <img
                       src={`data:image/jpeg;base64,${state.browserFrame}`}
                       alt="Browser"
-                      className="rounded-lg border border-[var(--border)] w-full max-w-[400px]"
+                      className="rounded-lg border border-cyan-500/20 w-full max-w-[400px] cursor-pointer bg-black"
+                      onClick={() => setBrowserFullscreen(true)}
                     />
                   </div>
                 )}
@@ -708,6 +716,28 @@ export default function ChatPanel({
         <div ref={messagesEndRef} />
         </div>
       </div>
+
+      {/* Browser Fullscreen Modal */}
+      {browserFullscreen && (() => {
+        const activeFrame = Array.from(agentThinking.values()).find(s => s.browserFrame)?.browserFrame;
+        if (!activeFrame) { setBrowserFullscreen(false); return null; }
+        return (
+          <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center" onClick={() => setBrowserFullscreen(false)}>
+            <div className="relative w-[90vw] max-w-6xl" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                  <span className="text-sm text-cyan-400 font-medium">Browser Live</span>
+                </div>
+                <button onClick={() => setBrowserFullscreen(false)} className="text-white/60 hover:text-white p-1 rounded hover:bg-white/10 transition">
+                  <X size={18} />
+                </button>
+              </div>
+              <img src={`data:image/jpeg;base64,${activeFrame}`} alt="Browser Live" className="rounded-xl border border-cyan-500/20 w-full" />
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Input area */}
       {showInput && (
