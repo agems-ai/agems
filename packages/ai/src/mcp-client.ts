@@ -133,22 +133,9 @@ export class MCPClient {
     return response?.result?.tools || [];
   }
 
-  /** Call a tool on the MCP server (with session recovery on 404) */
+  /** Call a tool on the MCP server */
   async callTool(name: string, args: Record<string, any>): Promise<any> {
-    let response: any;
-    try {
-      response = await this.jsonRpc('tools/call', { name, arguments: args });
-    } catch (err: any) {
-      // If session expired (404), re-initialize and retry once
-      if (err?.message?.includes('404')) {
-        console.warn(`[MCP] Session expired for ${this.serverName}, re-initializing...`);
-        this.sessionId = undefined;
-        await this.initialize();
-        response = await this.jsonRpc('tools/call', { name, arguments: args });
-      } else {
-        throw err;
-      }
-    }
+    const response = await this.jsonRpc('tools/call', { name, arguments: args });
     if (response?.error) {
       throw new Error(`MCP tool ${name}: ${response.error.message || JSON.stringify(response.error)}`);
     }
