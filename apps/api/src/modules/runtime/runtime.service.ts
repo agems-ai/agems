@@ -1818,6 +1818,11 @@ WORKFLOW: search_catalog → check_existing → import or create → assign skil
               },
               select: { id: true, name: true, slug: true, status: true, mission: true, llmProvider: true, llmModel: true },
             });
+            // Auto-create OrgPosition under creating agent's position
+            const creatingAgentPos = await this.prisma.orgPosition.findFirst({ where: { agentId: agent.id } });
+            await this.prisma.orgPosition.create({
+              data: { orgId: agent.orgId, title: newAgent.name, holderType: 'AGENT', agentId: newAgent.id, parentId: creatingAgentPos?.id ?? null },
+            });
             return {
               success: true,
               agent: newAgent,
@@ -1878,6 +1883,11 @@ WORKFLOW: search_catalog → check_existing → import or create → assign skil
                 ownerId: agent.ownerId, status: 'ACTIVE',
               },
               select: { id: true, name: true, slug: true, status: true, mission: true, llmProvider: true, llmModel: true },
+            });
+            // Auto-create OrgPosition under importing agent's position
+            const importingAgentPos = await this.prisma.orgPosition.findFirst({ where: { agentId: agent.id } });
+            await this.prisma.orgPosition.create({
+              data: { orgId: agent.orgId, title: imported.name, holderType: 'AGENT', agentId: imported.id, parentId: importingAgentPos?.id ?? null },
             });
             // Import linked skills
             if (item.skillSlugs?.length) {

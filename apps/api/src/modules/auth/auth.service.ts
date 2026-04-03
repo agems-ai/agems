@@ -52,6 +52,16 @@ export class AuthService {
         data: { orgId: org.id, userId: user.id, role: 'ADMIN' },
       });
 
+      // Auto-create root OrgPosition for the org creator
+      await tx.orgPosition.create({
+        data: {
+          orgId: org.id,
+          title: user.name || name,
+          holderType: 'HUMAN',
+          userId: user.id,
+        },
+      });
+
       return { user, org };
     });
 

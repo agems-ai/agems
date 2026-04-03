@@ -132,6 +132,12 @@ export class CatalogService {
       },
     });
 
+    // Auto-create OrgPosition under owner's position
+    const ownerPosition = await this.prisma.orgPosition.findFirst({ where: { orgId, userId: ownerId } });
+    await this.prisma.orgPosition.create({
+      data: { orgId, title: agent.name, holderType: 'AGENT', agentId: agent.id, parentId: ownerPosition?.id ?? null },
+    });
+
     // Import linked skills — reuse existing in same org, create only if missing
     if (item.skillSlugs?.length) {
       for (const skillSlug of item.skillSlugs) {

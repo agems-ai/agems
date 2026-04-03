@@ -36,6 +36,7 @@ export class BootstrapService implements OnModuleInit {
 
   async onModuleInit() {
     await this.ensureMetaAgentLegacy();
+    await this.ensureAllPositions();
   }
 
   /** Bootstrap a new organization: create Gemma, default settings, direct channels */
@@ -240,5 +241,91 @@ export class BootstrapService implements OnModuleInit {
       });
       this.logger.log(`Gemma: Direct channel created with user ${user.id} -> ${channel.id}`);
     }
+  }
+
+  /** Ensure all existing agents and org members have OrgPositions */
+  private async ensureAllPositions() {
+    const orgs = await this.prisma.organization.findMany({ select: { id: true } });
+
+    for (const org of orgs) {
+      const orgId = org.id;
+
+      // 1. Ensure all org members have positions
+      const members = await this.prisma.orgMember.findMany({
+        where: { orgId },
+        include: { user: { select: { id: true, name: true } } },
+        orderBy: { joinedAt: 'asc' },
+      });
+
+      // First member (earliest joined) is the root — find or create their position first
+      let rootPositionId: string | null = null;
+
+      for (const member of members) {
+        const existing = await this.prisma.orgPosition.findFirst({
+          where: { orgId, userId: member.userId },
+        });
+        if (existing) {
+          if (!rootPositionId) rootPositionId = existing.id;
+          continue;
+        }
+
+        const pos = await this.prisma.orgPosition.create({
+          data: {
+            orgId,
+            title: member.user.name,
+            holderType: 'HUMAN',
+            userId: member.userId,
+            parentId: rootPositionId, // first member has no parent, rest go under first
+          },
+        });
+        if (!rootPositionId) rootPositionId = pos.id;
+        this.logger.log(`Auto-created position for user "${member.user.name}" in org ${orgId}`);
+      }
+
+      // 2. Ensure all agents have positions
+      const agents = await this.prisma.agent.findMany({
+        where: { orgId },
+        select: { id: true, name: true, ownerId: true, parentAgentId: true },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      for (const agent of agents) {
+        const existing = await this.prisma.orgPosition.findFirst({
+          where: { agentId: agent.id },
+        });
+        if (existing) continue;
+
+        // Determine parent: prefer parent agent's position, then owner's position, then root
+        let parentId: string | null = null;
+        if (agent.parentAgentId) {
+          const parentPos = await this.prisma.orgPosition.findFirst({
+            where: { agentId: agent.parentAgentId },
+          });
+          parentId = parentPos?.id ?? null;
+        }
+        if (!parentId && agent.ownerId) {
+          const ownerPos = await this.prisma.orgPosition.findFirst({
+            where: { orgId, userId: agent.ownerId },
+          });
+          parentId = ownerPos?.id ?? null;
+        }
+        if (!parentId) {
+          parentId = rootPositionId;
+        }
+
+        await this.prisma.orgPosition.create({
+          data: {
+            orgId,
+            title: agent.name,
+            holderType: 'AGENT',
+            agentId: agent.id,
+            parentId,
+          },
+        });
+        this.logger.log(`Auto-created position for agent "${agent.name}" in org ${orgId}`);
+      }
+    }
+
+    this.logger.log('ensureAllPositions complete');
   }
 }

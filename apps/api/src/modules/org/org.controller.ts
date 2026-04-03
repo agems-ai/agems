@@ -38,7 +38,7 @@ export class OrgController {
   @Post('members/invite')
   @Roles('ADMIN')
   inviteMember(@Request() req: { user: RequestUser }, @Body() body: { email: string; role?: string }) {
-    return this.orgService.inviteMember(req.user.orgId, body.email, body.role);
+    return this.orgService.inviteMember(req.user.orgId, body.email, body.role, req.user.id);
   }
 
   @Patch('members/:userId/role')

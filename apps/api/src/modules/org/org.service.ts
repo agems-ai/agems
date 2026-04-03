@@ -49,7 +49,7 @@ export class OrgService {
     });
   }
 
-  async inviteMember(orgId: string, email: string, role: string = 'MEMBER') {
+  async inviteMember(orgId: string, email: string, role: string = 'MEMBER', inviterId?: string) {
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (!user) throw new NotFoundException('User not found. They need to register first.');
 
@@ -58,10 +58,31 @@ export class OrgService {
     });
     if (existing) throw new ConflictException('User is already a member');
 
-    return this.prisma.orgMember.create({
+    const member = await this.prisma.orgMember.create({
       data: { orgId, userId: user.id, role: role as any },
       include: { user: { select: { id: true, name: true, email: true, avatarUrl: true } } },
     });
+
+    // Auto-create OrgPosition under inviter's position
+    const existingPosition = await this.prisma.orgPosition.findFirst({
+      where: { orgId, userId: user.id },
+    });
+    if (!existingPosition) {
+      const inviterPosition = inviterId
+        ? await this.prisma.orgPosition.findFirst({ where: { orgId, userId: inviterId } })
+        : null;
+      await this.prisma.orgPosition.create({
+        data: {
+          orgId,
+          title: user.name,
+          holderType: 'HUMAN',
+          userId: user.id,
+          parentId: inviterPosition?.id ?? null,
+        },
+      });
+    }
+
+    return member;
   }
 
   async updateMemberRole(orgId: string, userId: string, role: string) {
@@ -81,6 +102,12 @@ export class OrgService {
       where: { orgId_userId: { orgId, userId } },
     });
     if (!member) throw new NotFoundException('Member not found');
+
+    // Remove associated OrgPosition(s) for this user
+    await this.prisma.orgPosition.deleteMany({
+      where: { orgId, userId },
+    });
+
     return this.prisma.orgMember.delete({ where: { id: member.id } });
   }
 
@@ -105,6 +132,17 @@ export class OrgService {
     // Add creator as ADMIN
     await this.prisma.orgMember.create({
       data: { orgId: org.id, userId, role: 'ADMIN' },
+    });
+
+    // Auto-create root OrgPosition for the creator
+    const creator = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
+    await this.prisma.orgPosition.create({
+      data: {
+        orgId: org.id,
+        title: creator?.name ?? 'CEO',
+        holderType: 'HUMAN',
+        userId,
+      },
     });
 
     // Clone entities from source org if requested

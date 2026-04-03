@@ -38,6 +38,20 @@ export class AgentsService {
       include: { owner: { select: { id: true, name: true, email: true } } },
     });
 
+    // Auto-create OrgPosition under creator's position
+    const creatorPosition = await this.prisma.orgPosition.findFirst({
+      where: { orgId, userId: ownerId },
+    });
+    await this.prisma.orgPosition.create({
+      data: {
+        orgId,
+        title: input.name,
+        holderType: 'AGENT',
+        agentId: agent.id,
+        parentId: creatorPosition?.id ?? null,
+      },
+    });
+
     this.events.emit('audit.create', {
       actorType: 'HUMAN', actorId: ownerId, action: 'CREATE',
       resourceType: 'agent', resourceId: agent.id, orgId,
@@ -272,6 +286,20 @@ export class AgentsService {
       include: { parentAgent: { select: { id: true, name: true, slug: true } } },
     });
 
+    // Auto-create OrgPosition under parent agent's position
+    const parentPosition = await this.prisma.orgPosition.findFirst({
+      where: { agentId: parentId },
+    });
+    await this.prisma.orgPosition.create({
+      data: {
+        orgId: parent.orgId,
+        title: child.name,
+        holderType: 'AGENT',
+        agentId: child.id,
+        parentId: parentPosition?.id ?? null,
+      },
+    });
+
     this.events.emit('audit.create', {
       actorType: 'HUMAN', actorId: ownerId, action: 'CREATE',
       resourceType: 'agent', resourceId: child.id,
@@ -329,7 +357,7 @@ export class AgentsService {
         continue;
       }
       try {
-        await this.prisma.agent.create({
+        const imported = await this.prisma.agent.create({
           data: {
             name: item.name,
             slug: item.slug,
@@ -345,6 +373,19 @@ export class AgentsService {
             metadata: item.metadata,
             orgId,
             ownerId: userId,
+          },
+        });
+        // Auto-create OrgPosition under importer's position
+        const importerPosition = await this.prisma.orgPosition.findFirst({
+          where: { orgId, userId },
+        });
+        await this.prisma.orgPosition.create({
+          data: {
+            orgId,
+            title: imported.name,
+            holderType: 'AGENT',
+            agentId: imported.id,
+            parentId: importerPosition?.id ?? null,
           },
         });
         results.created++;
