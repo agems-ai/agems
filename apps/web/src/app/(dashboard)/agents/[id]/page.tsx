@@ -194,6 +194,8 @@ export default function AgentDetailPage() {
       temperature: lc.temperature ?? 0.7,
       maxTokens: lc.maxTokens ?? 4096,
       thinkingBudget: lc.thinkingBudget ?? 4000,
+      apiFormat: lc.apiFormat || '',
+      baseUrl: lc.baseUrl || '',
       mcpServers: Array.isArray(rc.mcpServers) ? rc.mcpServers : [],
     });
     setSaveError('');
@@ -204,13 +206,15 @@ export default function AgentDetailPage() {
     setSaving(true);
     setSaveError('');
     try {
-      const { values: valuesStr, temperature, maxTokens, thinkingBudget, mcpServers: mcpRaw, ...rest } = editForm;
+      const { values: valuesStr, temperature, maxTokens, thinkingBudget, apiFormat, baseUrl, mcpServers: mcpRaw, ...rest } = editForm;
       const values = valuesStr ? valuesStr.split(',').map((v: string) => v.trim()).filter(Boolean) : [];
-      const llmConfig = {
+      const llmConfig: Record<string, any> = {
         temperature: parseFloat(temperature) || 0.7,
         maxTokens: parseInt(maxTokens) || 4096,
         thinkingBudget: parseInt(thinkingBudget) || 4000,
       };
+      if (apiFormat) llmConfig.apiFormat = apiFormat;
+      if (baseUrl) llmConfig.baseUrl = baseUrl;
       // Merge MCP servers into existing runtimeConfig
       const existingRc = (agent.runtimeConfig as any) || {};
       const mcpServers = Array.isArray(mcpRaw) ? mcpRaw.filter((s: any) => s.name && s.url) : [];
@@ -969,6 +973,31 @@ export default function AgentDetailPage() {
               </div>
 
               <Field label="LLM Model" value={editForm.llmModel} onChange={(v) => setEditForm({ ...editForm, llmModel: v })} placeholder="e.g. claude-opus-4-6, gpt-4o, gemini-2.0-flash" />
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium mb-1 text-[var(--muted)]">API Format</label>
+                  <select
+                    value={editForm.apiFormat || ''}
+                    onChange={(e) => setEditForm({ ...editForm, apiFormat: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
+                  >
+                    <option value="">Auto (default)</option>
+                    <option value="openai">OpenAI-compatible</option>
+                    <option value="anthropic">Anthropic-compatible</option>
+                    <option value="google">Google Gemini</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1 text-[var(--muted)]">Base URL</label>
+                  <input
+                    value={editForm.baseUrl || ''}
+                    onChange={(e) => setEditForm({ ...editForm, baseUrl: e.target.value })}
+                    placeholder="Custom API endpoint (optional)"
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
+                  />
+                </div>
+              </div>
 
               <div className={`grid gap-3 ${['ANTHROPIC', 'GOOGLE'].includes(editForm.llmProvider) ? 'grid-cols-3' : 'grid-cols-2'}`}>
                 <div>

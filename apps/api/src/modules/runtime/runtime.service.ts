@@ -1046,6 +1046,8 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
           provider: agent.llmProvider as any,
           model: agent.llmModel,
           apiKey,
+          ...(llmConfig.baseUrl && { baseUrl: llmConfig.baseUrl as string }),
+          ...(llmConfig.apiFormat && { apiFormat: llmConfig.apiFormat as string }),
         },
         systemPrompt: await this.buildSystemPrompt(agent),
         tools: liveTools,

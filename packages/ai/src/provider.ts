@@ -3,142 +3,91 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 
+export type ApiFormat = 'openai' | 'anthropic' | 'google';
+
 export interface AIProviderConfig {
-  provider: 'ANTHROPIC' | 'OPENAI' | 'GOOGLE' | 'DEEPSEEK' | 'MISTRAL' | 'MINIMAX' | 'GLM' | 'XAI' | 'COHERE' | 'PERPLEXITY' | 'TOGETHER' | 'FIREWORKS' | 'GROQ' | 'MOONSHOT' | 'QWEN' | 'AI21' | 'SAMBANOVA' | 'OLLAMA' | 'CUSTOM';
+  provider: string;
   model: string;
   apiKey?: string;
   baseUrl?: string;
+  apiFormat?: ApiFormat;
+}
+
+// Default base URLs per provider (used when no custom baseUrl is set)
+const DEFAULT_BASE_URLS: Record<string, string> = {
+  MISTRAL: 'https://api.mistral.ai/v1',
+  MINIMAX: 'https://api.minimaxi.chat/v1',
+  GLM: 'https://open.bigmodel.cn/api/paas/v4',
+  XAI: 'https://api.x.ai/v1',
+  COHERE: 'https://api.cohere.com/compatibility/v1',
+  PERPLEXITY: 'https://api.perplexity.ai',
+  TOGETHER: 'https://api.together.xyz/v1',
+  FIREWORKS: 'https://api.fireworks.ai/inference/v1',
+  GROQ: 'https://api.groq.com/openai/v1',
+  MOONSHOT: 'https://api.moonshot.cn/v1',
+  QWEN: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  AI21: 'https://api.ai21.com/studio/v1',
+  SAMBANOVA: 'https://api.sambanova.ai/v1',
+  OLLAMA: 'http://localhost:11434/v1',
+};
+
+// Default API format per provider (native format)
+const DEFAULT_API_FORMAT: Record<string, ApiFormat> = {
+  ANTHROPIC: 'anthropic',
+  OPENAI: 'openai',
+  GOOGLE: 'google',
+  DEEPSEEK: 'openai',
+};
+
+function createByFormat(format: ApiFormat, config: { apiKey?: string; baseUrl?: string; model: string }): any {
+  switch (format) {
+    case 'anthropic': {
+      const provider = createAnthropic({ apiKey: config.apiKey, ...(config.baseUrl && { baseURL: config.baseUrl }) });
+      return provider(config.model);
+    }
+    case 'google': {
+      const provider = createGoogleGenerativeAI({ apiKey: config.apiKey, ...(config.baseUrl && { baseURL: config.baseUrl }) });
+      return provider(config.model);
+    }
+    case 'openai':
+    default: {
+      const provider = createOpenAI({ apiKey: config.apiKey, ...(config.baseUrl && { baseURL: config.baseUrl }) });
+      return provider.chat(config.model);
+    }
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export function createProvider(config: AIProviderConfig): any {
+  // If apiFormat is explicitly set, use format-based routing with baseUrl
+  if (config.apiFormat) {
+    const baseUrl = config.baseUrl || DEFAULT_BASE_URLS[config.provider];
+    return createByFormat(config.apiFormat, { apiKey: config.apiKey, baseUrl, model: config.model });
+  }
+
+  // Native providers (use their dedicated SDKs)
   switch (config.provider) {
-    case 'ANTHROPIC': {
-      const anthropic = createAnthropic({ apiKey: config.apiKey });
-      return anthropic(config.model);
-    }
-    case 'OPENAI': {
-      const openai = createOpenAI({ apiKey: config.apiKey });
-      return openai(config.model);
-    }
-    case 'GOOGLE': {
-      const google = createGoogleGenerativeAI({ apiKey: config.apiKey });
-      return google(config.model);
-    }
+    case 'ANTHROPIC':
+      return createByFormat('anthropic', { apiKey: config.apiKey, baseUrl: config.baseUrl, model: config.model });
+    case 'OPENAI':
+      return createByFormat('openai', { apiKey: config.apiKey, baseUrl: config.baseUrl, model: config.model });
+    case 'GOOGLE':
+      return createByFormat('google', { apiKey: config.apiKey, baseUrl: config.baseUrl, model: config.model });
     case 'DEEPSEEK': {
-      const deepseek = createDeepSeek({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl,
-      });
+      const deepseek = createDeepSeek({ apiKey: config.apiKey, baseURL: config.baseUrl });
       return deepseek(config.model);
     }
-    case 'MISTRAL': {
-      const mistral = createOpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl || 'https://api.mistral.ai/v1',
-      });
-      return mistral.chat(config.model);
-    }
-    case 'MINIMAX': {
-      const minimax = createOpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl || 'https://api.minimaxi.chat/v1',
-      });
-      return minimax.chat(config.model);
-    }
-    case 'GLM': {
-      const glm = createOpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl || 'https://open.bigmodel.cn/api/paas/v4',
-      });
-      return glm.chat(config.model);
-    }
-    case 'XAI': {
-      const xai = createOpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl || 'https://api.x.ai/v1',
-      });
-      return xai.chat(config.model);
-    }
-    case 'COHERE': {
-      const cohere = createOpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl || 'https://api.cohere.com/compatibility/v1',
-      });
-      return cohere.chat(config.model);
-    }
-    case 'PERPLEXITY': {
-      const perplexity = createOpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl || 'https://api.perplexity.ai',
-      });
-      return perplexity.chat(config.model);
-    }
-    case 'TOGETHER': {
-      const together = createOpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl || 'https://api.together.xyz/v1',
-      });
-      return together.chat(config.model);
-    }
-    case 'FIREWORKS': {
-      const fireworks = createOpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl || 'https://api.fireworks.ai/inference/v1',
-      });
-      return fireworks.chat(config.model);
-    }
-    case 'GROQ': {
-      const groq = createOpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl || 'https://api.groq.com/openai/v1',
-      });
-      return groq.chat(config.model);
-    }
-    case 'MOONSHOT': {
-      const moonshot = createOpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl || 'https://api.moonshot.cn/v1',
-      });
-      return moonshot.chat(config.model);
-    }
-    case 'QWEN': {
-      const qwen = createOpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-      });
-      return qwen.chat(config.model);
-    }
-    case 'AI21': {
-      const ai21 = createOpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl || 'https://api.ai21.com/studio/v1',
-      });
-      return ai21.chat(config.model);
-    }
-    case 'SAMBANOVA': {
-      const sambanova = createOpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl || 'https://api.sambanova.ai/v1',
-      });
-      return sambanova.chat(config.model);
-    }
-    case 'OLLAMA': {
-      const ollama = createOpenAI({
-        apiKey: 'ollama',
-        baseURL: config.baseUrl || 'http://localhost:11434/v1',
-      });
-      return ollama.chat(config.model);
-    }
+    case 'OLLAMA':
+      return createByFormat('openai', { apiKey: 'ollama', baseUrl: config.baseUrl || DEFAULT_BASE_URLS.OLLAMA, model: config.model });
     case 'CUSTOM': {
       if (!config.baseUrl) throw new Error('Custom provider requires baseUrl');
-      const custom = createOpenAI({
-        apiKey: config.apiKey || '',
-        baseURL: config.baseUrl,
-      });
-      return custom.chat(config.model);
+      return createByFormat('openai', { apiKey: config.apiKey || '', baseUrl: config.baseUrl, model: config.model });
     }
-    default:
-      throw new Error(`Unknown provider: ${config.provider}`);
+    default: {
+      // All other providers: OpenAI-compatible with their default base URL
+      const baseUrl = config.baseUrl || DEFAULT_BASE_URLS[config.provider];
+      if (!baseUrl) throw new Error(`Unknown provider: ${config.provider}`);
+      return createByFormat('openai', { apiKey: config.apiKey, baseUrl, model: config.model });
+    }
   }
 }
