@@ -1047,7 +1047,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
           model: agent.llmModel,
           apiKey,
           ...(llmConfig.baseUrl ? { baseUrl: String(llmConfig.baseUrl) } : {}),
-          ...(llmConfig.apiFormat ? { apiFormat: String(llmConfig.apiFormat) } : {}),
+          ...(llmConfig.apiFormat ? { apiFormat: String(llmConfig.apiFormat) as 'openai' | 'anthropic' | 'google' } : {}),
         },
         systemPrompt: await this.buildSystemPrompt(agent),
         tools: liveTools,
