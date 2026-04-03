@@ -133,9 +133,21 @@ export class MCPClient {
     return response?.result?.tools || [];
   }
 
-  /** Call a tool on the MCP server */
+  /** Call a tool on the MCP server (auto-reconnects on session expiry) */
   async callTool(name: string, args: Record<string, any>): Promise<any> {
-    const response = await this.jsonRpc('tools/call', { name, arguments: args });
+    let response;
+    try {
+      response = await this.jsonRpc('tools/call', { name, arguments: args });
+    } catch (err) {
+      // Session expired (Playwright MCP drops sessions after ~30s idle)
+      if ((err as Error)?.message?.includes('404') || (err as Error)?.message?.includes('Session not found')) {
+        this.sessionId = undefined;
+        await this.initialize();
+        response = await this.jsonRpc('tools/call', { name, arguments: args });
+      } else {
+        throw err;
+      }
+    }
     if (response?.error) {
       throw new Error(`MCP tool ${name}: ${response.error.message || JSON.stringify(response.error)}`);
     }
