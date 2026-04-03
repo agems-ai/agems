@@ -51,7 +51,7 @@ function createByFormat(format: ApiFormat, config: { apiKey?: string; baseUrl?: 
     }
     case 'openai':
     default: {
-      const provider = createOpenAI({ apiKey: config.apiKey, ...(config.baseUrl && { baseURL: config.baseUrl }) });
+      const provider = createOpenAI({ apiKey: config.apiKey, compatibility: 'compatible', ...(config.baseUrl && { baseURL: config.baseUrl }) } as any);
       return provider.chat(config.model);
     }
   }
