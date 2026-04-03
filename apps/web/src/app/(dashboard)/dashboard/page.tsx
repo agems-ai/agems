@@ -353,7 +353,12 @@ export default function DashboardPage() {
   }, []);
 
   // Live streaming text from agents (org-level socket events)
-  const [liveStreams, setLiveStreams] = useState<Record<string, { text: string; thinking: string; tool: string }>>({});
+  const [liveStreams, setLiveStreams] = useState<Record<string, {
+    text: string;
+    thinking: string;
+    tool: string;
+    toolCalls: Array<{ toolName: string; status: string; durationMs?: number; error?: string }>;
+  }>>({});
   useEffect(() => {
     const socket = getCommsSocket();
     if (!socket.connected) socket.connect();
@@ -361,23 +366,30 @@ export default function DashboardPage() {
     const onTextChunk = (data: any) => {
       setLiveStreams(prev => {
         const key = data.executionId || data.agentId;
-        const existing = prev[key] || { text: '', thinking: '', tool: '' };
-        return { ...prev, [key]: { ...existing, text: (existing.text + (data.chunk || '')).slice(-300) } };
+        const existing = prev[key] || { text: '', thinking: '', tool: '', toolCalls: [] };
+        return { ...prev, [key]: { ...existing, text: (existing.text + (data.chunk || '')).slice(-500) } };
       });
     };
     const onThinkingChunk = (data: any) => {
       setLiveStreams(prev => {
         const key = data.executionId || data.agentId;
-        const existing = prev[key] || { text: '', thinking: '', tool: '' };
-        return { ...prev, [key]: { ...existing, thinking: (existing.thinking + (data.chunk || '')).slice(-200) } };
+        const existing = prev[key] || { text: '', thinking: '', tool: '', toolCalls: [] };
+        return { ...prev, [key]: { ...existing, thinking: (existing.thinking + (data.chunk || '')).slice(-500) } };
       });
     };
     const onToolUpdate = (data: any) => {
       setLiveStreams(prev => {
         const key = data.executionId || data.agentId;
-        const existing = prev[key] || { text: '', thinking: '', tool: '' };
+        const existing = prev[key] || { text: '', thinking: '', tool: '', toolCalls: [] };
         const toolStr = data.status === 'running' ? `Using ${data.toolName}...` : data.status === 'completed' ? `${data.toolName} done` : `${data.toolName} error`;
-        return { ...prev, [key]: { ...existing, tool: toolStr } };
+        const tools = [...existing.toolCalls];
+        if (data.status === 'running') {
+          tools.push({ toolName: data.toolName, status: 'running' });
+        } else {
+          const idx = tools.findIndex(tc => tc.toolName === data.toolName && tc.status === 'running');
+          if (idx >= 0) tools[idx] = { toolName: data.toolName, status: data.status, durationMs: data.durationMs, error: data.error };
+        }
+        return { ...prev, [key]: { ...existing, tool: toolStr, toolCalls: tools } };
       });
     };
 
@@ -507,20 +519,49 @@ export default function DashboardPage() {
                       </button>
                     </div>
                   </div>
-                  {/* Live streaming text */}
+                  {/* Live streaming details */}
                   {(() => {
                     const stream = liveStreams[e.id] || liveStreams[e.agentId];
                     if (!stream) return null;
                     const display = stream.text || stream.thinking || stream.tool;
                     if (!display) return null;
+                    const completedTools = stream.toolCalls?.filter(tc => tc.status !== 'running') || [];
+                    const runningTools = stream.toolCalls?.filter(tc => tc.status === 'running') || [];
                     return (
-                      <div className="px-3 pb-2">
-                        {stream.tool && <div className="text-[10px] text-amber-400 mb-0.5">{stream.tool}</div>}
-                        <div className="text-xs text-[var(--muted)] leading-relaxed max-h-16 overflow-hidden" style={{ wordBreak: 'break-word' }}>
-                          {stream.thinking && <span className="text-purple-400 italic">{stream.thinking.slice(-150)}</span>}
-                          {stream.text && <span className="text-emerald-300">{stream.text.slice(-200)}</span>}
-                          <span className="animate-pulse">|</span>
-                        </div>
+                      <div className="px-3 pb-2 space-y-1.5">
+                        {/* Thinking */}
+                        {stream.thinking && (
+                          <div className="text-xs text-purple-300/80 bg-purple-500/5 rounded px-2 py-1.5 max-h-20 overflow-y-auto border border-purple-500/10">
+                            <div className="text-[9px] text-purple-400/60 font-medium mb-0.5">Thinking</div>
+                            <div className="whitespace-pre-wrap break-words">{stream.thinking.slice(-400)}</div>
+                          </div>
+                        )}
+                        {/* Response text */}
+                        {stream.text && (
+                          <div className="text-xs text-emerald-300 leading-relaxed max-h-16 overflow-hidden" style={{ wordBreak: 'break-word' }}>
+                            {stream.text.slice(-300)}<span className="animate-pulse">|</span>
+                          </div>
+                        )}
+                        {/* Tool calls */}
+                        {stream.toolCalls?.length > 0 && (
+                          <div className="space-y-0.5 border-l-2 border-emerald-500/30 pl-2">
+                            {completedTools.slice(-5).map((tc, i) => (
+                              <div key={i} className="flex items-center gap-1 text-[10px]">
+                                <span className={tc.error ? 'text-red-400' : 'text-green-400'}>&#9679;</span>
+                                <span className="font-mono text-[var(--muted)] truncate flex-1">{tc.toolName}</span>
+                                {tc.durationMs && <span className="text-[var(--muted)] opacity-50">{tc.durationMs}ms</span>}
+                              </div>
+                            ))}
+                            {completedTools.length > 5 && <div className="text-[9px] text-[var(--muted)]">+{completedTools.length - 5} more</div>}
+                            {runningTools.map((tc, i) => (
+                              <div key={`r-${i}`} className="flex items-center gap-1 text-[10px]">
+                                <span className="text-yellow-400 animate-pulse">&#9679;</span>
+                                <span className="font-mono text-white">{tc.toolName}</span>
+                                <span className="text-yellow-400 ml-auto">running...</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     );
                   })()}
@@ -638,11 +679,20 @@ export default function DashboardPage() {
               return (
                 <div key={e.id} className="border-b border-[var(--border)] last:border-0 cursor-pointer hover:bg-[var(--hover)] transition rounded"
                   onClick={() => setExpandedExec(isExpanded ? null : e.id)}>
-                  <div className="flex items-center gap-2 py-2.5 px-1">
-                    <span className={`text-xs ${statusColor}`}>{statusIcon}</span>
-                    <span className="text-sm font-medium flex-1 truncate">{e.agent?.name || 'Agent'}</span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg)] text-[var(--muted)]">{triggerLabels[e.triggerType] || e.triggerType}</span>
-                    <span className="text-[10px] text-[var(--muted)]">{timeAgo(e.startedAt)}</span>
+                  <div className="py-2.5 px-1">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs ${statusColor}`}>{statusIcon}</span>
+                      <span className="text-sm font-medium flex-1 truncate">{e.agent?.name || 'Agent'}</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg)] text-[var(--muted)]">{triggerLabels[e.triggerType] || e.triggerType}</span>
+                      <span className="text-[10px] text-[var(--muted)]">{timeAgo(e.startedAt)}</span>
+                    </div>
+                    {/* Always-visible summary */}
+                    <div className="flex items-center gap-2 mt-1 text-[10px] text-[var(--muted)]">
+                      {e.tokensUsed > 0 && <span>{e.tokensUsed} tok</span>}
+                      {e.toolCalls?.length > 0 && <span>{e.toolCalls.length} tools</span>}
+                      {e.output?.screenshots?.length > 0 && <span className="text-cyan-400">{e.output.screenshots.length} screenshots</span>}
+                      {e.output?.text && <span className="truncate max-w-[200px] opacity-60">{e.output.text.substring(0, 80)}</span>}
+                    </div>
                   </div>
                   {isExpanded && (
                     <div className="px-1 pb-2.5 space-y-2">
