@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '@/lib/api';
 import { getCommsSocket } from '@/lib/socket';
-import { Plus, Pencil, Trash2, Play, X, Code2, BarChart3, RefreshCw, ChevronDown, ChevronUp, MessageSquare, Square, Settings2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, Play, X, Code2, BarChart3, RefreshCw, ChevronDown, ChevronUp, MessageSquare, Square, Settings2, GripVertical } from 'lucide-react';
 import ChatPanel, { Avatar } from '@/components/ChatPanel';
 
 /* ═══════════════════════════════════════════════════════════
@@ -143,6 +143,8 @@ export default function DashboardPage() {
   const [showAddWidget, setShowAddWidget] = useState(false);
   const [widgetsDirty, setWidgetsDirty] = useState(false);
   const refreshTimers = useRef<Record<string, NodeJS.Timeout>>({});
+  const dragWidget = useRef<string | null>(null);
+  const [dragOver, setDragOver] = useState<string | null>(null);
 
   const nameMap = useCallback((type: string, id: string) => {
     if (type === 'AGENT') {
@@ -693,8 +695,31 @@ export default function DashboardPage() {
           {widgets.map((w) => {
             const res = widgetResults[w.id] || {};
             return (
-              <div key={w.id} className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-4 group">
+              <div key={w.id}
+                draggable
+                onDragStart={() => { dragWidget.current = w.id; }}
+                onDragEnd={() => { dragWidget.current = null; setDragOver(null); }}
+                onDragOver={(e) => { e.preventDefault(); setDragOver(w.id); }}
+                onDrop={() => {
+                  if (dragWidget.current && dragWidget.current !== w.id) {
+                    setWidgets((prev) => {
+                      const from = prev.findIndex((x) => x.id === dragWidget.current);
+                      const to = prev.findIndex((x) => x.id === w.id);
+                      if (from < 0 || to < 0) return prev;
+                      const next = [...prev];
+                      const [moved] = next.splice(from, 1);
+                      next.splice(to, 0, moved);
+                      return next;
+                    });
+                    setWidgetsDirty(true);
+                  }
+                  dragWidget.current = null;
+                  setDragOver(null);
+                }}
+                className={`bg-[var(--card)] border rounded-xl p-4 group transition-all ${dragOver === w.id ? 'border-[var(--accent)] ring-1 ring-[var(--accent)]' : 'border-[var(--border)]'}`}
+              >
                 <div className="flex items-center gap-2 mb-2">
+                  <span className="cursor-grab active:cursor-grabbing p-0.5 text-[var(--muted)] opacity-0 group-hover:opacity-100 transition"><GripVertical size={12} /></span>
                   <span className="text-xs font-semibold text-[var(--muted)] uppercase tracking-wider flex-1">{w.title}</span>
                   <button onClick={() => runWidget(w)} className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-[var(--card-hover)] text-[var(--muted)] transition" title="Refresh"><RefreshCw size={12} /></button>
                   <button onClick={() => setEditWidget(w)} className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-[var(--card-hover)] text-[var(--muted)] transition" title="Edit"><Pencil size={12} /></button>
@@ -717,11 +742,11 @@ export default function DashboardPage() {
                       {(!res.items || res.items.length === 0) && <div className="text-[var(--muted)] text-xs">No data</div>}
                     </div>
                   ) : (
-                    <div className="overflow-x-auto max-h-48">
+                    <div className="overflow-x-auto max-h-96">
                       {res.data && res.data.length > 0 ? (
                         <table className="w-full text-xs">
                           <thead><tr className="border-b border-[var(--border)]">{Object.keys(res.data[0]).map((k) => <th key={k} className="text-left py-1 pr-2 text-[var(--muted)] font-medium">{k}</th>)}</tr></thead>
-                          <tbody>{res.data.slice(0, 20).map((row, i) => (
+                          <tbody>{res.data.slice(0, 200).map((row, i) => (
                             <tr key={i} className="border-b border-[var(--border)]/50">{Object.values(row).map((v, j) => <td key={j} className="py-1 pr-2 truncate max-w-[120px]">{String(v ?? '')}</td>)}</tr>
                           ))}</tbody>
                         </table>
