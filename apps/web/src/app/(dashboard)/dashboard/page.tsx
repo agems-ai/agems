@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '@/lib/api';
 import { getCommsSocket } from '@/lib/socket';
-import { Plus, Pencil, Trash2, Play, X, Code2, BarChart3, RefreshCw, ChevronDown, ChevronUp, MessageSquare, Square, Settings2, GripVertical } from 'lucide-react';
+import { Plus, Pencil, Trash2, Play, X, Code2, BarChart3, RefreshCw, ChevronDown, ChevronUp, MessageSquare, Square, Settings2, GripVertical, Wrench, Brain } from 'lucide-react';
 import ChatPanel, { Avatar } from '@/components/ChatPanel';
 
 /* ═══════════════════════════════════════════════════════════
@@ -532,8 +532,11 @@ export default function DashboardPage() {
                       <div className="px-3 pb-2 space-y-1.5">
                         {/* Thinking */}
                         {stream.thinking && (
-                          <div className="text-xs text-purple-300/80 bg-purple-500/5 rounded px-2 py-1.5 max-h-20 overflow-y-auto border border-purple-500/10">
-                            <div className="text-[9px] text-purple-400/60 font-medium mb-0.5">Thinking</div>
+                          <div className="text-xs text-purple-300/80 bg-purple-500/5 rounded-lg px-3 py-2 max-h-[120px] overflow-y-auto border border-purple-500/10">
+                            <div className="flex items-center gap-1 mb-1 text-purple-400/60 text-[10px] font-medium">
+                              <Brain size={10} />
+                              <span>Thinking</span>
+                            </div>
                             <div className="whitespace-pre-wrap break-words">{stream.thinking.slice(-400)}</div>
                           </div>
                         )}
@@ -546,19 +549,20 @@ export default function DashboardPage() {
                         {/* Tool calls */}
                         {stream.toolCalls?.length > 0 && (
                           <div className="space-y-0.5 border-l-2 border-emerald-500/30 pl-2">
-                            {completedTools.slice(-5).map((tc, i) => (
-                              <div key={i} className="flex items-center gap-1 text-[10px]">
-                                <span className={tc.error ? 'text-red-400' : 'text-green-400'}>&#9679;</span>
+                            {completedTools.slice(-8).map((tc, i) => (
+                              <div key={i} className="flex items-center gap-1 text-[11px]">
+                                <Wrench size={10} className={tc.error ? 'text-red-400' : 'text-green-400'} />
                                 <span className="font-mono text-[var(--muted)] truncate flex-1">{tc.toolName}</span>
                                 {tc.durationMs && <span className="text-[var(--muted)] opacity-50">{tc.durationMs}ms</span>}
+                                {tc.error ? <span className="text-red-400 text-[10px]">failed</span> : <span className="text-green-400 text-[10px]">done</span>}
                               </div>
                             ))}
-                            {completedTools.length > 5 && <div className="text-[9px] text-[var(--muted)]">+{completedTools.length - 5} more</div>}
+                            {completedTools.length > 8 && <div className="text-[9px] text-[var(--muted)]">+{completedTools.length - 8} more</div>}
                             {runningTools.map((tc, i) => (
-                              <div key={`r-${i}`} className="flex items-center gap-1 text-[10px]">
-                                <span className="text-yellow-400 animate-pulse">&#9679;</span>
+                              <div key={`r-${i}`} className="flex items-center gap-1 text-[11px]">
+                                <Wrench size={10} className="text-yellow-400 animate-spin" />
                                 <span className="font-mono text-white">{tc.toolName}</span>
-                                <span className="text-yellow-400 ml-auto">running...</span>
+                                <span className="text-yellow-400 text-[10px] ml-auto">running...</span>
                               </div>
                             ))}
                           </div>
@@ -723,9 +727,12 @@ export default function DashboardPage() {
                       {/* Thinking */}
                       {e.output?.thinking?.length > 0 && (
                         <div>
-                          <div className="text-[10px] text-[var(--muted)] uppercase mb-1">Thinking</div>
-                          <div className="text-xs text-purple-300/80 bg-purple-500/5 rounded px-2 py-1.5 max-h-24 overflow-y-auto border border-purple-500/10 whitespace-pre-wrap break-words">
-                            {e.output.thinking.map((t: string) => t).join('\n\n').substring(0, 500)}
+                          <div className="flex items-center gap-1 text-[10px] text-purple-400/60 font-medium mb-1">
+                            <Brain size={10} />
+                            <span>Thinking</span>
+                          </div>
+                          <div className="text-xs text-purple-300/80 bg-purple-500/5 rounded-lg px-3 py-2 max-h-32 overflow-y-auto border border-purple-500/10 whitespace-pre-wrap break-words">
+                            {e.output.thinking.map((t: string) => t).join('\n\n').substring(0, 800)}
                           </div>
                         </div>
                       )}
@@ -738,10 +745,21 @@ export default function DashboardPage() {
                           </div>
                         </div>
                       )}
-                      {/* Tool calls summary */}
+                      {/* Tool calls */}
                       {e.toolCalls?.length > 0 && (
-                        <div className="text-[10px] text-[var(--muted)]">
-                          {e.toolCalls.length} tool call{e.toolCalls.length !== 1 ? 's' : ''}: {e.toolCalls.slice(0, 5).map((tc: any) => tc.toolName).join(', ')}{e.toolCalls.length > 5 ? '...' : ''}
+                        <div>
+                          <div className="text-[10px] text-[var(--muted)] uppercase mb-1">Tool Calls ({e.toolCalls.length})</div>
+                          <div className="space-y-0.5 border-l-2 border-[var(--accent)]/30 pl-2">
+                            {e.toolCalls.slice(0, 10).map((tc: any, i: number) => (
+                              <div key={i} className="flex items-center gap-1 text-[11px]">
+                                <Wrench size={10} className={tc.error ? 'text-red-400' : 'text-green-400'} />
+                                <span className="font-mono text-[var(--muted)] truncate flex-1">{tc.toolName}</span>
+                                {tc.durationMs && <span className="text-[var(--muted)] opacity-50">{tc.durationMs}ms</span>}
+                                {tc.error ? <span className="text-red-400 text-[10px]">failed</span> : <span className="text-green-400 text-[10px]">done</span>}
+                              </div>
+                            ))}
+                            {e.toolCalls.length > 10 && <div className="text-[9px] text-[var(--muted)]">+{e.toolCalls.length - 10} more</div>}
+                          </div>
                         </div>
                       )}
                       <div className="flex gap-3">
