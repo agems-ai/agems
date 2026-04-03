@@ -56,8 +56,8 @@ export class MCPClient {
       ...(params !== undefined && { params }),
     };
 
-    // Try the URL as-is first, then with /mcp suffix
-    const urls = [this.url, `${this.url}/mcp`];
+    // Try the URL as-is first, then with /mcp suffix (unless URL already ends with /mcp)
+    const urls = this.url.endsWith('/mcp') ? [this.url] : [this.url, `${this.url}/mcp`];
     let lastError: Error | null = null;
 
     for (const url of urls) {
