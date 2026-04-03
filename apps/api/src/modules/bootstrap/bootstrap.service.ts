@@ -269,13 +269,13 @@ export class BootstrapService implements OnModuleInit {
           continue;
         }
 
-        const pos = await this.prisma.orgPosition.create({
+        const pos: { id: string } = await this.prisma.orgPosition.create({
           data: {
             orgId,
             title: member.user.name,
-            holderType: 'HUMAN',
+            holderType: 'HUMAN' as const,
             userId: member.userId,
-            parentId: rootPositionId, // first member has no parent, rest go under first
+            parentId: rootPositionId,
           },
         });
         if (!rootPositionId) rootPositionId = pos.id;
