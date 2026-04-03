@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 
-const providers = ['ANTHROPIC', 'OPENAI', 'GOOGLE', 'DEEPSEEK', 'MISTRAL', 'OLLAMA', 'CUSTOM'];
+const providers = ['ANTHROPIC', 'OPENAI', 'GOOGLE', 'DEEPSEEK', 'MISTRAL', 'MINIMAX', 'GLM', 'XAI', 'COHERE', 'PERPLEXITY', 'TOGETHER', 'FIREWORKS', 'GROQ', 'MOONSHOT', 'QWEN', 'AI21', 'SAMBANOVA', 'OLLAMA', 'CUSTOM'];
 const types = ['AUTONOMOUS', 'ASSISTANT', 'META', 'REACTIVE', 'EXTERNAL'];
 const adapterTypes = ['CLAUDE_CODE', 'CODEX', 'CURSOR', 'GEMINI_CLI', 'OPENCLAW', 'OPENCODE', 'PI', 'HTTP', 'PROCESS'];
 

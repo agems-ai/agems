@@ -117,7 +117,7 @@ export class SettingsService {
   // ── LLM Keys (masked for reading) ──
 
   async getLlmKeys(orgId?: string) {
-    const keys = ['llm_key_openai', 'llm_key_anthropic', 'llm_key_google', 'llm_key_deepseek', 'llm_key_mistral'];
+    const keys = ['llm_key_openai', 'llm_key_anthropic', 'llm_key_google', 'llm_key_deepseek', 'llm_key_mistral', 'llm_key_minimax', 'llm_key_glm', 'llm_key_xai', 'llm_key_cohere', 'llm_key_perplexity', 'llm_key_together', 'llm_key_fireworks', 'llm_key_groq', 'llm_key_moonshot', 'llm_key_qwen', 'llm_key_ai21', 'llm_key_sambanova'];
     const rows = await this.prisma.setting.findMany({ where: { key: { in: keys }, ...(orgId ? { orgId } : { orgId: null }) } });
     const result: Record<string, { set: boolean; masked: string }> = {};
     for (const k of keys) {

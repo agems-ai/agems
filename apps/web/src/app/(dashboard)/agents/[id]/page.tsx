@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { api } from '@/lib/api';
-import { MessageSquare, ListChecks, Video, GitFork, Archive, Send, Plus, ChevronDown, DollarSign } from 'lucide-react';
+import { MessageSquare, ListChecks, Video, GitFork, Archive, Send, Plus, ChevronDown } from 'lucide-react';
 import TelegramSection from './telegram-section';
 import ChatPanel from '@/components/ChatPanel';
 
@@ -68,15 +68,6 @@ export default function AgentDetailPage() {
   const [newMemoryType, setNewMemoryType] = useState('KNOWLEDGE');
   const [showAddMemory, setShowAddMemory] = useState(false);
 
-  // Budget & Cost
-  const [budgets, setBudgets] = useState<any[]>([]);
-  const [costStats, setCostStats] = useState<any>(null);
-  const [costPeriod, setCostPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
-  const [showBudgetModal, setShowBudgetModal] = useState(false);
-  const [editingBudget, setEditingBudget] = useState<any>(null);
-  const [budgetForm, setBudgetForm] = useState({ monthlyLimitUsd: 100, softAlertPercent: 80, hardStopEnabled: true });
-  const [savingBudget, setSavingBudget] = useState(false);
-
   const loadAgent = useCallback(async () => {
     if (!params.id) return;
     try {
@@ -124,22 +115,6 @@ export default function AgentDetailPage() {
     } catch { /* noop */ }
   }, [params.id]);
 
-  const loadBudgets = useCallback(async () => {
-    if (!params.id) return;
-    try {
-      const res = await api.getBudgets({ agentId: params.id as string, pageSize: '10' });
-      setBudgets(res.data || []);
-    } catch { /* noop */ }
-  }, [params.id]);
-
-  const loadCostStats = useCallback(async () => {
-    if (!params.id) return;
-    try {
-      const data = await api.getAgentCostStats(params.id as string, costPeriod, costPeriod === 'monthly' ? 365 : costPeriod === 'weekly' ? 90 : 30);
-      setCostStats(data);
-    } catch { /* noop */ }
-  }, [params.id, costPeriod]);
-
   useEffect(() => {
     loadAgent();
     loadExecutions();
@@ -147,10 +122,8 @@ export default function AgentDetailPage() {
     loadSkills();
     loadBuiltinTools();
     loadMemory();
-    loadBudgets();
-    loadCostStats();
     api.fetch<any>('/auth/profile').then((p: any) => setCurrentUserId(p.id)).catch(() => {});
-  }, [loadAgent, loadExecutions, loadTools, loadSkills, loadBuiltinTools, loadMemory, loadBudgets, loadCostStats]);
+  }, [loadAgent, loadExecutions, loadTools, loadSkills, loadBuiltinTools, loadMemory]);
 
   // Load all direct channels with this agent
   const loadChats = useCallback(async () => {
@@ -298,30 +271,6 @@ export default function AgentDetailPage() {
       setDelegateForm({ childAgentId: '', title: '', description: '', priority: 'MEDIUM' });
     } catch { /* noop */ }
     setDelegating(false);
-  };
-
-  const handleBudgetSave = async () => {
-    setSavingBudget(true);
-    try {
-      if (editingBudget) {
-        await api.updateBudget(editingBudget.id, budgetForm);
-      } else {
-        await api.createBudget({ agentId: params.id, ...budgetForm });
-      }
-      setShowBudgetModal(false);
-      setEditingBudget(null);
-      loadBudgets();
-    } catch { /* noop */ }
-    setSavingBudget(false);
-  };
-
-  const handleBudgetReset = async (budgetId: string) => {
-    if (!confirm('Reset budget for a new period?')) return;
-    const now = new Date();
-    const periodStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-    const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
-    await api.resetBudget(budgetId, { periodStart, periodEnd });
-    loadBudgets();
   };
 
   if (loading) return <div className="p-8 text-[var(--muted)]">Loading agent...</div>;
@@ -571,37 +520,6 @@ export default function AgentDetailPage() {
           ) : (
             <p className="text-sm text-[var(--muted)]">Loading...</p>
           )}
-          {/* Connected External Tools (MCP_SERVER, DATABASE, REST_API, etc.) */}
-          {agent.tools && agent.tools.length > 0 && (() => {
-            const typeIcons: Record<string, string> = { DATABASE: '🗄️', REST_API: '🌐', MCP_SERVER: '🔌', GRAPHQL: '📊', WEBHOOK: '🔗', N8N: '⚡', SSH: '🖥️', FIRECRAWL: '🔥', CUSTOM: '⚙️' };
-            const grouped = agent.tools.reduce((acc: Record<string, any[]>, at: any) => {
-              const type = at.tool?.type || 'CUSTOM';
-              (acc[type] = acc[type] || []).push(at);
-              return acc;
-            }, {});
-            return (Object.entries(grouped) as [string, any[]][]).map(([type, tools]) => (
-              <div key={type} className="mb-3">
-                <div className="text-xs font-medium text-[var(--muted)] uppercase tracking-wider mb-1.5">{typeIcons[type] || '⚙️'} {type.replace('_', ' ')}</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {tools.map((at: any) => (
-                    <div key={at.id} className="group flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border bg-[var(--background)] border-[var(--border)] text-[var(--foreground)]">
-                      <span>{at.tool?.name || 'Tool'}</span>
-                      <button
-                        title="Disconnect tool"
-                        onClick={async (ev) => {
-                          ev.stopPropagation();
-                          if (!confirm(`Disconnect ${at.tool?.name}?`)) return;
-                          await api.fetch(`/agents/${agent.id}/tools/${at.id}`, { method: 'DELETE' });
-                          loadAgent();
-                        }}
-                        className="hidden group-hover:inline text-red-400 hover:text-red-300 ml-0.5"
-                      >×</button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ));
-          })()}
           <button
             onClick={() => setShowToolPicker(true)}
             className="text-sm px-3 py-2 mt-3 rounded-lg border border-dashed border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition w-full"
@@ -680,214 +598,6 @@ export default function AgentDetailPage() {
       <div className="mb-8">
         <TelegramSection agent={agent} onAgentUpdated={loadAgent} />
       </div>
-
-      {/* Budget & Cost Statistics */}
-      <div className="mb-8">
-        <Section title={
-          <div className="flex items-center justify-between w-full">
-            <span className="flex items-center gap-2">
-              <DollarSign size={14} />
-              Budget & Cost Statistics
-            </span>
-            <button
-              onClick={() => {
-                setBudgetForm({ monthlyLimitUsd: 100, softAlertPercent: 80, hardStopEnabled: true });
-                setEditingBudget(null);
-                setShowBudgetModal(true);
-              }}
-              className="text-xs px-3 py-1.5 bg-[var(--accent)] text-white rounded-lg hover:opacity-90 normal-case tracking-normal font-normal"
-            >
-              + Add Budget
-            </button>
-          </div>
-        } wide>
-          {/* Active Budgets */}
-          {budgets.length > 0 ? (
-            <div className="space-y-3 mb-6">
-              {budgets.map((b: any) => {
-                const percent = b.monthlyLimitUsd > 0 ? (b.currentSpendUsd / b.monthlyLimitUsd) * 100 : 0;
-                const barColor = percent >= 100 ? 'var(--danger)' : percent >= 80 ? 'var(--warning)' : 'var(--success)';
-                return (
-                  <div key={b.id} className="p-4 border border-[var(--border)] rounded-lg bg-[var(--background)]">
-                    <div className="flex items-center justify-between mb-2">
-                      <div>
-                        <span className="text-sm font-medium">
-                          ${b.currentSpendUsd?.toFixed(2)} / ${b.monthlyLimitUsd?.toFixed(2)}
-                        </span>
-                        <span className="text-xs text-[var(--muted)] ml-2">
-                          {new Date(b.periodStart).toLocaleDateString()} - {new Date(b.periodEnd).toLocaleDateString()}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                          b.hardStopTriggered ? 'bg-red-500/20 text-red-400' :
-                          b.alertSent ? 'bg-yellow-500/20 text-yellow-400' :
-                          'bg-emerald-500/20 text-emerald-400'
-                        }`}>
-                          {b.hardStopTriggered ? 'HARD STOP' : b.alertSent ? 'ALERT' : 'OK'}
-                        </span>
-                        <button
-                          onClick={() => {
-                            setBudgetForm({
-                              monthlyLimitUsd: b.monthlyLimitUsd,
-                              softAlertPercent: b.softAlertPercent ?? 80,
-                              hardStopEnabled: b.hardStopEnabled ?? true,
-                            });
-                            setEditingBudget(b);
-                            setShowBudgetModal(true);
-                          }}
-                          className="text-[10px] px-2 py-0.5 border border-[var(--border)] rounded hover:bg-[var(--hover)]"
-                        >Edit</button>
-                        <button
-                          onClick={() => handleBudgetReset(b.id)}
-                          className="text-[10px] px-2 py-0.5 border border-[var(--border)] rounded hover:bg-[var(--hover)]"
-                        >Reset</button>
-                      </div>
-                    </div>
-                    {/* Progress bar */}
-                    <div className="h-2 bg-[var(--border)] rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all"
-                        style={{ width: `${Math.min(percent, 100)}%`, backgroundColor: barColor }}
-                      />
-                    </div>
-                    <div className="flex justify-between mt-1">
-                      <span className="text-[10px] text-[var(--muted)]">{percent.toFixed(1)}% used</span>
-                      <span className="text-[10px] text-[var(--muted)]">
-                        Alert at {b.softAlertPercent ?? 80}% &middot; Hard stop: {b.hardStopEnabled ? 'ON' : 'OFF'}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="text-sm text-[var(--muted)] mb-4">No budgets configured. Add a budget to track and limit spending.</p>
-          )}
-
-          {/* Cost Statistics Chart */}
-          <div className="border-t border-[var(--border)] pt-4">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs text-[var(--muted)] uppercase tracking-wider font-semibold">Cost Timeline</span>
-              <div className="flex gap-1">
-                {(['daily', 'weekly', 'monthly'] as const).map((p) => (
-                  <button
-                    key={p}
-                    onClick={() => setCostPeriod(p)}
-                    className={`text-[10px] px-2 py-1 rounded ${
-                      costPeriod === p
-                        ? 'bg-[var(--accent)] text-white'
-                        : 'bg-[var(--background)] text-[var(--muted)] hover:text-white border border-[var(--border)]'
-                    }`}
-                  >
-                    {p.charAt(0).toUpperCase() + p.slice(1)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {costStats?.timeline?.length > 0 ? (
-              <>
-                {/* Summary cards */}
-                <div className="grid grid-cols-3 gap-3 mb-4">
-                  <div className="p-3 bg-[var(--background)] border border-[var(--border)] rounded-lg">
-                    <div className="text-[10px] text-[var(--muted)] uppercase">Total Cost</div>
-                    <div className="text-lg font-bold" style={{ color: 'var(--accent)' }}>${costStats.totalCost?.toFixed(4)}</div>
-                  </div>
-                  <div className="p-3 bg-[var(--background)] border border-[var(--border)] rounded-lg">
-                    <div className="text-[10px] text-[var(--muted)] uppercase">Total Tokens</div>
-                    <div className="text-lg font-bold">{(costStats.totalTokens || 0).toLocaleString()}</div>
-                  </div>
-                  <div className="p-3 bg-[var(--background)] border border-[var(--border)] rounded-lg">
-                    <div className="text-[10px] text-[var(--muted)] uppercase">Executions</div>
-                    <div className="text-lg font-bold">{costStats.totalExecutions || 0}</div>
-                  </div>
-                </div>
-
-                {/* Bar chart */}
-                <div className="flex items-end gap-1 h-32">
-                  {(() => {
-                    const maxCost = Math.max(...costStats.timeline.map((t: any) => t.cost), 0.0001);
-                    return costStats.timeline.map((t: any, i: number) => (
-                      <div key={i} className="flex-1 flex flex-col items-center justify-end h-full group relative">
-                        <div
-                          className="w-full rounded-t transition-all hover:opacity-80"
-                          style={{
-                            height: `${Math.max((t.cost / maxCost) * 100, 2)}%`,
-                            backgroundColor: 'var(--accent)',
-                            minHeight: '2px',
-                          }}
-                        />
-                        {/* Tooltip */}
-                        <div className="absolute bottom-full mb-1 hidden group-hover:block bg-[var(--card)] border border-[var(--border)] rounded px-2 py-1 text-[10px] whitespace-nowrap z-10 shadow-lg">
-                          <div className="font-medium">{t.date}</div>
-                          <div>${t.cost?.toFixed(4)} &middot; {t.tokens?.toLocaleString()} tok &middot; {t.executions} exec</div>
-                        </div>
-                        {/* Date label (show every Nth) */}
-                        {(i === 0 || i === costStats.timeline.length - 1 || costStats.timeline.length <= 10 || i % Math.ceil(costStats.timeline.length / 7) === 0) && (
-                          <span className="text-[8px] text-[var(--muted)] mt-1 truncate w-full text-center">
-                            {t.date?.slice(5)}
-                          </span>
-                        )}
-                      </div>
-                    ));
-                  })()}
-                </div>
-              </>
-            ) : (
-              <p className="text-sm text-[var(--muted)] text-center py-6">No execution cost data yet.</p>
-            )}
-          </div>
-        </Section>
-      </div>
-
-      {/* Budget modal */}
-      {showBudgetModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowBudgetModal(false)}>
-          <div className="bg-[var(--card)] rounded-xl p-6 w-full max-w-[400px] mx-4 border border-[var(--border)]" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold mb-4">{editingBudget ? 'Edit Budget' : 'Create Budget'}</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Monthly Limit (USD)</label>
-                <input
-                  type="number"
-                  step="10"
-                  min="1"
-                  value={budgetForm.monthlyLimitUsd}
-                  onChange={(e) => setBudgetForm({ ...budgetForm, monthlyLimitUsd: parseFloat(e.target.value) || 0 })}
-                  className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Soft Alert at (%)</label>
-                <input
-                  type="number"
-                  min="10"
-                  max="99"
-                  value={budgetForm.softAlertPercent}
-                  onChange={(e) => setBudgetForm({ ...budgetForm, softAlertPercent: parseInt(e.target.value) || 80 })}
-                  className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]"
-                />
-              </div>
-              <label className="flex items-center gap-2 text-sm cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={budgetForm.hardStopEnabled}
-                  onChange={(e) => setBudgetForm({ ...budgetForm, hardStopEnabled: e.target.checked })}
-                  className="rounded"
-                />
-                Hard Stop (auto-pause agent at 100%)
-              </label>
-            </div>
-            <div className="flex justify-end gap-2 mt-6">
-              <button onClick={() => setShowBudgetModal(false)} className="px-4 py-2 rounded-lg border border-[var(--border)] hover:bg-[var(--hover)]">Cancel</button>
-              <button onClick={handleBudgetSave} disabled={savingBudget} className="px-4 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90 disabled:opacity-40">
-                {savingBudget ? 'Saving...' : 'Save'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Memory */}
       <div className="mb-8">
@@ -1252,7 +962,7 @@ export default function AgentDetailPage() {
                   onChange={(e) => setEditForm({ ...editForm, llmProvider: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]"
                 >
-                  {['ANTHROPIC', 'OPENAI', 'GOOGLE', 'DEEPSEEK', 'MISTRAL'].map((p) => (
+                  {['ANTHROPIC', 'OPENAI', 'GOOGLE', 'DEEPSEEK', 'MISTRAL', 'MINIMAX', 'GLM', 'XAI', 'COHERE', 'PERPLEXITY', 'TOGETHER', 'FIREWORKS', 'GROQ', 'MOONSHOT', 'QWEN', 'AI21', 'SAMBANOVA', 'OLLAMA', 'CUSTOM'].map((p) => (
                     <option key={p} value={p}>{p}</option>
                   ))}
                 </select>
@@ -1417,7 +1127,7 @@ export default function AgentDetailPage() {
                   onChange={(e) => setSpawnForm({ ...spawnForm, llmProvider: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]"
                 >
-                  {['ANTHROPIC', 'OPENAI', 'GOOGLE', 'DEEPSEEK', 'MISTRAL'].map((p) => (
+                  {['ANTHROPIC', 'OPENAI', 'GOOGLE', 'DEEPSEEK', 'MISTRAL', 'MINIMAX', 'GLM', 'XAI', 'COHERE', 'PERPLEXITY', 'TOGETHER', 'FIREWORKS', 'GROQ', 'MOONSHOT', 'QWEN', 'AI21', 'SAMBANOVA', 'OLLAMA', 'CUSTOM'].map((p) => (
                     <option key={p} value={p}>{p}</option>
                   ))}
                 </select>

@@ -16,7 +16,6 @@ import { randomUUID } from 'crypto';
 import { join, resolve } from 'path';
 import { decryptJson } from '../../common/crypto.util';
 import { RedisLockService } from '../../common/redis-lock.service';
-import { BrowserService } from './browser.service';
 
 @Injectable()
 export class RuntimeService {
@@ -64,7 +63,6 @@ export class RuntimeService {
     private approvals: ApprovalsService,
     private dashboard: DashboardService,
     private redisLock: RedisLockService,
-    private browserService: BrowserService,
   ) {}
 
   // ========== Redis queue helpers ==========
@@ -179,7 +177,7 @@ export class RuntimeService {
             let context = await this.buildConversationContext(channelId, agent, agents);
 
             // Strip image parts for non-vision providers (DeepSeek, Mistral, etc.)
-            const nonVisionProviders = ['DEEPSEEK', 'MISTRAL', 'OLLAMA'];
+            const nonVisionProviders = ['DEEPSEEK', 'MISTRAL', 'MINIMAX', 'GLM', 'COHERE', 'TOGETHER', 'FIREWORKS', 'GROQ', 'MOONSHOT', 'QWEN', 'AI21', 'SAMBANOVA', 'OLLAMA'];
             if (nonVisionProviders.includes(agent.llmProvider)) {
               context = context.map(msg => {
                 if (Array.isArray(msg.content)) {
@@ -228,8 +226,7 @@ export class RuntimeService {
 
             const thinking = result.thinking || [];
             const loopDetected = result.loopDetected || false;
-            const screenshots = (result as any).screenshots || [];
-            const executionMeta = (skillCalls.length > 0 || toolCalls.length > 0 || thinking.length > 0 || screenshots.length > 0 || loopDetected || result.iterations > 1) ? {
+            const executionMeta = (skillCalls.length > 0 || toolCalls.length > 0 || thinking.length > 0 || loopDetected || result.iterations > 1) ? {
               execution: {
                 id: result.executionId,
                 skills: skillCalls.map((tc: any) => tc.input?.skillName || tc.input?.skill_name || 'unknown'),
@@ -241,7 +238,6 @@ export class RuntimeService {
                   error: tc.error,
                 })),
                 thinking: thinking.length > 0 ? thinking : undefined,
-                screenshots: screenshots.length > 0 ? screenshots : undefined,
                 loopDetected: loopDetected || undefined,
                 iterations: result.iterations,
                 tokensUsed: result.tokensUsed,
@@ -546,6 +542,18 @@ export class RuntimeService {
       ANTHROPIC: 200000,
       GOOGLE: 1048576,
       MISTRAL: 128000,
+      MINIMAX: 1048576,
+      GLM: 128000,
+      XAI: 131072,
+      COHERE: 128000,
+      PERPLEXITY: 128000,
+      TOGETHER: 131072,
+      FIREWORKS: 131072,
+      GROQ: 131072,
+      MOONSHOT: 128000,
+      QWEN: 131072,
+      AI21: 256000,
+      SAMBANOVA: 131072,
     };
     const contextLimit = modelLimits[model] || providerDefaults[provider] || 131072;
     // Reserve tokens for: system prompt (~5K), tools (~10K), output (~5K), safety margin
@@ -1033,28 +1041,13 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       // Collect MCP servers from runtimeConfig + MCP_SERVER tools
       const mcpServers = await this.collectMcpServers(agent.id, runtimeConfig);
 
-      // Detect browser-related tools/MCP servers and start a browser session for live streaming
-      const hasBrowserTools = this.detectBrowserTools(liveTools, mcpServers);
-      if (hasBrowserTools) {
-        const browserSession = await this.browserService.startSession(execution.id, agentId, context?.channelId);
-        if (browserSession) {
-          this.logger.log(`Browser session started for ${agent.name} — CDP: ${browserSession.cdpWsUrl}`);
-        }
-      }
-
       const runner = new AgentRunner({
         provider: {
           provider: agent.llmProvider as any,
           model: agent.llmModel,
           apiKey,
         },
-        systemPrompt: await this.buildSystemPrompt(agent).then(sp => {
-          if (typeof sp !== 'string') {
-            this.logger.error(`buildSystemPrompt returned ${typeof sp}: ${JSON.stringify(sp).substring(0, 100)}`);
-            return String(sp || '');
-          }
-          return sp;
-        }),
+        systemPrompt: await this.buildSystemPrompt(agent),
         tools: liveTools,
         maxIterations: (runtimeConfig.maxIterations as number) ?? 150,
         maxTokens: (llmConfig.maxTokens as number) ?? 4096,
@@ -1131,18 +1124,16 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
 
       this.logger.log(`Agent ${agent.name}: ${result.toolCalls?.length || 0} tool calls, ${result.iterations} iterations, text=${result.text?.substring(0, 80)}...`);
 
-      // Clean up abort controller, channel mapping, and browser session
+      // Clean up abort controller and channel mapping
       this.abortControllers.delete(execution.id);
       if (context?.channelId) {
         this.channelExecutionMap.get(context.channelId)?.delete(execution.id);
       }
-      const browserScreenshots = this.browserService.stopSession(execution.id);
 
       // Emit execution done for real-time UI
       if (context?.channelId) {
         this.events.emit('agent.execution.done', {
           channelId: context.channelId, agentId, executionId: execution.id,
-          screenshots: browserScreenshots.length > 0 ? browserScreenshots : undefined,
         });
       }
 
@@ -1171,11 +1162,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
         where: { id: execution.id },
         data: {
           status: 'COMPLETED',
-          output: {
-            text: result.text,
-            ...(result.thinking?.length > 0 && { thinking: result.thinking }),
-            ...(browserScreenshots.length > 0 && { screenshots: browserScreenshots }),
-          },
+          output: { text: result.text },
           toolCalls: result.toolCalls as any,
           tokensUsed: result.tokensUsed.input + result.tokensUsed.output,
           costUsd: this.estimateCost(agent.llmProvider, result.tokensUsed),
@@ -1192,7 +1179,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
         details: { iterations: result.iterations, tokensUsed: result.tokensUsed },
       });
 
-      return { executionId: execution.id, ...result, waitingForApproval: false, screenshots: browserScreenshots };
+      return { executionId: execution.id, ...result, waitingForApproval: false };
     } catch (error) {
       clearTimeout(executionTimeout);
       if (stopPollTimer) clearInterval(stopPollTimer);
@@ -1200,19 +1187,13 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       if (context?.channelId) {
         this.channelExecutionMap.get(context.channelId)?.delete(execution.id);
       }
-      const errorScreenshots = this.browserService.stopSession(execution.id);
       const isAborted = error instanceof Error && (error.name === 'AbortError' || error.message.includes('aborted'));
       const errorMessage = isAborted ? 'Execution timed out or stopped' : (error instanceof Error ? error.message : String(error));
       this.logger.log(isAborted ? `Agent ${agentId} execution stopped by user` : `Agent ${agentId} execution failed: ${errorMessage}`);
 
       await this.prisma.agentExecution.update({
         where: { id: execution.id },
-        data: {
-          status: isAborted ? 'CANCELLED' as any : 'FAILED',
-          error: errorMessage,
-          endedAt: new Date(),
-          ...(errorScreenshots.length > 0 && { output: { screenshots: errorScreenshots } }),
-        },
+        data: { status: isAborted ? 'CANCELLED' as any : 'FAILED', error: errorMessage, endedAt: new Date() },
       });
 
       // Emit done so UI clears the thinking indicator
@@ -1238,17 +1219,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       this.abortControllers.delete(executionId);
       return true;
     }
-
-    // No local AbortController — execution may be orphaned (process restarted).
-    // Force-update DB status so it doesn't stay RUNNING forever.
-    try {
-      await this.prisma.agentExecution.updateMany({
-        where: { id: executionId, status: 'RUNNING' },
-        data: { status: 'CANCELLED' as any, error: 'Stopped by user', endedAt: new Date() },
-      });
-    } catch { /* ignore if already updated */ }
-
-    return true;
+    return true; // may be running on another pod and will be stopped via Redis flag
   }
 
   /** Stop all running executions in a channel */
@@ -1695,7 +1666,7 @@ WORKFLOW: search_catalog → check_existing → import or create → assign skil
           slug: z.string().describe('URL slug, e.g. "alex-frontend-dev"'),
           systemPrompt: z.string().describe('Instructions for the agent'),
           mission: z.string().optional().describe('Brief role description'),
-          llmProvider: z.string().optional().describe('ANTHROPIC, OPENAI, GOOGLE, DEEPSEEK, MISTRAL'),
+          llmProvider: z.string().optional().describe('ANTHROPIC, OPENAI, GOOGLE, DEEPSEEK, MISTRAL, MINIMAX, GLM, XAI, COHERE, PERPLEXITY, TOGETHER, FIREWORKS, GROQ, MOONSHOT, QWEN, AI21, SAMBANOVA'),
           llmModel: z.string().optional().describe('e.g. deepseek-chat, claude-sonnet-4-5, gpt-4o'),
           type: z.string().optional().describe('AUTONOMOUS (default), ASSISTANT, REACTIVE'),
           values: z.array(z.string()).optional().describe('Agent values, e.g. ["quality", "speed"]'),
@@ -1821,11 +1792,6 @@ WORKFLOW: search_catalog → check_existing → import or create → assign skil
               },
               select: { id: true, name: true, slug: true, status: true, mission: true, llmProvider: true, llmModel: true },
             });
-            // Auto-create OrgPosition under creating agent's position
-            const creatingAgentPos = await this.prisma.orgPosition.findFirst({ where: { agentId: agent.id } });
-            await this.prisma.orgPosition.create({
-              data: { orgId: agent.orgId, title: newAgent.name, holderType: 'AGENT', agentId: newAgent.id, parentId: creatingAgentPos?.id ?? null },
-            });
             return {
               success: true,
               agent: newAgent,
@@ -1886,11 +1852,6 @@ WORKFLOW: search_catalog → check_existing → import or create → assign skil
                 ownerId: agent.ownerId, status: 'ACTIVE',
               },
               select: { id: true, name: true, slug: true, status: true, mission: true, llmProvider: true, llmModel: true },
-            });
-            // Auto-create OrgPosition under importing agent's position
-            const importingAgentPos = await this.prisma.orgPosition.findFirst({ where: { agentId: agent.id } });
-            await this.prisma.orgPosition.create({
-              data: { orgId: agent.orgId, title: imported.name, holderType: 'AGENT', agentId: imported.id, parentId: importingAgentPos?.id ?? null },
             });
             // Import linked skills
             if (item.skillSlugs?.length) {
@@ -3357,23 +3318,6 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     return servers;
   }
 
-  /** Detect if any tools or MCP servers are browser-related */
-  private detectBrowserTools(tools: any[], mcpServers: MCPServerConfig[]): boolean {
-    const browserKeywords = ['browser', 'playwright', 'puppeteer', 'chromium', 'selenium', 'web-browse', 'browser_use', 'browser-use'];
-    // Check tool names
-    for (const t of tools) {
-      const name = (t.name || '').toLowerCase();
-      if (browserKeywords.some(kw => name.includes(kw))) return true;
-    }
-    // Check MCP server names
-    for (const s of mcpServers) {
-      const name = (s.name || '').toLowerCase();
-      const url = (s.url || '').toLowerCase();
-      if (browserKeywords.some(kw => name.includes(kw) || url.includes(kw))) return true;
-    }
-    return false;
-  }
-
   /** Fetch tools assigned to agent from database and add executable definitions */
   private async buildAgentTools(agentId: string, orgId: string, tools: any[], chatContext?: { channelId: string; agentId: string }) {
     const agentTools = await this.prisma.agentTool.findMany({
@@ -4354,8 +4298,8 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
 
   /** Get LLM API key: Settings table first, then env vars fallback */
   private async getApiKey(provider: string, orgId?: string): Promise<string | undefined> {
-    const settingsMap: Record<string, string> = { ANTHROPIC: 'llm_key_anthropic', OPENAI: 'llm_key_openai', GOOGLE: 'llm_key_google', DEEPSEEK: 'llm_key_deepseek', MISTRAL: 'llm_key_mistral' };
-    const envMap: Record<string, string> = { ANTHROPIC: 'ANTHROPIC_API_KEY', OPENAI: 'OPENAI_API_KEY', GOOGLE: 'GOOGLE_AI_API_KEY', DEEPSEEK: 'DEEPSEEK_API_KEY', MISTRAL: 'MISTRAL_API_KEY' };
+    const settingsMap: Record<string, string> = { ANTHROPIC: 'llm_key_anthropic', OPENAI: 'llm_key_openai', GOOGLE: 'llm_key_google', DEEPSEEK: 'llm_key_deepseek', MISTRAL: 'llm_key_mistral', MINIMAX: 'llm_key_minimax', GLM: 'llm_key_glm', XAI: 'llm_key_xai', COHERE: 'llm_key_cohere', PERPLEXITY: 'llm_key_perplexity', TOGETHER: 'llm_key_together', FIREWORKS: 'llm_key_fireworks', GROQ: 'llm_key_groq', MOONSHOT: 'llm_key_moonshot', QWEN: 'llm_key_qwen', AI21: 'llm_key_ai21', SAMBANOVA: 'llm_key_sambanova' };
+    const envMap: Record<string, string> = { ANTHROPIC: 'ANTHROPIC_API_KEY', OPENAI: 'OPENAI_API_KEY', GOOGLE: 'GOOGLE_AI_API_KEY', DEEPSEEK: 'DEEPSEEK_API_KEY', MISTRAL: 'MISTRAL_API_KEY', MINIMAX: 'MINIMAX_API_KEY', GLM: 'GLM_API_KEY', XAI: 'XAI_API_KEY', COHERE: 'COHERE_API_KEY', PERPLEXITY: 'PERPLEXITY_API_KEY', TOGETHER: 'TOGETHER_API_KEY', FIREWORKS: 'FIREWORKS_API_KEY', GROQ: 'GROQ_API_KEY', MOONSHOT: 'MOONSHOT_API_KEY', QWEN: 'QWEN_API_KEY', AI21: 'AI21_API_KEY', SAMBANOVA: 'SAMBANOVA_API_KEY' };
 
     const sk = settingsMap[provider];
     if (sk) {
@@ -4491,7 +4435,8 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
   private estimateCost(provider: string, tokens: { input: number; output: number }): number {
     const rates: Record<string, { input: number; output: number }> = {
       ANTHROPIC: { input: 15, output: 75 }, OPENAI: { input: 10, output: 30 }, GOOGLE: { input: 7, output: 21 },
-      DEEPSEEK: { input: 0.14, output: 0.28 }, MISTRAL: { input: 2, output: 6 },
+      DEEPSEEK: { input: 0.14, output: 0.28 }, MISTRAL: { input: 2, output: 6 }, MINIMAX: { input: 1, output: 4 }, GLM: { input: 0.7, output: 2.8 },
+      XAI: { input: 3, output: 15 }, COHERE: { input: 2.5, output: 10 }, PERPLEXITY: { input: 1, output: 5 }, TOGETHER: { input: 0.8, output: 0.8 }, FIREWORKS: { input: 0.9, output: 0.9 }, GROQ: { input: 0.05, output: 0.08 }, MOONSHOT: { input: 0.7, output: 2.8 }, QWEN: { input: 0.5, output: 2 }, AI21: { input: 2, output: 8 }, SAMBANOVA: { input: 0.1, output: 0.4 },
     };
     const rate = rates[provider] ?? { input: 10, output: 30 };
     return (tokens.input * rate.input + tokens.output * rate.output) / 1_000_000;
