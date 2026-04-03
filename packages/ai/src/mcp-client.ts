@@ -41,7 +41,7 @@ export class MCPClient {
     this.url = config.url.replace(/\/sse\/?$/, '');
     this.headers = {
       'Content-Type': 'application/json',
-      'Accept': 'application/json',
+      'Accept': 'application/json, text/event-stream',
     };
     if (config.authorizationToken) {
       this.headers['Authorization'] = `Bearer ${config.authorizationToken}`;
@@ -133,9 +133,22 @@ export class MCPClient {
     return response?.result?.tools || [];
   }
 
-  /** Call a tool on the MCP server */
+  /** Call a tool on the MCP server (with session recovery on 404) */
   async callTool(name: string, args: Record<string, any>): Promise<any> {
-    const response = await this.jsonRpc('tools/call', { name, arguments: args });
+    let response: any;
+    try {
+      response = await this.jsonRpc('tools/call', { name, arguments: args });
+    } catch (err: any) {
+      // If session expired (404), re-initialize and retry once
+      if (err?.message?.includes('404')) {
+        console.warn(`[MCP] Session expired for ${this.serverName}, re-initializing...`);
+        this.sessionId = undefined;
+        await this.initialize();
+        response = await this.jsonRpc('tools/call', { name, arguments: args });
+      } else {
+        throw err;
+      }
+    }
     if (response?.error) {
       throw new Error(`MCP tool ${name}: ${response.error.message || JSON.stringify(response.error)}`);
     }

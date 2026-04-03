@@ -69,7 +69,9 @@ function ExecutionDetails({ execution }: { execution: any }) {
   const toolCalls = execution.toolCalls || [];
   const skills = execution.skills || [];
   const thinking = execution.thinking || [];
-  if (toolCalls.length === 0 && skills.length === 0 && thinking.length === 0 && execution.iterations <= 1) return null;
+  const screenshots = execution.screenshots || [];
+  const [screenshotFull, setScreenshotFull] = useState<string | null>(null);
+  if (toolCalls.length === 0 && skills.length === 0 && thinking.length === 0 && screenshots.length === 0 && execution.iterations <= 1) return null;
 
   return (
     <div className="mt-1.5">
@@ -169,6 +171,29 @@ function ExecutionDetails({ execution }: { execution: any }) {
               ))}
             </div>
           )}
+
+          {/* Screenshots */}
+          {screenshots.length > 0 && (
+            <div>
+              <div className="text-[10px] text-[var(--muted)] uppercase mb-0.5">Browser Screenshots</div>
+              <div className="flex gap-2 flex-wrap">
+                {screenshots.map((frame: string, i: number) => (
+                  <img
+                    key={i}
+                    src={`data:image/jpeg;base64,${frame}`}
+                    alt={`Screenshot ${i + 1}`}
+                    className="rounded-lg border border-[var(--border)] w-28 h-16 object-cover cursor-pointer hover:border-cyan-400/50 transition"
+                    onClick={() => setScreenshotFull(frame)}
+                  />
+                ))}
+              </div>
+              {screenshotFull && (
+                <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center" onClick={() => setScreenshotFull(null)}>
+                  <img src={`data:image/jpeg;base64,${screenshotFull}`} alt="Screenshot" className="rounded-xl border border-white/10 max-w-[90vw] max-h-[90vh] object-contain" />
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -200,7 +225,9 @@ export default function ChatPanel({
     toolCalls: Array<{ toolName: string; status: string; durationMs?: number; error?: string }>;
     thinkingText: string;
     streamingText: string;
+    browserFrame?: string;
   }>>(new Map());
+  const [chatBrowserExpanded, setChatBrowserExpanded] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<any>(null);
@@ -317,6 +344,18 @@ export default function ChatPanel({
       });
     });
 
+    // Browser live frame
+    socket.on('agent_browser_frame', (data: any) => {
+      if (data.channelId && data.channelId !== channelIdRef.current) return;
+      setAgentThinking(prev => {
+        const next = new Map(prev);
+        const entry = next.get(data.agentId);
+        if (!entry) return prev;
+        next.set(data.agentId, { ...entry, browserFrame: data.frame });
+        return next;
+      });
+    });
+
     return () => {
       socket.off('new_message');
       socket.off('approval_resolved');
@@ -324,6 +363,7 @@ export default function ChatPanel({
       socket.off('agent_tool_update');
       socket.off('agent_thinking_chunk');
       socket.off('agent_text_chunk');
+      socket.off('agent_browser_frame');
       socket.off('connect');
       socket.disconnect();
     };
@@ -644,6 +684,21 @@ export default function ChatPanel({
                         <span className="text-yellow-400 text-[10px] ml-auto">running...</span>
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {/* Browser Live Preview */}
+                {state.browserFrame && (
+                  <div className="mt-2">
+                    <div className="flex items-center gap-1 text-[10px] text-[var(--muted)] mb-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                      <span>Browser Live</span>
+                    </div>
+                    <img
+                      src={`data:image/jpeg;base64,${state.browserFrame}`}
+                      alt="Browser"
+                      className="rounded-lg border border-[var(--border)] w-full max-w-[400px]"
+                    />
                   </div>
                 )}
               </div>

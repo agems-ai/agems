@@ -42,6 +42,7 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const payload = this.jwtService.verify(token);
       this.clients.set(client.id, { userId: payload.sub, orgId: payload.orgId, socket: client });
       client.join(`org:${payload.orgId}`);
+      client.join(`user:${payload.sub}`);
     } catch {
       client.disconnect();
     }
@@ -91,8 +92,20 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @OnEvent('message.new')
-  handleMessageBroadcast(payload: { channelId: string; message: any }) {
+  async handleMessageBroadcast(payload: { channelId: string; message: any }) {
     this.server.to(`channel:${payload.channelId}`).emit('new_message', payload.message);
+
+    // Notify all human participants via user rooms (for multi-chat popups)
+    const participants = await this.prisma.channelParticipant.findMany({
+      where: { channelId: payload.channelId, participantType: 'HUMAN' },
+      select: { participantId: true },
+    });
+    for (const p of participants) {
+      this.server.to(`user:${p.participantId}`).emit('new_message_notification', {
+        channelId: payload.channelId,
+        message: payload.message,
+      });
+    }
   }
 
   // ── Approval Actions ──
@@ -241,6 +254,26 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         status: 'done',
       });
     }
+  }
+
+  // ── Browser Screencast Live Frames ──
+
+  @OnEvent('agent.browser.frame')
+  async handleBrowserFrame(payload: { executionId: string; agentId: string; channelId?: string; frame: string; metadata: any }) {
+    const data = {
+      executionId: payload.executionId,
+      agentId: payload.agentId,
+      frame: payload.frame,
+      metadata: payload.metadata,
+    };
+    // Broadcast to org room for dashboard Activity panel
+    await this.broadcastToOrg(payload.agentId, 'agent_browser_frame', data);
+  }
+
+  @OnEvent('agent.browser.stop')
+  async handleBrowserStop(payload: { executionId: string; agentId: string; channelId?: string }) {
+    const data = { executionId: payload.executionId, agentId: payload.agentId };
+    await this.broadcastToOrg(payload.agentId, 'agent_browser_stop', data);
   }
 
   @OnEvent('approval.requested')

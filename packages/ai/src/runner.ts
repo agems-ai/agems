@@ -111,33 +111,41 @@ export class AgentRunner {
         providerOptions.anthropic = { thinking: { type: 'enabled', budgetTokens: budget } };
       }
     }
-    // MCP servers (Anthropic remote MCP client)
+    // MCP servers: only use Anthropic remote MCP for publicly accessible URLs.
+    // Internal Docker URLs (e.g. http://playwright-mcp:3002) are handled by MCPClient instead.
     if (this.config.provider.provider === 'ANTHROPIC' && this.config.mcpServers?.length) {
-      if (!providerOptions.anthropic) providerOptions.anthropic = {};
-      providerOptions.anthropic.mcpServers = this.config.mcpServers.map(s => ({
-        type: 'url' as const,
-        name: s.name,
-        url: s.url,
-        authorizationToken: s.authorizationToken ?? undefined,
-        toolConfiguration: s.toolConfiguration ?? undefined,
-      }));
+      const publicServers = this.config.mcpServers.filter(s => {
+        const url = s.url || '';
+        return url.startsWith('https://') && !url.includes('localhost') && !url.includes('127.0.0.1');
+      });
+      if (publicServers.length > 0) {
+        if (!providerOptions.anthropic) providerOptions.anthropic = {};
+        providerOptions.anthropic.mcpServers = publicServers.map(s => ({
+          type: 'url' as const,
+          name: s.name,
+          url: s.url,
+          authorizationToken: s.authorizationToken ?? undefined,
+          toolConfiguration: s.toolConfiguration ?? undefined,
+        }));
+      }
     }
 
     // For Anthropic: wrap system prompt with cacheControl to enable prompt caching.
     // The provider must be created with cacheControl: true (see provider.ts).
     // Other providers receive the plain string — they ignore the structured format.
+    const systemPromptText = this.config.systemPrompt || '';
     const isAnthropic = this.config.provider.provider === 'ANTHROPIC';
-    const system = isAnthropic
+    const system: any = isAnthropic
       ? [
           {
-            type: 'text' as const,
-            text: this.config.systemPrompt,
+            role: 'system' as const,
+            content: systemPromptText,
             providerOptions: {
               anthropic: { cacheControl: { type: 'ephemeral' } },
             },
           },
         ]
-      : this.config.systemPrompt;
+      : systemPromptText;
 
     return {
       model: this.model,
@@ -240,13 +248,24 @@ export class AgentRunner {
   }
 
   async run(input: string | UserMessage[], abortSignal?: AbortSignal, streamCallbacks?: StreamCallbacks): Promise<RunResult> {
-    // For non-Anthropic providers, resolve MCP servers into regular tools
-    if (this.config.mcpServers?.length && this.config.provider.provider !== 'ANTHROPIC') {
-      try {
-        const mcpTools = await mcpServersToTools(this.config.mcpServers);
-        this.config.tools = [...(this.config.tools || []), ...mcpTools];
-      } catch (err) {
-        console.warn(`[MCP] Failed to resolve MCP tools: ${err}`);
+    // Resolve MCP servers into regular tools via MCPClient
+    // For Anthropic: only internal/Docker URLs (public ones go through native MCP)
+    // For others: all MCP servers
+    if (this.config.mcpServers?.length) {
+      const isAnthropic = this.config.provider.provider === 'ANTHROPIC';
+      const serversToResolve = isAnthropic
+        ? this.config.mcpServers.filter(s => {
+            const url = s.url || '';
+            return !url.startsWith('https://') || url.includes('localhost') || url.includes('127.0.0.1');
+          })
+        : this.config.mcpServers;
+      if (serversToResolve.length > 0) {
+        try {
+          const mcpTools = await mcpServersToTools(serversToResolve);
+          this.config.tools = [...(this.config.tools || []), ...mcpTools];
+        } catch (err) {
+          console.warn(`[MCP] Failed to resolve MCP tools: ${err}`);
+        }
       }
     }
 

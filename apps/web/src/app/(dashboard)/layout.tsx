@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, useRef } from 'react';
 import { api } from '@/lib/api';
-import GemmaWidget from '@/components/GemmaWidget';
+import { ChatManagerProvider, ChatDock } from '@/components/chat';
 import {
   LayoutDashboard,
   Building2,
@@ -318,8 +318,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       {/* Command Palette (Cmd+K) */}
       <CommandPalette />
 
-      {/* Gemma floating chat widget - available on all pages */}
-      <GemmaWidget />
+      {/* Multi-chat system — Gemma + incoming agent/human chats */}
+      <ChatManagerProvider>
+        <ChatDock />
+      </ChatManagerProvider>
     </div>
   );
 }

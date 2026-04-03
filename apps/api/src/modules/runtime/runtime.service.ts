@@ -16,6 +16,7 @@ import { randomUUID } from 'crypto';
 import { join, resolve } from 'path';
 import { decryptJson } from '../../common/crypto.util';
 import { RedisLockService } from '../../common/redis-lock.service';
+import { BrowserService } from './browser.service';
 
 @Injectable()
 export class RuntimeService {
@@ -63,6 +64,7 @@ export class RuntimeService {
     private approvals: ApprovalsService,
     private dashboard: DashboardService,
     private redisLock: RedisLockService,
+    private browserService: BrowserService,
   ) {}
 
   // ========== Redis queue helpers ==========
@@ -1029,13 +1031,28 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       // Collect MCP servers from runtimeConfig + MCP_SERVER tools
       const mcpServers = await this.collectMcpServers(agent.id, runtimeConfig);
 
+      // Detect browser-related tools/MCP servers and start a browser session for live streaming
+      const hasBrowserTools = this.detectBrowserTools(liveTools, mcpServers);
+      if (hasBrowserTools) {
+        const browserSession = await this.browserService.startSession(execution.id, agentId, context?.channelId);
+        if (browserSession) {
+          this.logger.log(`Browser session started for ${agent.name} — CDP: ${browserSession.cdpWsUrl}`);
+        }
+      }
+
       const runner = new AgentRunner({
         provider: {
           provider: agent.llmProvider as any,
           model: agent.llmModel,
           apiKey,
         },
-        systemPrompt: await this.buildSystemPrompt(agent),
+        systemPrompt: await this.buildSystemPrompt(agent).then(sp => {
+          if (typeof sp !== 'string') {
+            this.logger.error(`buildSystemPrompt returned ${typeof sp}: ${JSON.stringify(sp).substring(0, 100)}`);
+            return String(sp || '');
+          }
+          return sp;
+        }),
         tools: liveTools,
         maxIterations: (runtimeConfig.maxIterations as number) ?? 150,
         maxTokens: (llmConfig.maxTokens as number) ?? 4096,
@@ -1112,16 +1129,18 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
 
       this.logger.log(`Agent ${agent.name}: ${result.toolCalls?.length || 0} tool calls, ${result.iterations} iterations, text=${result.text?.substring(0, 80)}...`);
 
-      // Clean up abort controller and channel mapping
+      // Clean up abort controller, channel mapping, and browser session
       this.abortControllers.delete(execution.id);
       if (context?.channelId) {
         this.channelExecutionMap.get(context.channelId)?.delete(execution.id);
       }
+      const browserScreenshots = this.browserService.stopSession(execution.id);
 
       // Emit execution done for real-time UI
       if (context?.channelId) {
         this.events.emit('agent.execution.done', {
           channelId: context.channelId, agentId, executionId: execution.id,
+          screenshots: browserScreenshots.length > 0 ? browserScreenshots : undefined,
         });
       }
 
@@ -1150,7 +1169,10 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
         where: { id: execution.id },
         data: {
           status: 'COMPLETED',
-          output: { text: result.text },
+          output: {
+            text: result.text,
+            ...(browserScreenshots.length > 0 && { screenshots: browserScreenshots }),
+          },
           toolCalls: result.toolCalls as any,
           tokensUsed: result.tokensUsed.input + result.tokensUsed.output,
           costUsd: this.estimateCost(agent.llmProvider, result.tokensUsed),
@@ -1175,13 +1197,19 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       if (context?.channelId) {
         this.channelExecutionMap.get(context.channelId)?.delete(execution.id);
       }
+      const errorScreenshots = this.browserService.stopSession(execution.id);
       const isAborted = error instanceof Error && (error.name === 'AbortError' || error.message.includes('aborted'));
       const errorMessage = isAborted ? 'Execution timed out or stopped' : (error instanceof Error ? error.message : String(error));
       this.logger.log(isAborted ? `Agent ${agentId} execution stopped by user` : `Agent ${agentId} execution failed: ${errorMessage}`);
 
       await this.prisma.agentExecution.update({
         where: { id: execution.id },
-        data: { status: isAborted ? 'CANCELLED' as any : 'FAILED', error: errorMessage, endedAt: new Date() },
+        data: {
+          status: isAborted ? 'CANCELLED' as any : 'FAILED',
+          error: errorMessage,
+          endedAt: new Date(),
+          ...(errorScreenshots.length > 0 && { output: { screenshots: errorScreenshots } }),
+        },
       });
 
       // Emit done so UI clears the thinking indicator
@@ -3314,6 +3342,23 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     }
 
     return servers;
+  }
+
+  /** Detect if any tools or MCP servers are browser-related */
+  private detectBrowserTools(tools: any[], mcpServers: MCPServerConfig[]): boolean {
+    const browserKeywords = ['browser', 'playwright', 'puppeteer', 'chromium', 'selenium', 'web-browse', 'browser_use', 'browser-use'];
+    // Check tool names
+    for (const t of tools) {
+      const name = (t.name || '').toLowerCase();
+      if (browserKeywords.some(kw => name.includes(kw))) return true;
+    }
+    // Check MCP server names
+    for (const s of mcpServers) {
+      const name = (s.name || '').toLowerCase();
+      const url = (s.url || '').toLowerCase();
+      if (browserKeywords.some(kw => name.includes(kw) || url.includes(kw))) return true;
+    }
+    return false;
   }
 
   /** Fetch tools assigned to agent from database and add executable definitions */

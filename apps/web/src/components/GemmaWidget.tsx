@@ -31,7 +31,7 @@ export default function GemmaWidget() {
       if (meta) {
         setGemmaId(meta.id);
         setGemmaName(meta.name || 'Gemma');
-        setGemmaAvatar(meta.avatarUrl || null);
+        setGemmaAvatar(meta.avatar || null);
 
         // Try to find existing direct channel with Gemma
         try {
@@ -129,14 +129,18 @@ export default function GemmaWidget() {
       {/* Floating button */}
       <button
         onClick={toggle}
-        className="fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full bg-[var(--accent)] text-white shadow-lg hover:scale-105 transition-all flex items-center justify-center"
+        className="fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full bg-[var(--accent)] text-white shadow-lg hover:scale-105 transition-all flex items-center justify-center overflow-hidden"
         title={`Chat with ${gemmaName}`}
       >
         {open ? (
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
         ) : (
           <>
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" /></svg>
+            {gemmaAvatar ? (
+              <img src={gemmaAvatar} alt={gemmaName} className="w-14 h-14 rounded-full object-cover" />
+            ) : (
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" /></svg>
+            )}
             {unread && (
               <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[10px] flex items-center justify-center animate-pulse">!</span>
             )}
@@ -236,7 +240,11 @@ export default function GemmaWidget() {
                 height="100%"
                 emptyState={
                   <div className="text-center text-[var(--muted)] py-12 px-4">
-                    <div className="text-3xl mb-3">&#128075;</div>
+                    {gemmaAvatar ? (
+                      <img src={gemmaAvatar} alt={gemmaName} className="w-16 h-16 rounded-full object-cover mx-auto mb-3" />
+                    ) : (
+                      <div className="text-3xl mb-3">&#128075;</div>
+                    )}
                     <p className="text-sm font-medium">Hi! I'm {gemmaName}</p>
                     <p className="text-xs mt-1">Your AGEMS System Director. Ask me anything about the platform, your agents, or get help.</p>
                   </div>

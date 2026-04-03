@@ -392,6 +392,35 @@ export default function DashboardPage() {
     };
   }, []);
 
+  // Browser screencast frames from agents (live browser preview)
+  const [browserFrames, setBrowserFrames] = useState<Record<string, string>>({}); // executionId → base64 jpeg
+  const [expandedBrowser, setExpandedBrowser] = useState<string | null>(null);
+  useEffect(() => {
+    const socket = getCommsSocket();
+    const onBrowserFrame = (data: any) => {
+      const key = data.executionId;
+      if (!key) return;
+      setBrowserFrames(prev => ({ ...prev, [key]: data.frame }));
+    };
+    const onBrowserStop = (data: any) => {
+      const key = data.executionId;
+      if (!key) return;
+      setBrowserFrames(prev => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      setExpandedBrowser(prev => prev === key ? null : prev);
+    };
+
+    socket.on('agent_browser_frame', onBrowserFrame);
+    socket.on('agent_browser_stop', onBrowserStop);
+    return () => {
+      socket.off('agent_browser_frame', onBrowserFrame);
+      socket.off('agent_browser_stop', onBrowserStop);
+    };
+  }, []);
+
   const triggerLabels: Record<string, string> = {
     TASK: 'Task', MESSAGE: 'Message', SCHEDULE: 'Schedule', EVENT: 'Goal/Event',
     MANUAL: 'Manual', MEETING: 'Meeting', TELEGRAM: 'Telegram', APPROVAL: 'Approval',
@@ -495,6 +524,83 @@ export default function DashboardPage() {
                       </div>
                     );
                   })()}
+                  {/* Browser live preview */}
+                  {browserFrames[e.id] && (
+                    <div className="px-3 pb-2">
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                          <span className="text-[10px] text-cyan-400 font-medium">Browser Live</span>
+                        </div>
+                        <button
+                          onClick={(ev) => { ev.stopPropagation(); setExpandedBrowser(e.id); }}
+                          className="text-[10px] text-cyan-400/60 hover:text-cyan-300 transition px-1.5 py-0.5 rounded hover:bg-cyan-500/10"
+                        >Fullscreen</button>
+                      </div>
+                      <div
+                        className="relative rounded-lg border border-cyan-500/20 overflow-hidden cursor-pointer bg-black"
+                        style={{ height: '160px' }}
+                        onClick={(ev) => { ev.stopPropagation(); setExpandedBrowser(e.id); }}
+                      >
+                        <img
+                          src={`data:image/jpeg;base64,${browserFrames[e.id]}`}
+                          alt="Browser preview"
+                          className="w-full h-full object-contain"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {/* Fullscreen browser modal */}
+                  {expandedBrowser === e.id && browserFrames[e.id] && (
+                    <div
+                      className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-4"
+                      onClick={(ev) => { ev.stopPropagation(); setExpandedBrowser(null); }}
+                    >
+                      <div className="relative w-full max-w-6xl" onClick={(ev) => ev.stopPropagation()}>
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                            <span className="text-sm text-cyan-400 font-medium">{e.agent?.name || 'Agent'}</span>
+                            <span className="text-xs text-[var(--muted)]">Browser Live</span>
+                            <span className="text-xs font-mono text-emerald-400">{timeAgo(e.startedAt)}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={(ev) => { handleStopExecution(e.id, ev); setExpandedBrowser(null); }}
+                              className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-red-500/15 text-red-400 hover:bg-red-500/25 transition"
+                            >
+                              <Square size={10} fill="currentColor" /> Stop
+                            </button>
+                            <button
+                              onClick={() => setExpandedBrowser(null)}
+                              className="text-white/60 hover:text-white p-1 rounded hover:bg-white/10 transition"
+                            >
+                              <X size={18} />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="rounded-xl overflow-hidden border border-cyan-500/20 shadow-2xl shadow-cyan-500/5 bg-black">
+                          <img
+                            src={`data:image/jpeg;base64,${browserFrames[e.id]}`}
+                            alt="Browser live view"
+                            className="w-full"
+                          />
+                        </div>
+                        {/* Live stream info below fullscreen */}
+                        {(() => {
+                          const stream = liveStreams[e.id] || liveStreams[e.agentId];
+                          if (!stream) return null;
+                          return (
+                            <div className="mt-3 px-1 max-w-6xl">
+                              {stream.tool && <div className="text-xs text-amber-400 mb-1">{stream.tool}</div>}
+                              {stream.thinking && <div className="text-xs text-purple-400 italic truncate">{stream.thinking.slice(-200)}</div>}
+                              {stream.text && <div className="text-xs text-emerald-300 truncate">{stream.text.slice(-200)}</div>}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  )}
                   {isExpanded && (
                     <div className="px-3 pb-3 pt-0 space-y-2 border-t border-emerald-500/20">
                       <div className="grid grid-cols-2 gap-2 text-xs mt-2">
@@ -549,6 +655,32 @@ export default function DashboardPage() {
                         {e.costUsd > 0 && <div><span className="text-[var(--muted)]">Cost:</span> ${e.costUsd.toFixed(4)}</div>}
                         {e.error && <div className="col-span-2 text-red-400 truncate"><span className="text-[var(--muted)]">Error:</span> {e.error}</div>}
                       </div>
+                      {/* Screenshots */}
+                      {e.output?.screenshots?.length > 0 && (
+                        <div>
+                          <div className="text-[10px] text-[var(--muted)] uppercase mb-1">Browser Screenshots</div>
+                          <div className="flex gap-2 overflow-x-auto">
+                            {e.output.screenshots.map((frame: string, i: number) => (
+                              <img key={i} src={`data:image/jpeg;base64,${frame}`} alt={`Screenshot ${i + 1}`}
+                                className="rounded-lg border border-[var(--border)] h-20 object-cover shrink-0 cursor-pointer hover:border-cyan-400/50 transition"
+                                onClick={(ev) => { ev.stopPropagation(); window.open(`data:image/jpeg;base64,${frame}`, '_blank'); }}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {/* Response preview */}
+                      {e.output?.text && (
+                        <div className="text-xs bg-[var(--bg)] rounded px-2 py-1.5 max-h-20 overflow-y-auto border border-[var(--border)] whitespace-pre-wrap break-words">
+                          {e.output.text.substring(0, 300)}{e.output.text.length > 300 ? '...' : ''}
+                        </div>
+                      )}
+                      {/* Tool calls summary */}
+                      {e.toolCalls?.length > 0 && (
+                        <div className="text-[10px] text-[var(--muted)]">
+                          {e.toolCalls.length} tool call{e.toolCalls.length !== 1 ? 's' : ''}: {e.toolCalls.slice(0, 5).map((tc: any) => tc.toolName).join(', ')}{e.toolCalls.length > 5 ? '...' : ''}
+                        </div>
+                      )}
                       <div className="flex gap-3">
                         {link && (
                           <a href={link.href} onClick={(ev) => ev.stopPropagation()}

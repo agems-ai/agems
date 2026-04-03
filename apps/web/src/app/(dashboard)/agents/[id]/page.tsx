@@ -571,6 +571,37 @@ export default function AgentDetailPage() {
           ) : (
             <p className="text-sm text-[var(--muted)]">Loading...</p>
           )}
+          {/* Connected External Tools (MCP_SERVER, DATABASE, REST_API, etc.) */}
+          {agent.tools && agent.tools.length > 0 && (() => {
+            const typeIcons: Record<string, string> = { DATABASE: '🗄️', REST_API: '🌐', MCP_SERVER: '🔌', GRAPHQL: '📊', WEBHOOK: '🔗', N8N: '⚡', SSH: '🖥️', FIRECRAWL: '🔥', CUSTOM: '⚙️' };
+            const grouped = agent.tools.reduce((acc: Record<string, any[]>, at: any) => {
+              const type = at.tool?.type || 'CUSTOM';
+              (acc[type] = acc[type] || []).push(at);
+              return acc;
+            }, {});
+            return (Object.entries(grouped) as [string, any[]][]).map(([type, tools]) => (
+              <div key={type} className="mb-3">
+                <div className="text-xs font-medium text-[var(--muted)] uppercase tracking-wider mb-1.5">{typeIcons[type] || '⚙️'} {type.replace('_', ' ')}</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {tools.map((at: any) => (
+                    <div key={at.id} className="group flex items-center gap-1 text-[11px] px-2 py-1 rounded-md border bg-[var(--background)] border-[var(--border)] text-[var(--foreground)]">
+                      <span>{at.tool?.name || 'Tool'}</span>
+                      <button
+                        title="Disconnect tool"
+                        onClick={async (ev) => {
+                          ev.stopPropagation();
+                          if (!confirm(`Disconnect ${at.tool?.name}?`)) return;
+                          await api.fetch(`/agents/${agent.id}/tools/${at.id}`, { method: 'DELETE' });
+                          loadAgent();
+                        }}
+                        className="hidden group-hover:inline text-red-400 hover:text-red-300 ml-0.5"
+                      >×</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ));
+          })()}
           <button
             onClick={() => setShowToolPicker(true)}
             className="text-sm px-3 py-2 mt-3 rounded-lg border border-dashed border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition w-full"
