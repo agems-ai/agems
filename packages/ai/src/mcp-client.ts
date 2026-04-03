@@ -87,6 +87,10 @@ export class MCPClient {
         if (sid) this.sessionId = sid;
 
         const text = await response.text();
+        if (!text || !text.trim()) {
+          lastError = new Error(`MCP server ${this.serverName}: empty response`);
+          continue;
+        }
         // Handle SSE-wrapped responses
         if (text.startsWith('event:') || text.startsWith('data:')) {
           const lines = text.split('\n');
@@ -94,14 +98,25 @@ export class MCPClient {
             if (line.startsWith('data:')) {
               const data = line.slice(5).trim();
               if (data && data !== '[DONE]') {
-                return JSON.parse(data);
+                try {
+                  return JSON.parse(data);
+                } catch {
+                  lastError = new Error(`MCP server ${this.serverName}: invalid JSON in SSE data`);
+                  continue;
+                }
               }
             }
           }
-          throw new Error(`MCP server ${this.serverName}: no data in SSE response`);
+          lastError = new Error(`MCP server ${this.serverName}: no data in SSE response`);
+          continue;
         }
 
-        return JSON.parse(text);
+        try {
+          return JSON.parse(text);
+        } catch {
+          lastError = new Error(`MCP server ${this.serverName}: invalid JSON response: ${text.substring(0, 100)}`);
+          continue;
+        }
       } catch (err) {
         lastError = err as Error;
         if ((err as any)?.message?.includes('404')) continue;
@@ -139,8 +154,9 @@ export class MCPClient {
     try {
       response = await this.jsonRpc('tools/call', { name, arguments: args });
     } catch (err) {
-      // Session expired (Playwright MCP drops sessions after ~30s idle)
-      if ((err as Error)?.message?.includes('404') || (err as Error)?.message?.includes('Session not found')) {
+      // Session expired or server returned bad response — reconnect and retry once
+      const msg = (err as Error)?.message || '';
+      if (msg.includes('404') || msg.includes('Session not found') || msg.includes('empty response') || msg.includes('invalid JSON') || msg.includes('no data in SSE')) {
         this.sessionId = undefined;
         await this.initialize();
         response = await this.jsonRpc('tools/call', { name, arguments: args });
