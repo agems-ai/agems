@@ -148,34 +148,38 @@ export class MCPClient {
     return response?.result?.tools || [];
   }
 
-  /** Call a tool on the MCP server (auto-reconnects on session expiry) */
+  /** Call a tool on the MCP server (auto-reconnects on session expiry, retries up to 3 times) */
   async callTool(name: string, args: Record<string, any>): Promise<any> {
-    let response;
-    try {
-      response = await this.jsonRpc('tools/call', { name, arguments: args });
-    } catch (err) {
-      // Session expired or server returned bad response — reconnect and retry once
-      const msg = (err as Error)?.message || '';
-      if (msg.includes('404') || msg.includes('Session not found') || msg.includes('empty response') || msg.includes('invalid JSON') || msg.includes('no data in SSE')) {
+    const retryableErrors = ['404', 'Session not found', 'empty response', 'invalid JSON', 'no data in SSE', 'fetch failed', 'ECONNREFUSED', 'ECONNRESET'];
+    const maxRetries = 3;
+    let lastErr: Error | null = null;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const response = await this.jsonRpc('tools/call', { name, arguments: args });
+        if (response?.error) {
+          throw new Error(`MCP tool ${name}: ${response.error.message || JSON.stringify(response.error)}`);
+        }
+        const result = response?.result;
+        if (result?.content && Array.isArray(result.content)) {
+          const texts = result.content
+            .filter((c: any) => c.type === 'text')
+            .map((c: any) => c.text);
+          return texts.length === 1 ? texts[0] : texts.join('\n');
+        }
+        return result;
+      } catch (err) {
+        lastErr = err as Error;
+        const msg = lastErr.message || '';
+        const isRetryable = retryableErrors.some(e => msg.includes(e));
+        if (!isRetryable || attempt === maxRetries - 1) throw lastErr;
+        console.warn(`[MCP] ${this.serverName}.${name} attempt ${attempt + 1} failed: ${msg} — retrying in ${(attempt + 1)}s`);
         this.sessionId = undefined;
-        await this.initialize();
-        response = await this.jsonRpc('tools/call', { name, arguments: args });
-      } else {
-        throw err;
+        await new Promise(r => setTimeout(r, (attempt + 1) * 1000));
+        try { await this.initialize(); } catch { /* will retry anyway */ }
       }
     }
-    if (response?.error) {
-      throw new Error(`MCP tool ${name}: ${response.error.message || JSON.stringify(response.error)}`);
-    }
-    const result = response?.result;
-    // MCP returns content array [{type: "text", text: "..."}]
-    if (result?.content && Array.isArray(result.content)) {
-      const texts = result.content
-        .filter((c: any) => c.type === 'text')
-        .map((c: any) => c.text);
-      return texts.length === 1 ? texts[0] : texts.join('\n');
-    }
-    return result;
+    throw lastErr || new Error(`MCP tool ${name}: all retries failed`);
   }
 }
 
