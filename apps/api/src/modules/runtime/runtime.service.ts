@@ -228,7 +228,8 @@ export class RuntimeService {
 
             const thinking = result.thinking || [];
             const loopDetected = result.loopDetected || false;
-            const executionMeta = (skillCalls.length > 0 || toolCalls.length > 0 || thinking.length > 0 || loopDetected || result.iterations > 1) ? {
+            const screenshots = result.screenshots || [];
+            const executionMeta = (skillCalls.length > 0 || toolCalls.length > 0 || thinking.length > 0 || screenshots.length > 0 || loopDetected || result.iterations > 1) ? {
               execution: {
                 id: result.executionId,
                 skills: skillCalls.map((tc: any) => tc.input?.skillName || tc.input?.skill_name || 'unknown'),
@@ -240,6 +241,7 @@ export class RuntimeService {
                   error: tc.error,
                 })),
                 thinking: thinking.length > 0 ? thinking : undefined,
+                screenshots: screenshots.length > 0 ? screenshots : undefined,
                 loopDetected: loopDetected || undefined,
                 iterations: result.iterations,
                 tokensUsed: result.tokensUsed,
@@ -1171,6 +1173,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
           status: 'COMPLETED',
           output: {
             text: result.text,
+            ...(result.thinking?.length > 0 && { thinking: result.thinking }),
             ...(browserScreenshots.length > 0 && { screenshots: browserScreenshots }),
           },
           toolCalls: result.toolCalls as any,
@@ -1189,7 +1192,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
         details: { iterations: result.iterations, tokensUsed: result.tokensUsed },
       });
 
-      return { executionId: execution.id, ...result, waitingForApproval: false };
+      return { executionId: execution.id, ...result, waitingForApproval: false, screenshots: browserScreenshots };
     } catch (error) {
       clearTimeout(executionTimeout);
       if (stopPollTimer) clearInterval(stopPollTimer);

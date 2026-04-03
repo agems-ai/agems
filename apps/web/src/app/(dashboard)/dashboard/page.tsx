@@ -407,6 +407,7 @@ export default function DashboardPage() {
   // Browser screencast frames from agents (live browser preview)
   const [browserFrames, setBrowserFrames] = useState<Record<string, string>>({}); // executionId → base64 jpeg
   const [expandedBrowser, setExpandedBrowser] = useState<string | null>(null);
+  const [screenshotModal, setScreenshotModal] = useState<string | null>(null);
   useEffect(() => {
     const socket = getCommsSocket();
     const onBrowserFrame = (data: any) => {
@@ -713,16 +714,28 @@ export default function DashboardPage() {
                             {e.output.screenshots.map((frame: string, i: number) => (
                               <img key={i} src={`data:image/jpeg;base64,${frame}`} alt={`Screenshot ${i + 1}`}
                                 className="rounded-lg border border-[var(--border)] h-20 object-cover shrink-0 cursor-pointer hover:border-cyan-400/50 transition"
-                                onClick={(ev) => { ev.stopPropagation(); window.open(`data:image/jpeg;base64,${frame}`, '_blank'); }}
+                                onClick={(ev) => { ev.stopPropagation(); setScreenshotModal(frame); }}
                               />
                             ))}
                           </div>
                         </div>
                       )}
+                      {/* Thinking */}
+                      {e.output?.thinking?.length > 0 && (
+                        <div>
+                          <div className="text-[10px] text-[var(--muted)] uppercase mb-1">Thinking</div>
+                          <div className="text-xs text-purple-300/80 bg-purple-500/5 rounded px-2 py-1.5 max-h-24 overflow-y-auto border border-purple-500/10 whitespace-pre-wrap break-words">
+                            {e.output.thinking.map((t: string) => t).join('\n\n').substring(0, 500)}
+                          </div>
+                        </div>
+                      )}
                       {/* Response preview */}
                       {e.output?.text && (
-                        <div className="text-xs bg-[var(--bg)] rounded px-2 py-1.5 max-h-20 overflow-y-auto border border-[var(--border)] whitespace-pre-wrap break-words">
-                          {e.output.text.substring(0, 300)}{e.output.text.length > 300 ? '...' : ''}
+                        <div>
+                          <div className="text-[10px] text-[var(--muted)] uppercase mb-1">Response</div>
+                          <div className="text-xs bg-[var(--bg)] rounded px-2 py-1.5 max-h-24 overflow-y-auto border border-[var(--border)] whitespace-pre-wrap break-words">
+                            {e.output.text.substring(0, 500)}{e.output.text.length > 500 ? '...' : ''}
+                          </div>
                         </div>
                       )}
                       {/* Tool calls summary */}
@@ -751,6 +764,13 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* Screenshot fullscreen modal */}
+      {screenshotModal && (
+        <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center cursor-pointer" onClick={() => setScreenshotModal(null)}>
+          <img src={`data:image/jpeg;base64,${screenshotModal}`} alt="Screenshot" className="rounded-xl border border-white/10 max-w-[90vw] max-h-[90vh] object-contain" />
+        </div>
+      )}
 
       {/* ═══════ LEFT: Chat (hidden — Gemma is now a floating widget) ═══════ */}
       <div className="hidden">
