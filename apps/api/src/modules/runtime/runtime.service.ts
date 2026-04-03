@@ -228,7 +228,7 @@ export class RuntimeService {
 
             const thinking = result.thinking || [];
             const loopDetected = result.loopDetected || false;
-            const screenshots = result.screenshots || [];
+            const screenshots = (result as any).screenshots || [];
             const executionMeta = (skillCalls.length > 0 || toolCalls.length > 0 || thinking.length > 0 || screenshots.length > 0 || loopDetected || result.iterations > 1) ? {
               execution: {
                 id: result.executionId,
