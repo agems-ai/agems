@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import ChatPanel from '@/components/ChatPanel';
 
@@ -10,8 +9,8 @@ import ChatPanel from '@/components/ChatPanel';
  * Features: chat history list, new chat, fullscreen mode.
  */
 export default function GemmaWidget() {
-  const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const [view, setView] = useState<'chat' | 'history'>('chat');
   const [gemmaId, setGemmaId] = useState<string | null>(null);
   const [gemmaName, setGemmaName] = useState('Gemma');
@@ -72,6 +71,7 @@ export default function GemmaWidget() {
     const newState = !open;
     setOpen(newState);
     setView('chat');
+    if (!newState) setFullscreen(false);
     localStorage.setItem('gemma_widget_open', String(newState));
     if (newState) setUnread(false);
   };
@@ -104,14 +104,8 @@ export default function GemmaWidget() {
     }
   };
 
-  const openFullscreen = () => {
-    if (channelId) {
-      router.push(`/comms?channel=${channelId}`);
-    } else {
-      router.push('/comms');
-    }
-    setOpen(false);
-    localStorage.setItem('gemma_widget_open', 'false');
+  const toggleFullscreen = () => {
+    setFullscreen((prev) => !prev);
   };
 
   const timeAgo = (date: string) => {
@@ -150,7 +144,11 @@ export default function GemmaWidget() {
 
       {/* Chat panel */}
       {open && (
-        <div className="fixed bottom-24 right-6 z-40 w-[380px] h-[520px] bg-[var(--card)] border border-[var(--border)] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+        <div className={
+          fullscreen
+            ? "fixed inset-0 z-50 bg-[var(--card)] flex flex-col overflow-hidden"
+            : "fixed bottom-24 right-6 z-40 w-[380px] h-[520px] bg-[var(--card)] border border-[var(--border)] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+        }>
           {/* Header */}
           <div className="flex items-center gap-2 px-3 py-2.5 border-b border-[var(--border)] bg-[var(--bg)]">
             <div className="w-7 h-7 rounded-full bg-purple-500/20 flex items-center justify-center text-xs font-bold text-purple-300 shrink-0">
@@ -174,9 +172,13 @@ export default function GemmaWidget() {
               <button onClick={view === 'history' ? () => setView('chat') : openHistory} className={`text-[var(--muted)] hover:text-white transition p-1.5 rounded hover:bg-[var(--hover)] ${view === 'history' ? 'text-white bg-[var(--hover)]' : ''}`} title="Chat history">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 8v4l3 3" /><circle cx="12" cy="12" r="10" /></svg>
               </button>
-              {/* Fullscreen */}
-              <button onClick={openFullscreen} className="text-[var(--muted)] hover:text-white transition p-1.5 rounded hover:bg-[var(--hover)]" title="Open fullscreen">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>
+              {/* Fullscreen toggle */}
+              <button onClick={toggleFullscreen} className="text-[var(--muted)] hover:text-white transition p-1.5 rounded hover:bg-[var(--hover)]" title={fullscreen ? "Exit fullscreen" : "Open fullscreen"}>
+                {fullscreen ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" /></svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>
+                )}
               </button>
               {/* Close */}
               <button onClick={toggle} className="text-[var(--muted)] hover:text-white transition p-1.5 rounded hover:bg-[var(--hover)]" title="Close">
