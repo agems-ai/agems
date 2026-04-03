@@ -1069,8 +1069,11 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
         ...(mcpServers.length > 0 && { mcpServers }),
       });
 
-      // Stream thinking & text chunks to frontend in real-time (always — dashboard needs it even without channel)
-      const streamCallbacks = {
+      // Stream thinking & text chunks to frontend in real-time
+      // Only use streaming for providers that support it
+      const streamingProviders = ['ANTHROPIC', 'OPENAI', 'GOOGLE', 'DEEPSEEK', 'MISTRAL', 'GROQ', 'TOGETHER', 'FIREWORKS', 'PERPLEXITY'];
+      const supportsStreaming = streamingProviders.includes(agent.llmProvider);
+      const streamCallbacks = supportsStreaming ? {
         onThinkingChunk: (chunk: string) => {
           this.events.emit('agent.thinking.chunk', {
             channelId: context?.channelId, agentId, executionId: execution.id, chunk,
@@ -1081,7 +1084,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
             channelId: context?.channelId, agentId, executionId: execution.id, chunk,
           });
         },
-      };
+      } : undefined;
 
       // Trim context to fit model's token limit (prevents context overflow errors)
       if (Array.isArray(input)) {
