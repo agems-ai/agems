@@ -54,9 +54,9 @@ function Avatar({ name, avatar, size = 28 }: { name: string; avatar?: string | n
 /* ── Execution Details (tool calls, thinking, skills) ── */
 
 function ExecutionDetails({ execution }: { execution: any }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
-  const [expandedThinking, setExpandedThinking] = useState(false);
+  const [expandedThinking, setExpandedThinking] = useState(true);
 
   const toggleTool = (i: number) => {
     setExpandedTools(prev => {
