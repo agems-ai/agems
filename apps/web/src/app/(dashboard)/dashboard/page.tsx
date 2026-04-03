@@ -709,9 +709,10 @@ export default function DashboardPage() {
                       const next = [...prev];
                       const [moved] = next.splice(from, 1);
                       next.splice(to, 0, moved);
+                      api.saveDashboardWidgets(next);
                       return next;
                     });
-                    setWidgetsDirty(true);
+                    setWidgetsDirty(false);
                   }
                   dragWidget.current = null;
                   setDragOver(null);
