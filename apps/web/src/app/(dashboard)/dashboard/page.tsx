@@ -305,8 +305,9 @@ export default function DashboardPage() {
     try {
       await api.stopExecution(execId);
       setTimeout(() => setStoppingExec(prev => ({ ...prev, [execId]: false })), 2000);
-    } catch {
+    } catch (err: any) {
       setStoppingExec(prev => ({ ...prev, [execId]: false }));
+      alert(err.message || 'Failed to stop execution');
     }
   };
 
@@ -315,8 +316,9 @@ export default function DashboardPage() {
     try {
       await api.stopAllExecutions();
       setTimeout(() => setStoppingAll(false), 2000);
-    } catch {
+    } catch (err: any) {
       setStoppingAll(false);
+      alert(err.message || 'Failed to stop all executions');
     }
   };
 

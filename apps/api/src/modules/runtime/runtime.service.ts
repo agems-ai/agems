@@ -40,9 +40,6 @@ export class RuntimeService {
   }
 
   private resolveWorkspacePath(targetPath: string, runtimeConfig: Record<string, unknown>) {
-    if (!this.hasHostAccessEnabled(runtimeConfig)) {
-      throw new Error('Host filesystem access is disabled for this agent');
-    }
     const workspaceRoot = this.getHostWorkspaceRoot(runtimeConfig);
     const resolvedPath = resolve(targetPath);
     if (resolvedPath !== workspaceRoot && !resolvedPath.startsWith(workspaceRoot + '\\') && !resolvedPath.startsWith(workspaceRoot + '/')) {
@@ -1465,7 +1462,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       }
     }
 
-    // ── System tools (bash, file I/O) — available to ALL agents ──
+    // ── bash_command — only when allowHostAccess is enabled ──
     if (this.hasHostAccessEnabled(runtimeConfig)) {
       tools.push({
         name: 'bash_command',
@@ -1478,7 +1475,10 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
           return this.executeBash(params.command, params.timeout ?? 30, runtimeConfig);
         },
       });
+    }
 
+    // ── File I/O tools — available to ALL agents ──
+    if (!disabledTools.has('read_file')) {
       tools.push({
         name: 'read_file',
         description: 'Read the contents of a file. Supports text files and PDF (auto-extracts text from PDF).',
@@ -1490,7 +1490,9 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
           return this.readFile(params.path, params.maxLines ?? 200, runtimeConfig);
         },
       });
+    }
 
+    if (!disabledTools.has('write_file')) {
       tools.push({
         name: 'write_file',
         description: 'Write content to a file (creates or overwrites). Set saveToFiles=true to also register the file in the organisation Files library so users can find and download it from the /files page.',
@@ -4375,12 +4377,12 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
       add('use_skill', `Load skill knowledge (${enabledSkills.map((s: any) => s.skill.name).join(', ')})`, 'Skills');
     }
 
-    // System — available to all agents
+    // System — bash requires allowHostAccess; file I/O available to all
     if (this.hasHostAccessEnabled(runtimeConfig)) {
       add('bash_command', 'Execute bash commands', 'System');
-      add('read_file', 'Read file contents (text, PDF)', 'System');
-      add('write_file', 'Write content to file (with optional saveToFiles flag)', 'System');
     }
+    add('read_file', 'Read file contents (text, PDF)', 'System');
+    add('write_file', 'Write content to file (with optional saveToFiles flag)', 'System');
 
     // Memory — persistent knowledge store
     add('memory_read', 'Read persistent memory entries', 'Memory');

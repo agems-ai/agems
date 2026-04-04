@@ -95,12 +95,16 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleMessageBroadcast(payload: { channelId: string; message: any }) {
     this.server.to(`channel:${payload.channelId}`).emit('new_message', payload.message);
 
-    // Notify all human participants via user rooms (for multi-chat popups)
+    // Notify human participants via user rooms (for multi-chat popups)
+    // Exclude the sender so their own messages don't create popups
+    const senderId = payload.message?.senderId;
+    const senderType = payload.message?.senderType;
     const participants = await this.prisma.channelParticipant.findMany({
       where: { channelId: payload.channelId, participantType: 'HUMAN' },
       select: { participantId: true },
     });
     for (const p of participants) {
+      if (senderType === 'HUMAN' && p.participantId === senderId) continue;
       this.server.to(`user:${p.participantId}`).emit('new_message_notification', {
         channelId: payload.channelId,
         message: payload.message,

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Request, UsePipes } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Request, UsePipes, Logger } from '@nestjs/common';
 import { z } from 'zod';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { DashboardService } from './dashboard.service';
@@ -21,6 +21,8 @@ const HttpSchema = z.object({
 
 @Controller('dashboard')
 export class DashboardController {
+  private readonly logger = new Logger('DashboardController');
+
   constructor(
     private readonly dashboardService: DashboardService,
     private readonly runtimeService: RuntimeService,
@@ -74,22 +76,26 @@ export class DashboardController {
 
   /** Stop a single running execution */
   @Post('stop-execution/:id')
-  @Roles('MANAGER')
   async stopExecution(@Param('id') id: string) {
+    this.logger.log(`Stop execution requested: ${id}`);
     const stopped = await this.runtimeService.stopExecution(id);
+    this.logger.log(`Stop execution ${id} result: ${stopped}`);
     return { stopped };
   }
 
   /** Stop all running executions */
   @Post('stop-all')
-  @Roles('MANAGER')
   async stopAll(@Request() req: { user: RequestUser }) {
+    this.logger.log(`Stop all requested by org ${req.user.orgId}`);
     const running = await this.dashboardService.getRunningExecutionIds(req.user.orgId);
+    this.logger.log(`Found ${running.length} running executions to stop`);
     let stopped = 0;
     for (const execId of running) {
       const ok = await this.runtimeService.stopExecution(execId);
+      this.logger.log(`Stop ${execId}: ${ok}`);
       if (ok) stopped++;
     }
+    this.logger.log(`Stopped ${stopped}/${running.length}`);
     return { stopped, total: running.length };
   }
 }
