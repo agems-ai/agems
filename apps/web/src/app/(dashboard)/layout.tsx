@@ -68,12 +68,18 @@ const navItems = [
 
 const viewerNavItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/company', label: 'Company', icon: Building2 },
   { href: '/agents', label: 'Agents', icon: Bot },
-  { href: '/comms', label: 'Comms', icon: MessageSquare },
+  { href: '/skills', label: 'Skills', icon: Sparkles },
+  { href: '/tools', label: 'Tools', icon: Wrench },
   { href: '/tasks', label: 'Tasks', icon: ListChecks },
+  { href: '/comms', label: 'Comms', icon: MessageSquare },
   { href: '/meetings', label: 'Meetings', icon: Video },
+  { href: '/employees', label: 'Employees', icon: Users },
   { href: '/approvals', label: 'Approvals', icon: ShieldAlert },
   { href: '/budgets', label: 'Budgets', icon: DollarSign },
+  { href: '/files', label: 'Files', icon: FolderOpen },
+  { href: '/security', label: 'Audit', icon: ShieldCheck },
 ];
 
 const mobileNavItems = [
@@ -121,7 +127,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     // Viewer mode: skip auth, show content immediately
     if (isViewerMode && !token) {
       setUser({ name: 'Viewer', email: '', role: 'VIEWER' });
-      setCompanyName('AI Survival');
+      setCompanyName('Survival');
       setReady(true);
       return;
     }
