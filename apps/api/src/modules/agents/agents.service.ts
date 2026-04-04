@@ -18,6 +18,25 @@ export class AgentsService {
     const llmProvider = input.llmProvider || await this.settings.get('default_llm_provider', orgId) || 'ANTHROPIC';
     const llmModel = input.llmModel || await this.settings.get('default_model', orgId) || 'claude-sonnet-4-5-20250929';
 
+    // Apply org defaults for llmConfig if not specified
+    let llmConfig = (input.llmConfig ?? {}) as Record<string, any>;
+    if (!llmConfig.apiFormat) {
+      const defaultApiFormat = await this.settings.get('default_api_format', orgId);
+      if (defaultApiFormat) llmConfig = { ...llmConfig, apiFormat: defaultApiFormat };
+    }
+    if (!llmConfig.baseUrl) {
+      const defaultBaseUrl = await this.settings.get('default_base_url', orgId);
+      if (defaultBaseUrl) llmConfig = { ...llmConfig, baseUrl: defaultBaseUrl };
+    }
+    if (llmConfig.temperature === undefined) {
+      const defaultTemp = await this.settings.get('default_temperature', orgId);
+      if (defaultTemp) llmConfig = { ...llmConfig, temperature: parseFloat(defaultTemp) };
+    }
+    if (llmConfig.maxTokens === undefined) {
+      const defaultMaxTokens = await this.settings.get('default_max_tokens', orgId);
+      if (defaultMaxTokens) llmConfig = { ...llmConfig, maxTokens: parseInt(defaultMaxTokens) };
+    }
+
     const agent = await this.prisma.agent.create({
       data: {
         orgId,
@@ -27,7 +46,7 @@ export class AgentsService {
         type: input.type ?? 'AUTONOMOUS',
         llmProvider,
         llmModel,
-        llmConfig: (input.llmConfig ?? {}) as any,
+        llmConfig: llmConfig as any,
         systemPrompt: input.systemPrompt,
         mission: input.mission,
         values: (input.values ?? []) as any,

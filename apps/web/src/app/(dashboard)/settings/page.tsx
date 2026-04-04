@@ -17,6 +17,10 @@ export default function SettingsPage() {
     platform_name: 'AGEMS Platform',
     default_llm_provider: 'OPENAI',
     default_model: 'gpt-4o',
+    default_api_format: '',
+    default_base_url: '',
+    default_temperature: '0.7',
+    default_max_tokens: '4096',
     max_concurrent_executions: '10',
     execution_timeout: '300',
   });
@@ -76,6 +80,10 @@ export default function SettingsPage() {
         platform_name: s.platform_name || 'AGEMS Platform',
         default_llm_provider: s.default_llm_provider || 'OPENAI',
         default_model: s.default_model || 'gpt-4o',
+        default_api_format: s.default_api_format || '',
+        default_base_url: s.default_base_url || '',
+        default_temperature: s.default_temperature || '0.7',
+        default_max_tokens: s.default_max_tokens || '4096',
         max_concurrent_executions: s.max_concurrent_executions || '10',
         execution_timeout: s.execution_timeout || '300',
       });
@@ -252,6 +260,42 @@ export default function SettingsPage() {
                 <input value={platformForm.default_model}
                   onChange={(e) => setPlatformForm({ ...platformForm, default_model: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Default API Format</label>
+                  <select value={platformForm.default_api_format}
+                    onChange={(e) => setPlatformForm({ ...platformForm, default_api_format: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]">
+                    <option value="">Auto (default)</option>
+                    <option value="openai">OpenAI-compatible</option>
+                    <option value="anthropic">Anthropic-compatible</option>
+                    <option value="google">Google Gemini</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Default Base URL</label>
+                  <input value={platformForm.default_base_url}
+                    onChange={(e) => setPlatformForm({ ...platformForm, default_base_url: e.target.value })}
+                    placeholder="Custom API endpoint (optional)"
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Default Temperature</label>
+                  <input type="number" step="0.1" min="0" max="2" value={platformForm.default_temperature}
+                    onChange={(e) => setPlatformForm({ ...platformForm, default_temperature: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]" />
+                  <p className="text-xs text-[var(--muted)] mt-1">Creativity: 0 = precise, 1+ = creative</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Default Max Tokens</label>
+                  <input type="number" min="256" max="200000" value={platformForm.default_max_tokens}
+                    onChange={(e) => setPlatformForm({ ...platformForm, default_max_tokens: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]" />
+                  <p className="text-xs text-[var(--muted)] mt-1">Max response length</p>
+                </div>
               </div>
             </div>
           </div>
