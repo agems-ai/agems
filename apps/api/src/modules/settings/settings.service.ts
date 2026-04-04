@@ -516,7 +516,66 @@ MAXIMUM teamwork. Every project involves the full relevant team.
     // Invalidate cache
     this.invalidateModuleCache(orgId);
 
+    // Sync approval policies based on activity/autonomy levels
+    await this.syncApprovalPoliciesFromModules(data, orgId);
+
     return this.getAllModulesConfig(orgId);
+  }
+
+  /** Automatically adjust approval policies based on module activity/autonomy levels.
+   *  - All modules at Activity 5 + Autonomy 5 → AUTOPILOT (no approvals)
+   *  - All modules at Activity 4+ + Autonomy 4+ → GUIDED (only high-risk needs approval)
+   *  - Mixed or lower → SUPERVISED (default)
+   */
+  private async syncApprovalPoliciesFromModules(data: Partial<AllModulesConfig>, orgId?: string) {
+    try {
+      const config = await this.getAllModulesConfig(orgId);
+      const modules = config.modules;
+      const enabledModules = MODULE_NAMES.filter(m => modules[m].enabled);
+      if (enabledModules.length === 0) return;
+
+      const minActivity = Math.min(...enabledModules.map(m => modules[m].activityLevel));
+      const minAutonomy = Math.min(...enabledModules.map(m => modules[m].autonomyLevel));
+
+      let targetPreset: string;
+      if (minActivity >= 5 && minAutonomy >= 5) {
+        targetPreset = 'AUTOPILOT';
+      } else if (minActivity >= 4 && minAutonomy >= 4) {
+        targetPreset = 'GUIDED';
+      } else if (minActivity >= 3 && minAutonomy >= 3) {
+        targetPreset = 'SUPERVISED';
+      } else {
+        targetPreset = 'FULL_CONTROL';
+      }
+
+      // Get all agents in this org
+      const whereOrg = orgId ? { orgId } : {};
+      const agents = await this.prisma.agent.findMany({
+        where: { ...whereOrg, status: { not: 'ARCHIVED' } },
+        select: { id: true },
+      });
+
+      if (agents.length === 0) return;
+
+      const agentIds = agents.map(a => a.id);
+
+      // Upsert approval policies for all agents
+      for (const agentId of agentIds) {
+        await this.prisma.approvalPolicy.upsert({
+          where: { agentId },
+          update: { preset: targetPreset as any, updatedAt: new Date() },
+          create: {
+            agentId,
+            preset: targetPreset as any,
+            autoApproveLowRisk: minActivity >= 4,
+          },
+        });
+      }
+
+      this.logger.log(`Synced approval policies → ${targetPreset} for ${agentIds.length} agents (activity=${minActivity}, autonomy=${minAutonomy})`);
+    } catch (err) {
+      this.logger.error(`Failed to sync approval policies: ${err}`);
+    }
   }
 
   /** Check if a module is enabled (global master switch AND module toggle) */

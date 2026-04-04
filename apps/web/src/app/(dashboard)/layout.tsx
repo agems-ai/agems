@@ -18,7 +18,6 @@ import {
   Sparkles,
   ShieldCheck,
   Settings,
-  Crown,
   LogOut,
   FolderOpen,
   Store,
@@ -63,7 +62,6 @@ const navItems = [
   // System
   { href: '/docs', label: 'Docs', icon: BookOpen },
   { href: '/settings', label: 'Settings', icon: Settings },
-  { href: '/admin', label: 'Admin', icon: Crown, adminOnly: true },
 ];
 
 const mobileNavItems = [
@@ -255,7 +253,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         )}
 
         <nav className="flex-1 p-2 overflow-y-auto">
-          {navItems.filter((item) => !(item as any).adminOnly || user?.role === 'ADMIN').map((item) => {
+          {navItems.map((item) => {
             const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
             return (
               <Link

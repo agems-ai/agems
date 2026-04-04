@@ -1067,8 +1067,8 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       });
 
       // Stream thinking & text chunks to frontend in real-time
-      // Only use streaming for providers that support it
-      const streamingProviders = ['ANTHROPIC', 'OPENAI', 'GOOGLE', 'DEEPSEEK', 'MISTRAL', 'GROQ', 'TOGETHER', 'FIREWORKS', 'PERPLEXITY'];
+      // Only use streaming for providers that support it (Anthropic, OpenAI, Google, DeepSeek)
+      const streamingProviders = ['ANTHROPIC', 'OPENAI', 'GOOGLE', 'DEEPSEEK', 'MISTRAL', 'GROQ', 'TOGETHER', 'FIREWORKS', 'PERPLEXITY', 'MINIMAX'];
       const supportsStreaming = streamingProviders.includes(agent.llmProvider);
       const streamCallbacks = supportsStreaming ? {
         onThinkingChunk: (chunk: string) => {
@@ -1206,7 +1206,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
         this.channelExecutionMap.get(context.channelId)?.delete(execution.id);
       }
       const errorScreenshots = this.browserService.stopSession(execution.id);
-      const isAborted = error instanceof Error && (error.name === 'AbortError' || error.message.includes('aborted'));
+      const isAborted = error instanceof Error && (error.name === 'AbortError' || error.message.includes('aborted') || error.message.includes('stopped by user'));
       const errorMessage = isAborted ? 'Execution timed out or stopped' : (error instanceof Error ? error.message : String(error));
       this.logger.log(isAborted ? `Agent ${agentId} execution stopped by user` : `Agent ${agentId} execution failed: ${errorMessage}`);
 
@@ -1243,7 +1243,23 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       this.abortControllers.delete(executionId);
       return true;
     }
-    return true; // may be running on another pod and will be stopped via Redis flag
+
+    // No local abort controller — execution may be orphaned (e.g. after API restart).
+    // Force-update DB status so it doesn't stay stuck as RUNNING.
+    try {
+      const exec = await this.prisma.agentExecution.findUnique({ where: { id: executionId }, select: { status: true } });
+      if (exec && exec.status === 'RUNNING') {
+        await this.prisma.agentExecution.update({
+          where: { id: executionId },
+          data: { status: 'CANCELLED' as any, error: 'Stopped by user (no active process)', endedAt: new Date() },
+        });
+        this.logger.log(`Force-cancelled orphaned execution ${executionId}`);
+      }
+    } catch (err) {
+      this.logger.warn(`Failed to force-cancel execution ${executionId}: ${err}`);
+    }
+
+    return true;
   }
 
   /** Stop all running executions in a channel */
@@ -1427,7 +1443,24 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       }
     } catch { /* memory table might not exist yet */ }
 
-    return agemsPreamble + '\n' + modulesDirective + '\n\n' + companyContext + skillsContext + memoryContext + (agent.systemPrompt || '');
+    // Inject active goals assigned to this agent
+    let goalsContext = '';
+    try {
+      const goals = await this.prisma.goal.findMany({
+        where: { agentId: agent.id, status: { in: ['PLANNED', 'ACTIVE'] } },
+        select: { id: true, title: true, status: true, priority: true, progress: true, targetDate: true, description: true },
+        orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }],
+        take: 10,
+      });
+      if (goals.length > 0) {
+        const entries = goals.map(g =>
+          `- [${g.id}] "${g.title}" (${g.status}, ${g.priority}, ${g.progress}% done${g.targetDate ? `, target: ${g.targetDate.toISOString().split('T')[0]}` : ''})${g.description ? `\n  ${g.description.substring(0, 150)}` : ''}`
+        ).join('\n');
+        goalsContext = `\n=== YOUR ACTIVE GOALS ===\nThese goals are assigned to you. Use agems_goals to view details and update progress. Use agems_tasks to create/manage tasks linked to goals.\n${entries}\n=== END GOALS ===\n\n`;
+      }
+    } catch { /* goals table might not exist yet */ }
+
+    return agemsPreamble + '\n' + modulesDirective + '\n\n' + companyContext + skillsContext + memoryContext + goalsContext + (agent.systemPrompt || '');
   }
 
   private async buildTools(agent: any, context?: { channelId?: string }) {
@@ -2264,6 +2297,7 @@ You can create tasks for yourself and for other agents/humans based on company g
           expectedResult: z.string().optional().describe('What does success look like? Used for verification after completion.'),
           reviewerId: z.string().optional().describe('Agent ID of the reviewer/QA agent who will verify the work'),
           resultCheckAt: z.string().optional().describe('ISO date when to verify if expected result was achieved (for goals that take time)'),
+          goalId: z.string().optional().describe('Link task to a goal by ID'),
         }).optional().describe('Task data (for create/update)'),
       }),
       execute: async (params: { action: string; taskId?: string; status?: string; assigneeId?: string; creatorId?: string; comment?: string; task?: any }) => {
@@ -2331,6 +2365,7 @@ You can create tasks for yourself and for other agents/humans based on company g
                 assigneeId: resolvedAssigneeId,
                 deadline: params.task.deadline ? new Date(params.task.deadline) : null,
                 parentTaskId: params.task.parentTaskId || null,
+                goalId: params.task.goalId || null,
                 metadata: Object.keys(taskMeta).length > 0 ? taskMeta : undefined,
               },
               select: selectFields,
@@ -2397,6 +2432,152 @@ You can create tasks for yourself and for other agents/humans based on company g
             if (params.creatorId) where.creatorId = params.creatorId;
             const tasks = await this.prisma.task.findMany({ where, select: selectFields, orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }], take: 50 });
             return { tasks, count: tasks.length };
+          }
+          default:
+            return { error: 'Invalid action' };
+        }
+      },
+    });
+
+    // ── AGEMS Goals management ──
+    tools.push({
+      name: 'agems_goals',
+      description: `Manage goals in AGEMS platform. Actions:
+- "my_goals" — list goals assigned to YOU (the current agent). Optional status filter.
+- "org_goals" — list all organization goals. Optional status/priority filter.
+- "get" — get goal details by id (includes tasks, children, parent)
+- "create" — create a new goal (assign to yourself or another agent)
+- "update" — update goal status, progress, or other fields
+- "create_child" — create a child/sub-goal under a parent goal
+Statuses: PLANNED, ACTIVE, ACHIEVED, CANCELLED, PAUSED
+Priorities: LOW, MEDIUM, HIGH, CRITICAL
+Owner types: AGENT, HUMAN
+Your agent ID: ${agent.id} | Your name: ${agent.name}
+WORKFLOW: Receive goal → plan tasks (use agems_tasks) → update progress → mark ACHIEVED when all tasks complete.
+When creating tasks for a goal, always set goalId so tasks are linked to the goal.`,
+      parameters: z.object({
+        action: z.enum(['my_goals', 'org_goals', 'get', 'create', 'update', 'create_child']).describe('Action to perform'),
+        goalId: z.string().optional().describe('Goal ID (for get/update/create_child)'),
+        status: z.string().optional().describe('Filter by status'),
+        priority: z.string().optional().describe('Filter by priority'),
+        goal: z.object({
+          title: z.string().optional(),
+          description: z.string().optional(),
+          status: z.string().optional(),
+          priority: z.string().optional(),
+          progress: z.number().optional().describe('0-100 progress percentage'),
+          ownerType: z.string().optional().describe('AGENT or HUMAN'),
+          ownerId: z.string().optional(),
+          agentId: z.string().optional().describe('Agent assigned to achieve this goal'),
+          projectId: z.string().optional(),
+          targetDate: z.string().optional().describe('ISO date string'),
+          metadata: z.any().optional(),
+        }).optional().describe('Goal data (for create/update/create_child)'),
+      }),
+      execute: async (params: { action: string; goalId?: string; status?: string; priority?: string; goal?: any }) => {
+        const selectFields = { id: true, title: true, description: true, status: true, priority: true, progress: true, ownerType: true, ownerId: true, agentId: true, projectId: true, parentId: true, targetDate: true, achievedAt: true, createdAt: true, updatedAt: true };
+        switch (params.action) {
+          case 'my_goals': {
+            const where: any = { orgId: agent.orgId, agentId: agent.id };
+            if (params.status) where.status = params.status;
+            const goals = await this.prisma.goal.findMany({
+              where,
+              select: { ...selectFields, tasks: { select: { id: true, title: true, status: true } }, children: { select: { id: true, title: true, status: true, progress: true } } },
+              orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }],
+              take: 30,
+            });
+            return { goals, count: goals.length };
+          }
+          case 'org_goals': {
+            const where: any = { orgId: agent.orgId };
+            if (params.status) where.status = params.status;
+            if (params.priority) where.priority = params.priority;
+            const goals = await this.prisma.goal.findMany({
+              where,
+              select: { ...selectFields, tasks: { select: { id: true, status: true } }, children: { select: { id: true, status: true } } },
+              orderBy: [{ priority: 'desc' }, { createdAt: 'desc' }],
+              take: 50,
+            });
+            return { goals, count: goals.length };
+          }
+          case 'get': {
+            if (!params.goalId) return { error: 'goalId is required' };
+            const g = await this.prisma.goal.findUnique({
+              where: { id: params.goalId },
+              include: {
+                children: { select: { id: true, title: true, status: true, progress: true, agentId: true } },
+                parent: { select: { id: true, title: true, status: true } },
+                tasks: { orderBy: { createdAt: 'asc' }, select: { id: true, title: true, status: true, priority: true, assigneeId: true, assigneeType: true } },
+                agent: { select: { id: true, name: true } },
+                project: { select: { id: true, name: true } },
+              },
+            });
+            return g || { error: 'Goal not found' };
+          }
+          case 'create': {
+            if (!params.goal?.title) return { error: 'goal.title is required' };
+            const newGoal = await this.prisma.goal.create({
+              data: {
+                orgId: agent.orgId,
+                title: params.goal.title,
+                description: params.goal.description || null,
+                status: params.goal.status ?? 'PLANNED',
+                priority: (params.goal.priority as any) ?? 'MEDIUM',
+                ownerType: (params.goal.ownerType as any) ?? 'AGENT',
+                ownerId: params.goal.ownerId || agent.id,
+                agentId: params.goal.agentId || agent.id,
+                projectId: params.goal.projectId || null,
+                targetDate: params.goal.targetDate ? new Date(params.goal.targetDate) : null,
+                metadata: params.goal.metadata ?? null,
+              },
+              select: selectFields,
+            });
+            this.events.emit('goal.created', newGoal);
+            return { success: true, goal: newGoal };
+          }
+          case 'update': {
+            if (!params.goalId) return { error: 'goalId is required' };
+            if (!params.goal) return { error: 'goal object is required' };
+            const data: any = {};
+            if (params.goal.title) data.title = params.goal.title;
+            if (params.goal.description !== undefined) data.description = params.goal.description;
+            if (params.goal.status) {
+              data.status = params.goal.status;
+              if (params.goal.status === 'ACHIEVED') data.achievedAt = new Date();
+            }
+            if (params.goal.priority) data.priority = params.goal.priority;
+            if (params.goal.progress !== undefined) data.progress = params.goal.progress;
+            if (params.goal.agentId !== undefined) data.agentId = params.goal.agentId || null;
+            if (params.goal.projectId !== undefined) data.projectId = params.goal.projectId || null;
+            if (params.goal.targetDate !== undefined) data.targetDate = params.goal.targetDate ? new Date(params.goal.targetDate) : null;
+            if (params.goal.metadata !== undefined) data.metadata = params.goal.metadata;
+            if (Object.keys(data).length === 0) return { error: 'No valid fields to update' };
+            const updated = await this.prisma.goal.update({ where: { id: params.goalId }, data, select: selectFields });
+            this.events.emit('goal.updated', updated);
+            return { success: true, goal: updated };
+          }
+          case 'create_child': {
+            if (!params.goalId) return { error: 'goalId (parent) is required' };
+            if (!params.goal?.title) return { error: 'goal.title is required' };
+            const child = await this.prisma.goal.create({
+              data: {
+                orgId: agent.orgId,
+                title: params.goal.title,
+                description: params.goal.description || null,
+                status: params.goal.status ?? 'PLANNED',
+                priority: (params.goal.priority as any) ?? 'MEDIUM',
+                ownerType: (params.goal.ownerType as any) ?? 'AGENT',
+                ownerId: params.goal.ownerId || agent.id,
+                agentId: params.goal.agentId || agent.id,
+                parentId: params.goalId,
+                projectId: params.goal.projectId || null,
+                targetDate: params.goal.targetDate ? new Date(params.goal.targetDate) : null,
+                metadata: params.goal.metadata ?? null,
+              },
+              select: selectFields,
+            });
+            this.events.emit('goal.created', child);
+            return { success: true, goal: child };
           }
           default:
             return { error: 'Invalid action' };

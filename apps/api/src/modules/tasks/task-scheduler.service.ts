@@ -87,6 +87,172 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  // ══════════════════════════════════════════════════════════
+  // GOAL EVENT HANDLERS
+  // ══════════════════════════════════════════════════════════
+
+  /** When a goal is created with an agent owner, trigger the agent to plan and decompose it into tasks */
+  @OnEvent('goal.created')
+  async onGoalCreated(goal: any) {
+    if (goal.ownerType !== 'AGENT' || !goal.agentId) return;
+    setTimeout(async () => {
+      this.executeGoalPlanning(goal).catch(err =>
+        this.logger.error(`Goal planning failed for "${goal.title}": ${err}`),
+      );
+    }, 2000);
+  }
+
+  /** When a goal is updated (e.g. status changed to ACTIVE), trigger the agent */
+  @OnEvent('goal.updated')
+  async onGoalUpdated(goal: any) {
+    if (!goal.agentId) return;
+    if (goal.status !== 'ACTIVE' && goal.status !== 'PLANNED') return;
+    if (this.runningAgents.has(goal.agentId)) return;
+    // Don't re-trigger if goal already has tasks (avoid duplicate planning)
+    const taskCount = await this.prisma.task.count({ where: { goalId: goal.id } });
+    if (taskCount > 0 && goal.status === 'PLANNED') return;
+    if (goal.status === 'ACTIVE' && taskCount > 0) {
+      this.executeGoalProgress(goal).catch(err =>
+        this.logger.error(`Goal progress failed for "${goal.title}": ${err}`),
+      );
+    } else if (taskCount === 0) {
+      this.executeGoalPlanning(goal).catch(err =>
+        this.logger.error(`Goal planning failed for "${goal.title}": ${err}`),
+      );
+    }
+  }
+
+  /** Trigger agent to plan a goal — decompose into tasks */
+  private async executeGoalPlanning(goal: any) {
+    const agentId = goal.agentId;
+    if (this.runningAgents.has(agentId)) {
+      this.logger.debug(`Agent ${agentId} is busy, goal "${goal.title}" planning deferred`);
+      return;
+    }
+
+    const agent = await this.prisma.agent.findUnique({
+      where: { id: agentId },
+      select: { id: true, name: true, status: true, orgId: true },
+    });
+    if (!agent || agent.status !== 'ACTIVE') return;
+    if (!(await this.settings.isModuleEnabled('tasks', agent.orgId))) return;
+
+    this.runningAgents.add(agentId);
+
+    try {
+      const channelId = await this.findOrCreateAgentChannel(agentId, agent.name, agent.orgId);
+
+      const prompt = [
+        `=== NEW GOAL ASSIGNED TO YOU ===`,
+        `Goal ID: ${goal.id}`,
+        `Title: ${goal.title}`,
+        goal.description ? `Description: ${goal.description}` : '',
+        `Status: ${goal.status}`,
+        `Priority: ${goal.priority}`,
+        goal.targetDate ? `Target Date: ${new Date(goal.targetDate).toISOString()}` : '',
+        ``,
+        `INSTRUCTIONS:`,
+        `1. Analyze this goal and break it down into actionable tasks.`,
+        `2. Use agems_tasks action="create" to create tasks for this goal. Include goalId="${goal.id}" in each task.`,
+        `3. Assign tasks to yourself or other appropriate team members (use agems_tasks action="get_team" to see available agents).`,
+        `4. Set clear expectedResult for each task so reviewers can verify completion.`,
+        `5. Set priorities and deadlines based on the goal's target date.`,
+        `6. Use agems_goals action="update" to set the goal status to ACTIVE once planning is complete.`,
+        `7. Start working on the first task immediately after planning.`,
+        `=== END GOAL ===`,
+      ].filter(Boolean).join('\n');
+
+      this.logger.log(`Goal planning for "${goal.title}" by agent ${agent.name}`);
+
+      const result = await this.runtime.execute(
+        agentId,
+        prompt,
+        { type: 'TASK', id: goal.id },
+        { channelId },
+      );
+
+      if (result.text?.trim() && channelId) {
+        await this.comms.sendMessage(
+          channelId,
+          { content: result.text.trim(), contentType: 'TEXT' },
+          'AGENT',
+          agentId,
+        );
+      }
+
+      this.logger.log(`Goal "${goal.title}" planned by ${agent.name}`);
+    } catch (err) {
+      this.logger.error(`Goal planning failed for "${goal.title}": ${err}`);
+    } finally {
+      this.runningAgents.delete(agentId);
+    }
+  }
+
+  /** Trigger agent to progress on an active goal */
+  private async executeGoalProgress(goal: any) {
+    const agentId = goal.agentId;
+    if (this.runningAgents.has(agentId)) return;
+
+    const agent = await this.prisma.agent.findUnique({
+      where: { id: agentId },
+      select: { id: true, name: true, status: true, orgId: true },
+    });
+    if (!agent || agent.status !== 'ACTIVE') return;
+    if (!(await this.settings.isModuleEnabled('tasks', agent.orgId))) return;
+
+    this.runningAgents.add(agentId);
+
+    try {
+      const channelId = await this.findOrCreateAgentChannel(agentId, agent.name, agent.orgId);
+
+      const tasks = await this.prisma.task.findMany({
+        where: { goalId: goal.id },
+        select: { id: true, title: true, status: true, priority: true },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      const taskSummary = tasks.map(t => `  - [${t.id}] "${t.title}" (${t.status}, ${t.priority})`).join('\n');
+
+      const prompt = [
+        `=== GOAL ACTIVATED — REVIEW AND PROGRESS ===`,
+        `Goal ID: ${goal.id}`,
+        `Title: ${goal.title}`,
+        goal.description ? `Description: ${goal.description}` : '',
+        `Status: ${goal.status}`,
+        ``,
+        `Current tasks:`,
+        taskSummary || '  (no tasks yet)',
+        ``,
+        `INSTRUCTIONS:`,
+        `1. Review the goal and its current tasks.`,
+        `2. Pick up any PENDING tasks assigned to you and start working.`,
+        `3. If more tasks are needed, create them with agems_tasks.`,
+        `4. Update goal progress with agems_goals action="update".`,
+        `=== END ===`,
+      ].filter(Boolean).join('\n');
+
+      const result = await this.runtime.execute(
+        agentId,
+        prompt,
+        { type: 'TASK', id: goal.id },
+        { channelId },
+      );
+
+      if (result.text?.trim() && channelId) {
+        await this.comms.sendMessage(
+          channelId,
+          { content: result.text.trim(), contentType: 'TEXT' },
+          'AGENT',
+          agentId,
+        );
+      }
+    } catch (err) {
+      this.logger.error(`Goal progress failed for "${goal.title}": ${err}`);
+    } finally {
+      this.runningAgents.delete(agentId);
+    }
+  }
+
   /** When a new task is created for an agent, auto-trigger execution */
   @OnEvent('task.created')
   async onTaskCreated(task: any) {

@@ -164,7 +164,7 @@ export class AgentRunner {
     };
   }
 
-  private buildToolsMap(toolResults: ToolResult[], loopDetector: ToolLoopDetector, loopRef: { detected: boolean }) {
+  private buildToolsMap(toolResults: ToolResult[], loopDetector: ToolLoopDetector, loopRef: { detected: boolean }, abortSignal?: AbortSignal) {
     const needsJsonSchema = ['DEEPSEEK', 'MISTRAL', 'OLLAMA', 'CUSTOM'].includes(this.config.provider.provider);
     const toolsMap: Record<string, any> = {};
     for (const td of this.config.tools ?? []) {
@@ -175,6 +175,12 @@ export class AgentRunner {
         description: td.description,
         inputSchema: schema as any,
         execute: async (params: any) => {
+          // Check abort signal before executing tool
+          if (abortSignal?.aborted) {
+            const msg = 'Execution stopped by user';
+            toolResults.push({ toolName: td.name, input: params, output: null, durationMs: 0, error: msg });
+            throw new Error(msg);
+          }
           if (loopDetector.check(td.name, params)) {
             loopRef.detected = true;
             const msg = `Loop detected: "${td.name}" has been called repeatedly with the same parameters. Stop calling this tool and respond with what you have.`;
@@ -184,11 +190,17 @@ export class AgentRunner {
           const start = Date.now();
           try {
             const output = await td.execute(params);
+            // Check abort signal after tool execution
+            if (abortSignal?.aborted) {
+              toolResults.push({ toolName: td.name, input: params, output, durationMs: Date.now() - start });
+              throw new Error('Execution stopped by user');
+            }
             toolResults.push({ toolName: td.name, input: params, output, durationMs: Date.now() - start });
             return output;
           } catch (err) {
             const error = err instanceof Error ? err.message : String(err);
             toolResults.push({ toolName: td.name, input: params, output: null, durationMs: Date.now() - start, error });
+            if (abortSignal?.aborted) throw err;
             return { error };
           }
         },
@@ -275,7 +287,7 @@ export class AgentRunner {
     const loopDetector = new ToolLoopDetector();
     const loopRef = { detected: false };
 
-    const toolsMap = this.buildToolsMap(toolResults, loopDetector, loopRef);
+    const toolsMap = this.buildToolsMap(toolResults, loopDetector, loopRef, abortSignal);
     const common = this.buildCommon(toolsMap, maxSteps);
 
     // Use streamText when callbacks provided, generateText otherwise

@@ -81,6 +81,17 @@ services:
       retries: 3
       start_period: 30s
 
+  playwright-mcp:
+    image: node:20-bookworm-slim
+    command: ["sh", "-c", "apt-get update >/dev/null 2>&1 && apt-get install -y --no-install-recommends chromium fonts-liberation libatk-bridge2.0-0 libatk1.0-0 libcups2 libdrm2 libgbm1 libnss3 libxcomposite1 libxdamage1 libxrandr2 libpango-1.0-0 libcairo2 libasound2 >/dev/null 2>&1 && chromium --headless=new --no-sandbox --disable-gpu --disable-software-rasterizer --disable-dev-shm-usage --remote-debugging-port=9222 --window-size=1280,800 about:blank & sleep 3 && node /app/cdp-proxy.js & PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npx -y @playwright/mcp@latest --port 3002 --host 0.0.0.0 --allowed-hosts '*' --cdp-endpoint http://127.0.0.1:9222"]
+    volumes:
+      - ./cdp-proxy.js:/app/cdp-proxy.js:ro
+    ports:
+      - "3002:3002"
+    environment:
+      PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: /usr/bin/chromium
+    restart: unless-stopped
+
 volumes:
   pgdata:
   web_avatars:
