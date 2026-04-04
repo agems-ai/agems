@@ -11,11 +11,7 @@ export default function RootPage() {
 
   useEffect(() => {
     const token = api.getToken();
-    if (isViewerMode) {
-      router.replace('/dashboard');
-    } else {
-      router.replace(token ? '/dashboard' : '/login');
-    }
+    router.replace(token ? '/dashboard' : '/login');
   }, [router]);
 
   return (
