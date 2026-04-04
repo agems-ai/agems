@@ -97,8 +97,9 @@ export class AgentRunner {
   private buildCommon(toolsMap: Record<string, any>, maxSteps: number) {
     const isGeminiThinking = this.config.provider.provider === 'GOOGLE'
       && /gemini-3/i.test(this.config.provider.model);
-    const isAnthropicThinking = this.config.provider.provider === 'ANTHROPIC'
-      && /opus|sonnet/i.test(this.config.provider.model);
+    const isAnthropicFormat = this.config.provider.provider === 'ANTHROPIC' || this.config.provider.apiFormat === 'anthropic';
+    const isAnthropicThinking = isAnthropicFormat
+      && (/opus|sonnet|MiniMax/i.test(this.config.provider.model));
 
     const providerOptions: Record<string, any> = {};
     if (isGeminiThinking) {
@@ -134,7 +135,7 @@ export class AgentRunner {
     // The provider must be created with cacheControl: true (see provider.ts).
     // Other providers receive the plain string — they ignore the structured format.
     const systemPromptText = this.config.systemPrompt || '';
-    const isAnthropic = this.config.provider.provider === 'ANTHROPIC';
+    const isAnthropic = isAnthropicFormat;
     const system: any = isAnthropic
       ? [
           {
@@ -252,7 +253,7 @@ export class AgentRunner {
     // For Anthropic: only internal/Docker URLs (public ones go through native MCP)
     // For others: all MCP servers
     if (this.config.mcpServers?.length) {
-      const isAnthropic = this.config.provider.provider === 'ANTHROPIC';
+      const isAnthropic = isAnthropicFormat;
       const serversToResolve = isAnthropic
         ? this.config.mcpServers.filter(s => {
             const url = s.url || '';
