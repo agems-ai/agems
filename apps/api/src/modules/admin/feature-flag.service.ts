@@ -99,7 +99,7 @@ export class FeatureFlagService {
     });
 
     this.logger.log(`Feature flag updated: ${key} = ${flag.enabled}`);
-    return flag;
+    return flag as FeatureFlag;
   }
 
   async toggleFlag(key: string, enabled: boolean): Promise<FeatureFlag> {
