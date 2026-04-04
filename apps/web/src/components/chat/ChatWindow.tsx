@@ -1,8 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
-import { Minus, X, Maximize2 } from 'lucide-react';
+import { Minus, X, Maximize2, Minimize2 } from 'lucide-react';
 import ChatPanel from '@/components/ChatPanel';
 import { useChatManager } from './ChatManagerProvider';
 import type { ChatInstance } from './types';
@@ -13,12 +12,12 @@ interface ChatWindowProps {
 }
 
 export default function ChatWindow({ chat, agents }: ChatWindowProps) {
-  const router = useRouter();
   const { minimized, unreadCounts, currentUserId, toggleMinimize, closeChat, clearUnread, openChats } = useChatManager();
   const key = chat.isGemma ? '__gemma__' : chat.channelId;
   const isMinimized = minimized.has(key);
   const unread = unreadCounts.get(key) || 0;
   const [channelId, setChannelId] = useState(chat.channelId);
+  const [fullscreen, setFullscreen] = useState(false);
 
   const handleExpand = () => {
     if (isMinimized) {
@@ -39,11 +38,7 @@ export default function ChatWindow({ chat, agents }: ChatWindowProps) {
 
   const handleFullscreen = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (channelId) {
-      router.push(`/comms?channel=${channelId}`);
-    } else {
-      router.push('/comms');
-    }
+    setFullscreen((prev) => !prev);
   };
 
   const nameMap = useCallback((type: string, id: string) => {
@@ -89,6 +84,74 @@ export default function ChatWindow({ chat, agents }: ChatWindowProps) {
   }
 
   // Expanded state — full chat window
+  if (fullscreen) {
+    return (
+      <div className="fixed inset-0 z-50 bg-[var(--card)] flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-[var(--border)] bg-[var(--bg)] shrink-0">
+          {chat.avatar ? (
+            <img src={chat.avatar} alt={chat.name} className="w-8 h-8 rounded-full object-cover shrink-0" />
+          ) : (
+            <div className="w-8 h-8 rounded-full bg-[var(--accent)]/20 flex items-center justify-center text-sm font-bold shrink-0">
+              {chat.name[0]}
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold text-base leading-tight truncate">{chat.name}</div>
+            <div className="text-xs text-[var(--muted)]">
+              {chat.isGemma ? 'System Director' : chat.peerType === 'agent' ? 'Agent' : 'Team member'}
+            </div>
+          </div>
+          <div className="flex items-center gap-0.5">
+            <button onClick={handleFullscreen} className="text-[var(--muted)] hover:text-white transition p-1.5 rounded hover:bg-[var(--hover)]" title="Exit fullscreen">
+              <Minimize2 size={16} />
+            </button>
+            <button onClick={handleMinimize} className="text-[var(--muted)] hover:text-white transition p-1.5 rounded hover:bg-[var(--hover)]" title="Minimize">
+              <Minus size={16} />
+            </button>
+            {!chat.isGemma && (
+              <button onClick={handleClose} className="text-[var(--muted)] hover:text-white transition p-1.5 rounded hover:bg-[var(--hover)]" title="Close">
+                <X size={16} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Chat body */}
+        <div className="flex-1 overflow-hidden">
+          <ChatPanel
+            channelId={channelId || ''}
+            currentUserId={currentUserId}
+            nameMap={nameMap}
+            autoCreateChannel={!channelId ? { targetType: chat.peerType === 'agent' ? 'AGENT' : 'HUMAN', targetId: chat.peerId } : undefined}
+            onChannelCreated={(id) => setChannelId(id)}
+            placeholder={`Message ${chat.name}...`}
+            height="100%"
+            emptyState={
+              <div className="text-center text-[var(--muted)] py-12 px-4">
+                {chat.avatar ? (
+                  <img src={chat.avatar} alt={chat.name} className="w-16 h-16 rounded-full object-cover mx-auto mb-3" />
+                ) : (
+                  <div className="w-16 h-16 rounded-full bg-[var(--accent)]/20 flex items-center justify-center text-2xl font-bold mx-auto mb-3">
+                    {chat.name[0]}
+                  </div>
+                )}
+                <p className="text-sm font-medium">
+                  {chat.isGemma ? `Hi! I'm ${chat.name}` : chat.name}
+                </p>
+                <p className="text-xs mt-1">
+                  {chat.isGemma
+                    ? 'Your AGEMS System Director. Ask me anything about the platform, your agents, or get help.'
+                    : `Start a conversation with ${chat.name}`}
+                </p>
+              </div>
+            }
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="w-[380px] h-[480px] bg-[var(--card)] border border-[var(--border)] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
       {/* Header */}
@@ -107,7 +170,7 @@ export default function ChatWindow({ chat, agents }: ChatWindowProps) {
           </div>
         </div>
         <div className="flex items-center gap-0.5">
-          <button onClick={handleFullscreen} className="text-[var(--muted)] hover:text-white transition p-1.5 rounded hover:bg-[var(--hover)]" title="Open fullscreen">
+          <button onClick={handleFullscreen} className="text-[var(--muted)] hover:text-white transition p-1.5 rounded hover:bg-[var(--hover)]" title="Fullscreen">
             <Maximize2 size={14} />
           </button>
           <button onClick={handleMinimize} className="text-[var(--muted)] hover:text-white transition p-1.5 rounded hover:bg-[var(--hover)]" title="Minimize">
