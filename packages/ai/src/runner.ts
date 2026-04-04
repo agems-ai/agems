@@ -253,7 +253,7 @@ export class AgentRunner {
     // For Anthropic: only internal/Docker URLs (public ones go through native MCP)
     // For others: all MCP servers
     if (this.config.mcpServers?.length) {
-      const isAnthropic = isAnthropicFormat;
+      const isAnthropic = this.config.provider.provider === 'ANTHROPIC' || this.config.provider.apiFormat === 'anthropic';
       const serversToResolve = isAnthropic
         ? this.config.mcpServers.filter(s => {
             const url = s.url || '';
