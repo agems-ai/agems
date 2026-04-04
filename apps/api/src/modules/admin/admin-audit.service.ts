@@ -68,18 +68,18 @@ export class AdminAuditService {
   }): Promise<AdminAuditEntry> {
     const entry = await this.prisma.auditLog.create({
       data: {
-        actorType: 'ADMIN',
+        actorType: 'SYSTEM' as any,
         actorId: input.adminId,
-        action: input.action,
+        action: input.action as any,
         resourceType: input.targetType,
-        resourceId: input.targetId,
-        details: input.details as never,
-        metadata: {
+        resourceId: input.targetId || '',
+        details: {
+          ...(input.details ?? {}),
           reason: input.reason,
           ip: input.ip,
           userAgent: input.userAgent,
           adminEmail: input.adminEmail,
-        } as never,
+        } as any,
       },
     });
 
@@ -132,14 +132,14 @@ export class AdminAuditService {
       data: entries.map((e) => ({
         id: e.id,
         adminId: e.actorId,
-        adminEmail: (e.metadata as Record<string, string>)?.adminEmail ?? 'unknown',
-        action: e.action as AdminActionType,
+        adminEmail: (e.details as any)?.adminEmail ?? 'unknown',
+        action: e.action as unknown as AdminActionType,
         targetType: e.resourceType as 'org' | 'user' | 'agent' | 'system',
         targetId: e.resourceId ?? undefined,
         details: e.details as Record<string, unknown>,
-        reason: (e.metadata as Record<string, string>)?.reason,
-        ip: (e.metadata as Record<string, string>)?.ip,
-        userAgent: (e.metadata as Record<string, string>)?.userAgent,
+        reason: (e.details as any)?.reason,
+        ip: (e.details as any)?.ip,
+        userAgent: (e.details as any)?.userAgent,
         createdAt: e.createdAt,
       })),
       total,
@@ -158,14 +158,14 @@ export class AdminAuditService {
     return entries.map((e) => ({
       id: e.id,
       adminId: e.actorId,
-      adminEmail: (e.metadata as Record<string, string>)?.adminEmail ?? 'unknown',
-      action: e.action as AdminActionType,
+      adminEmail: (e.details as any)?.adminEmail ?? 'unknown',
+      action: e.action as unknown as AdminActionType,
       targetType: e.resourceType as 'org' | 'user' | 'agent' | 'system',
       targetId: e.resourceId ?? undefined,
       details: e.details as Record<string, unknown>,
-      reason: (e.metadata as Record<string, string>)?.reason,
-      ip: (e.metadata as Record<string, string>)?.ip,
-      userAgent: (e.metadata as Record<string, string>)?.userAgent,
+      reason: (e.details as any)?.reason,
+      ip: (e.details as any)?.ip,
+      userAgent: (e.details as any)?.userAgent,
       createdAt: e.createdAt,
     }));
   }

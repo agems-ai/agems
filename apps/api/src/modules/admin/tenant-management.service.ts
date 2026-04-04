@@ -54,7 +54,7 @@ export class TenantManagementService {
     const org = await this.prisma.organization.findUnique({
       where: { id },
       include: {
-        owner: { select: { id: true, name: true, email: true } },
+        members: { include: { user: { select: { id: true, name: true, email: true } } }, where: { role: 'ADMIN' }, take: 1 },
         _count: {
           select: { members: true, agents: true, channels: true, tasks: true },
         },
@@ -73,6 +73,7 @@ export class TenantManagementService {
     ]);
 
     const metadata = org.metadata as Record<string, unknown> | null;
+    const ownerMember = org.members[0];
 
     return {
       id: org.id,
@@ -82,7 +83,7 @@ export class TenantManagementService {
       status: (metadata?.status as OrgStatus) ?? 'ACTIVE',
       createdAt: org.createdAt,
       metadata: metadata ?? undefined,
-      owner: org.owner,
+      owner: ownerMember?.user ?? { id: '', name: 'Unknown', email: '' },
       stats: {
         members: org._count.members,
         agents: org._count.agents,
@@ -125,7 +126,7 @@ export class TenantManagementService {
       this.prisma.organization.findMany({
         where,
         include: {
-          owner: { select: { id: true, name: true, email: true } },
+          members: { include: { user: { select: { id: true, name: true, email: true } } }, where: { role: 'ADMIN' }, take: 1 },
           _count: { select: { members: true, agents: true } },
         },
         skip: (page - 1) * pageSize,
@@ -144,7 +145,7 @@ export class TenantManagementService {
         plan: org.plan as OrganizationPlan,
         status: (metadata?.status as OrgStatus) ?? 'ACTIVE',
         createdAt: org.createdAt,
-        owner: org.owner,
+        owner: org.members[0]?.user ?? { id: '', name: 'Unknown', email: '' },
         stats: { members: org._count.members, agents: org._count.agents, channels: 0, tasks: 0, totalSpent: 0 },
         integrations: { hasStripe: false, hasTelegram: false, hasN8n: false, hasApiKeys: false },
       } as OrganizationDetails;
