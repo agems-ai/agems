@@ -66,21 +66,7 @@ const navItems = [
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
-const viewerNavItems = [
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/company', label: 'Company', icon: Building2 },
-  { href: '/agents', label: 'Agents', icon: Bot },
-  { href: '/skills', label: 'Skills', icon: Sparkles },
-  { href: '/tools', label: 'Tools', icon: Wrench },
-  { href: '/tasks', label: 'Tasks', icon: ListChecks },
-  { href: '/comms', label: 'Comms', icon: MessageSquare },
-  { href: '/meetings', label: 'Meetings', icon: Video },
-  { href: '/employees', label: 'Employees', icon: Users },
-  { href: '/approvals', label: 'Approvals', icon: ShieldAlert },
-  { href: '/budgets', label: 'Budgets', icon: DollarSign },
-  { href: '/files', label: 'Files', icon: FolderOpen },
-  { href: '/security', label: 'Audit', icon: ShieldCheck },
-];
+const viewerNavItems = navItems;
 
 const mobileNavItems = [
   { href: '/dashboard', label: 'Home', icon: LayoutDashboard },
