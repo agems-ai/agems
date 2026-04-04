@@ -39,26 +39,26 @@ const navItems = [
   // Overview
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/company', label: 'Company', icon: Building2 },
-  // AI core
   { href: '/agents', label: 'Agents', icon: Bot },
-  { href: '/skills', label: 'Skills', icon: Sparkles },
-  { href: '/tools', label: 'Tools', icon: Wrench },
-  { href: '/catalog', label: 'Catalog', icon: Store },
-  // Work management
+  // Work
+  { href: '/goals', label: 'Goals', icon: Target },
   { href: '/tasks', label: 'Tasks', icon: ListChecks },
   { href: '/inbox', label: 'Inbox', icon: Inbox },
-  { href: '/goals', label: 'Goals', icon: Target },
-  { href: '/projects', label: 'Projects', icon: FolderKanban },
   // Communication
   { href: '/comms', label: 'Comms', icon: MessageSquare },
   { href: '/meetings', label: 'Meetings', icon: Video },
-  // Organization
-  { href: '/employees', label: 'Employees', icon: Users },
-  // Governance & resources
+  // Governance
   { href: '/approvals', label: 'Approvals', icon: ShieldAlert },
+  // AI core
+  { href: '/skills', label: 'Skills', icon: Sparkles },
+  { href: '/tools', label: 'Tools', icon: Wrench },
+  { href: '/catalog', label: 'Catalog', icon: Store },
+  // Resources
   { href: '/budgets', label: 'Budgets', icon: DollarSign },
   { href: '/files', label: 'Files', icon: FolderOpen },
   { href: '/security', label: 'Audit', icon: ShieldCheck },
+  { href: '/projects', label: 'Projects', icon: FolderKanban },
+  { href: '/employees', label: 'Employees', icon: Users },
   // System
   { href: '/docs', label: 'Docs', icon: BookOpen },
   { href: '/settings', label: 'Settings', icon: Settings },
