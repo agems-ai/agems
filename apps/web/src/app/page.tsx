@@ -12,7 +12,7 @@ export default function RootPage() {
   useEffect(() => {
     const token = api.getToken();
     if (isViewerMode) {
-      router.replace('/show');
+      router.replace('/dashboard');
     } else {
       router.replace(token ? '/dashboard' : '/login');
     }
