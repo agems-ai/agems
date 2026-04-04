@@ -10,13 +10,23 @@ import { RequestUser } from '../../common/types';
 
 const HOST_REPO = '/app/host-repo';
 
+// Keys that must never be exposed to VIEWER role
+const SENSITIVE_KEYS = ['n8n_api_key', 'n8n_api_url', 'stripe_secret', 'webhook_secret'];
+
 @Controller('settings')
 export class SettingsController {
   constructor(private settingsService: SettingsService, private events: EventEmitter2) {}
 
   @Get()
-  getAll(@Request() req: { user: RequestUser }) {
-    return this.settingsService.getAll(req.user.orgId);
+  async getAll(@Request() req: { user: RequestUser }) {
+    const all = await this.settingsService.getAll(req.user.orgId);
+    // Strip sensitive keys for VIEWER role (public read-only mode)
+    if (req.user.role === 'VIEWER') {
+      const safe = { ...all };
+      for (const key of SENSITIVE_KEYS) delete safe[key];
+      return safe;
+    }
+    return all;
   }
 
   @Patch()
@@ -27,6 +37,7 @@ export class SettingsController {
 
   @Get('llm-keys')
   getLlmKeys(@Request() req: { user: RequestUser }) {
+    if (req.user.role === 'VIEWER') return {};
     return this.settingsService.getLlmKeys(req.user.orgId);
   }
 
@@ -153,6 +164,7 @@ export class SettingsController {
 
   @Get('n8n')
   getN8nConfig(@Request() req: { user: RequestUser }) {
+    if (req.user.role === 'VIEWER') return { url: '', key: '' };
     return this.settingsService.getN8nConfig(req.user.orgId);
   }
 

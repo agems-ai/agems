@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { PrismaModule } from './config/prisma.module';
@@ -32,6 +32,7 @@ import { PluginsModule } from './modules/plugins/plugins.module';
 import { EvalsModule } from './modules/evals/evals.module';
 import { WorktreesModule } from './modules/worktrees/worktrees.module';
 
+import { ViewerSanitizeInterceptor } from './common/interceptors/viewer-sanitize.interceptor';
 import { PublicViewerGuard } from './common/guards/public-viewer.guard';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -87,6 +88,7 @@ import { HealthController } from './health.controller';
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_INTERCEPTOR, useClass: ViewerSanitizeInterceptor },
     RedisLockService,
   ],
 })
