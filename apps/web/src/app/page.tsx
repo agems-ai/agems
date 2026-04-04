@@ -4,12 +4,18 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 
+const isViewerMode = process.env.NEXT_PUBLIC_PUBLIC_MODE === 'viewer';
+
 export default function RootPage() {
   const router = useRouter();
 
   useEffect(() => {
     const token = api.getToken();
-    router.replace(token ? '/dashboard' : '/login');
+    if (isViewerMode) {
+      router.replace('/show');
+    } else {
+      router.replace(token ? '/dashboard' : '/login');
+    }
   }, [router]);
 
   return (

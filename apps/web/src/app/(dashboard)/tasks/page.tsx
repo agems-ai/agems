@@ -3,6 +3,9 @@
 import { useEffect, useState, useRef, DragEvent, useCallback } from 'react';
 import { api } from '@/lib/api';
 
+const isViewerMode = process.env.NEXT_PUBLIC_PUBLIC_MODE === 'viewer';
+const isReadOnly = isViewerMode && typeof window !== 'undefined' && !localStorage.getItem('agems_token');
+
 const COLUMNS = [
   { key: 'PENDING', label: 'Pending', color: 'bg-gray-500/20 text-gray-400', dot: 'bg-gray-400' },
   { key: 'IN_PROGRESS', label: 'In Progress', color: 'bg-blue-500/20 text-blue-400', dot: 'bg-blue-400' },
@@ -316,9 +319,11 @@ export default function TasksPage() {
               className={`px-3 py-1.5 text-xs font-medium transition-colors ${viewMode === 'list' ? 'bg-[var(--accent)] text-white' : 'text-[var(--muted)] hover:text-white'}`}
             >List</button>
           </div>
-          <button onClick={openCreate} className="px-4 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90">
-            + New Task
-          </button>
+          {!isReadOnly && (
+            <button onClick={openCreate} className="px-4 py-2 bg-[var(--accent)] text-white rounded-lg hover:opacity-90">
+              + New Task
+            </button>
+          )}
         </div>
       </div>
 

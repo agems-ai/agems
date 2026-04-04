@@ -6,8 +6,11 @@ import { api } from '@/lib/api';
 import { Settings, Plus, ChevronDown, MessageSquare, ArrowLeft, Users, User, Bot } from 'lucide-react';
 import ChatPanel, { Avatar } from '@/components/ChatPanel';
 
+const isViewerMode = process.env.NEXT_PUBLIC_PUBLIC_MODE === 'viewer';
+
 export default function CommsPage() {
   const isAdmin = api.getUserFromToken()?.role === 'ADMIN';
+  const isReadOnly = isViewerMode && !api.getToken();
   const searchParams = useSearchParams();
   const [channels, setChannels] = useState<any[]>([]);
   const [selectedChannel, setSelectedChannel] = useState<any>(null);
@@ -231,10 +234,12 @@ export default function CommsPage() {
       <div className={`w-full md:w-80 border-r border-[var(--border)] flex flex-col ${selectedChannel ? 'hidden md:flex' : ''}`}>
         <div className="p-4 border-b border-[var(--border)] flex items-center justify-between">
           <h2 className="font-semibold text-lg">Channels</h2>
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="w-8 h-8 rounded-lg bg-[var(--accent)] text-white flex items-center justify-center text-lg hover:opacity-90"
-          >+</button>
+          {!isReadOnly && (
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="w-8 h-8 rounded-lg bg-[var(--accent)] text-white flex items-center justify-center text-lg hover:opacity-90"
+            >+</button>
+          )}
         </div>
         <div className="flex gap-1 px-3 py-2 border-b border-[var(--border)]">
           {(['all', 'direct', 'group', 'agent'] as const).map((f) => (
@@ -280,17 +285,19 @@ export default function CommsPage() {
                   {ch._count?.messages > 0 && (
                     <span className="min-w-[20px] h-[20px] flex items-center justify-center text-[11px] font-bold rounded-full bg-[var(--accent)] text-white shrink-0">{ch._count.messages}</span>
                   )}
-                  <button
-                    onClick={async (e) => {
-                      e.stopPropagation();
-                      if (!confirm(`Delete "${display.name}"?`)) return;
-                      await api.deleteChannel(ch.id);
-                      setChannels((prev) => prev.filter((c) => c.id !== ch.id));
-                      if (selectedChannel?.id === ch.id) setSelectedChannel(null);
-                    }}
-                    className="opacity-0 group-hover:opacity-100 text-[var(--muted)] hover:text-red-400 p-1 transition shrink-0"
-                    title="Delete"
-                  >✕</button>
+                  {!isReadOnly && (
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        if (!confirm(`Delete "${display.name}"?`)) return;
+                        await api.deleteChannel(ch.id);
+                        setChannels((prev) => prev.filter((c) => c.id !== ch.id));
+                        if (selectedChannel?.id === ch.id) setSelectedChannel(null);
+                      }}
+                      className="opacity-0 group-hover:opacity-100 text-[var(--muted)] hover:text-red-400 p-1 transition shrink-0"
+                      title="Delete"
+                    >✕</button>
+                  )}
                 </div>
               );
             })
@@ -320,7 +327,7 @@ export default function CommsPage() {
                   </p>
                 )}
               </div>
-              {selectedChannel.type === 'DIRECT' && (
+              {selectedChannel.type === 'DIRECT' && !isReadOnly && (
                 <div className="flex items-center gap-1" ref={chatHistoryRef}>
                   {/* Chat history dropdown */}
                   <div className="relative">
@@ -387,7 +394,7 @@ export default function CommsPage() {
                   </button>
                 </div>
               )}
-              {selectedChannel.type !== 'DIRECT' && (
+              {selectedChannel.type !== 'DIRECT' && !isReadOnly && (
                 <button onClick={openEditChannel}
                   className="p-2 rounded-lg hover:bg-[var(--hover)] text-[var(--muted)] hover:text-white transition"
                   title="Channel Settings">
@@ -399,6 +406,7 @@ export default function CommsPage() {
               channelId={selectedChannel.id}
               currentUserId={currentUserId}
               nameMap={nameMap}
+              readOnly={isReadOnly}
             />
           </>
         ) : (

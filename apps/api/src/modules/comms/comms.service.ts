@@ -74,6 +74,21 @@ export class CommsService {
     return channel;
   }
 
+  async findAllOrgChannels(orgId: string) {
+    return this.prisma.channel.findMany({
+      where: { orgId },
+      include: {
+        participants: true,
+        messages: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
+        _count: { select: { messages: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   async findAllChannels(participantId: string, orgId?: string) {
     return this.prisma.channel.findMany({
       where: {

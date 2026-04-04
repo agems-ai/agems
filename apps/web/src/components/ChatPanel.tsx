@@ -34,6 +34,8 @@ interface ChatPanelProps {
   emptyState?: React.ReactNode;
   /** Class overrides */
   className?: string;
+  /** Read-only mode — hide input, disable sending */
+  readOnly?: boolean;
 }
 
 /* ── Avatar ── */
@@ -213,6 +215,7 @@ export default function ChatPanel({
   onChannelCreated,
   emptyState,
   className = '',
+  readOnly = false,
 }: ChatPanelProps) {
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState('');
@@ -607,7 +610,7 @@ export default function ChatPanel({
     setAgentThinking(new Map());
   }, []);
 
-  const showInput = externalChannelId || autoCreateChannel;
+  const showInput = !readOnly && (externalChannelId || autoCreateChannel);
 
   return (
     <div className={`flex flex-col min-h-0 ${className}`} style={height ? { height } : { flex: 1 }}>
@@ -633,13 +636,15 @@ export default function ChatPanel({
               <div className="max-w-[80%] rounded-xl px-4 py-3 bg-[var(--card)] border border-[var(--border)] border-dashed overflow-hidden">
                 <div className="text-xs opacity-70 mb-1 flex items-center justify-between">
                   <span>{info.name}</span>
-                  <button
-                    onClick={stopExecution}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300 transition"
-                  >
-                    <Square size={10} fill="currentColor" />
-                    Stop
-                  </button>
+                  {!readOnly && (
+                    <button
+                      onClick={stopExecution}
+                      className="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300 transition"
+                    >
+                      <Square size={10} fill="currentColor" />
+                      Stop
+                    </button>
+                  )}
                 </div>
 
                 {/* Thinking text (reasoning) */}

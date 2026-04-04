@@ -6,6 +6,9 @@ import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { MessageSquare, Archive, Upload, Download, Store, X, Cpu, Wrench, Sparkles, Tag, User, ChevronRight } from 'lucide-react';
 
+const isViewerMode = process.env.NEXT_PUBLIC_PUBLIC_MODE === 'viewer';
+const isReadOnly = isViewerMode && typeof window !== 'undefined' && !localStorage.getItem('agems_token');
+
 const statusColors: Record<string, string> = {
   ACTIVE: 'bg-emerald-500/20 text-emerald-400',
   DRAFT: 'bg-gray-500/20 text-gray-400',
@@ -165,12 +168,14 @@ export default function AgentsPage() {
             className="flex items-center gap-1.5 px-3 py-2 border border-[var(--border)] rounded-lg hover:bg-[var(--hover)] text-sm">
             <Store size={14} /> Catalog
           </button>
-          <Link
-            href="/agents/new"
-            className="px-4 py-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] rounded-lg font-medium transition-colors text-sm"
-          >
-            + New Agent
-          </Link>
+          {!isReadOnly && (
+            <Link
+              href="/agents/new"
+              className="px-4 py-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] rounded-lg font-medium transition-colors text-sm"
+            >
+              + New Agent
+            </Link>
+          )}
         </div>
       </div>
 

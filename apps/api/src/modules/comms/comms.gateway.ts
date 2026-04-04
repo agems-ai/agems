@@ -15,7 +15,7 @@ import { CommsService } from './comms.service';
 import { ApprovalsService } from '../approvals/approvals.service';
 import { PrismaService } from '../../config/prisma.service';
 
-@WebSocketGateway({ cors: { origin: process.env.WEB_URL || 'http://localhost:3000', credentials: true }, namespace: '/comms' })
+@WebSocketGateway({ cors: { origin: [process.env.WEB_URL || 'http://localhost:3000', /\.agems\.ai$/], credentials: true }, namespace: '/comms' })
 export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
@@ -36,6 +36,13 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     try {
       const token = client.handshake.auth?.token || client.handshake.headers?.authorization?.replace('Bearer ', '');
       if (!token) {
+        // In public mode, allow unauthenticated connections as read-only viewers
+        if (process.env.PUBLIC_MODE === 'true' && process.env.PUBLIC_VIEWER_ORG_ID) {
+          const orgId = process.env.PUBLIC_VIEWER_ORG_ID;
+          this.clients.set(client.id, { userId: 'public-viewer', orgId, socket: client });
+          client.join(`org:${orgId}`);
+          return;
+        }
         client.disconnect();
         return;
       }
@@ -56,6 +63,18 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleJoinChannel(@ConnectedSocket() client: Socket, @MessageBody() data: { channelId: string }) {
     const clientInfo = this.clients.get(client.id);
     if (!clientInfo) return;
+
+    // Public viewers can join any channel in their org (read-only)
+    if (clientInfo.userId === 'public-viewer') {
+      const channel = await this.prisma.channel.findFirst({
+        where: { id: data.channelId, orgId: clientInfo.orgId },
+        select: { id: true },
+      });
+      if (!channel) return;
+      client.join(`channel:${data.channelId}`);
+      return { event: 'joined', channelId: data.channelId };
+    }
+
     const participant = await this.prisma.channelParticipant.findFirst({
       where: {
         channelId: data.channelId,
@@ -78,7 +97,7 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('send_message')
   async handleSendMessage(@ConnectedSocket() client: Socket, @MessageBody() data: { channelId: string; content: string; contentType?: string }) {
     const clientInfo = this.clients.get(client.id);
-    if (!clientInfo) return;
+    if (!clientInfo || clientInfo.userId === 'public-viewer') return;
 
     const message = await this.commsService.sendMessage(
       data.channelId,
@@ -120,7 +139,7 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { approvalId: string; action: 'approve' | 'reject'; reason?: string },
   ) {
     const clientInfo = this.clients.get(client.id);
-    if (!clientInfo) return;
+    if (!clientInfo || clientInfo.userId === 'public-viewer') return;
 
     // Verify approval belongs to user's org (ApprovalRequest has no orgId — check via agent relation)
     const approval = await this.prisma.approvalRequest.findUnique({
@@ -144,7 +163,7 @@ export class CommsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { channelId: string; executionId?: string },
   ) {
     const clientInfo = this.clients.get(client.id);
-    if (!clientInfo) return;
+    if (!clientInfo || clientInfo.userId === 'public-viewer') return;
     if (data.channelId) {
       const channel = await this.prisma.channel.findUnique({ where: { id: data.channelId }, select: { orgId: true } });
       if (!channel || channel.orgId !== clientInfo.orgId) return;

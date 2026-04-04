@@ -35,6 +35,8 @@ import {
 import CommandPalette from '@/components/CommandPalette';
 import ThemeToggle from '@/components/ThemeToggle';
 
+const isViewerMode = process.env.NEXT_PUBLIC_PUBLIC_MODE === 'viewer';
+
 const navItems = [
   // Overview
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -62,6 +64,16 @@ const navItems = [
   // System
   { href: '/docs', label: 'Docs', icon: BookOpen },
   { href: '/settings', label: 'Settings', icon: Settings },
+];
+
+const viewerNavItems = [
+  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/agents', label: 'Agents', icon: Bot },
+  { href: '/comms', label: 'Comms', icon: MessageSquare },
+  { href: '/tasks', label: 'Tasks', icon: ListChecks },
+  { href: '/meetings', label: 'Meetings', icon: Video },
+  { href: '/approvals', label: 'Approvals', icon: ShieldAlert },
+  { href: '/budgets', label: 'Budgets', icon: DollarSign },
 ];
 
 const mobileNavItems = [
@@ -105,6 +117,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   useEffect(() => {
     const token = api.getToken();
+
+    // Viewer mode: skip auth, show content immediately
+    if (isViewerMode && !token) {
+      setUser({ name: 'Viewer', email: '', role: 'VIEWER' });
+      setCompanyName('AI Survival');
+      setReady(true);
+      return;
+    }
+
     if (!token) {
       router.replace('/login');
       return;
@@ -207,8 +228,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         </div>
 
+        {/* Read-only banner for viewer mode */}
+        {isViewerMode && !api.getToken() && (
+          <div className="mx-2 mt-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30">
+            <p className="text-[11px] font-medium text-amber-400">Read-Only Mode</p>
+            <p className="text-[10px] text-amber-400/70 mt-0.5">Watching live AI agents</p>
+          </div>
+        )}
+
         {/* Org Switcher */}
-        {orgs.length > 0 && (
+        {!isViewerMode && orgs.length > 0 && (
           <div className="px-2 pt-2" ref={orgDropdownRef}>
             <button
               onClick={() => setOrgDropdownOpen(!orgDropdownOpen)}
@@ -253,7 +282,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         )}
 
         <nav className="flex-1 p-2 overflow-y-auto">
-          {navItems.map((item) => {
+          {(isViewerMode && !api.getToken() ? viewerNavItems : navItems).map((item) => {
             const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href));
             return (
               <Link
@@ -278,22 +307,32 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </nav>
         {/* User info + logout */}
         <div className="p-3 border-t border-[var(--border)]">
-          <div className="flex items-center gap-2 px-2">
-            <div className="w-7 h-7 rounded-full bg-[var(--accent)]/30 flex items-center justify-center text-xs font-medium">
-              {user?.name?.[0]?.toUpperCase() || '?'}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium truncate">{user?.name}</p>
-              <p className="text-[10px] text-[var(--muted)] truncate">{user?.email}</p>
-            </div>
-            <button
-              onClick={() => { api.clearToken(); router.replace('/login'); }}
-              className="text-[var(--muted)] hover:text-white p-1 rounded transition-colors"
-              title="Logout"
+          {isViewerMode && !api.getToken() ? (
+            <Link
+              href="/login"
+              className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] text-[var(--muted)] hover:text-white hover:border-[var(--accent)]/50 transition text-xs"
             >
               <LogOut size={14} strokeWidth={1.5} />
-            </button>
-          </div>
+              Admin Login
+            </Link>
+          ) : (
+            <div className="flex items-center gap-2 px-2">
+              <div className="w-7 h-7 rounded-full bg-[var(--accent)]/30 flex items-center justify-center text-xs font-medium">
+                {user?.name?.[0]?.toUpperCase() || '?'}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium truncate">{user?.name}</p>
+                <p className="text-[10px] text-[var(--muted)] truncate">{user?.email}</p>
+              </div>
+              <button
+                onClick={() => { api.clearToken(); router.replace(isViewerMode ? '/dashboard' : '/login'); }}
+                className="text-[var(--muted)] hover:text-white p-1 rounded transition-colors"
+                title="Logout"
+              >
+                <LogOut size={14} strokeWidth={1.5} />
+              </button>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -316,12 +355,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </div>
 
       {/* Command Palette (Cmd+K) */}
-      <CommandPalette />
+      {!(isViewerMode && !api.getToken()) && <CommandPalette />}
 
       {/* Multi-chat system — Gemma + incoming agent/human chats */}
-      <ChatManagerProvider>
-        <ChatDock />
-      </ChatManagerProvider>
+      {!(isViewerMode && !api.getToken()) && (
+        <ChatManagerProvider>
+          <ChatDock />
+        </ChatManagerProvider>
+      )}
     </div>
   );
 }

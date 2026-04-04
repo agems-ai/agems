@@ -1,0 +1,84 @@
+services:
+  postgres-survival:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: agems
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agems-survival}
+      POSTGRES_DB: agems
+    volumes:
+      - pgdata-survival:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agems"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis-survival:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api-survival:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - "3011:3001"
+    environment:
+      DATABASE_URL: postgresql://agems:${POSTGRES_PASSWORD:-agems-survival}@postgres-survival:5432/agems?schema=public
+      REDIS_URL: redis://redis-survival:6379
+      JWT_SECRET: ${JWT_SECRET}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
+      API_PORT: 3001
+      WEB_URL: https://survival.agems.ai
+      PUBLIC_MODE: "true"
+      PUBLIC_VIEWER_ORG_ID: ${PUBLIC_VIEWER_ORG_ID}
+      ALLOW_PRISMA_DB_PUSH_FALLBACK: "true"
+      NODE_OPTIONS: "--dns-result-order=ipv4first"
+    volumes:
+      - survival_uploads:/app/apps/web/public/uploads
+      - survival_avatars:/app/apps/web/public/avatars
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3001/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      postgres-survival:
+        condition: service_healthy
+      redis-survival:
+        condition: service_healthy
+
+  web-survival:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ""
+        NEXT_PUBLIC_PUBLIC_MODE: "viewer"
+    ports:
+      - "3010:3000"
+    environment:
+      HOSTNAME: "0.0.0.0"
+    volumes:
+      - survival_uploads:/app/apps/web/public/uploads
+      - survival_avatars:/app/apps/web/public/avatars
+    depends_on:
+      - api-survival
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://0.0.0.0:3000/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  pgdata-survival:
+  survival_uploads:
+  survival_avatars:

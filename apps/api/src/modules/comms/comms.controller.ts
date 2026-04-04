@@ -16,8 +16,8 @@ export class CommsController {
   /** Verify channel belongs to user's org and the user participates in it.
    *  ADMIN and MANAGER roles can access any channel in their org (needed for A2A chat monitoring). */
   private async verifyChannelAccess(channelId: string, userId: string, orgId: string, role?: string) {
-    // ADMIN and MANAGER can read any channel in their org
-    if (role === 'ADMIN' || role === 'MANAGER') {
+    // ADMIN, MANAGER, and VIEWER (public mode) can read any channel in their org
+    if (role === 'ADMIN' || role === 'MANAGER' || role === 'VIEWER') {
       const channel = await this.prisma.channel.findFirst({
         where: { id: channelId, orgId },
         select: { id: true },
@@ -48,6 +48,10 @@ export class CommsController {
 
   @Get()
   findAll(@Req() req: { user: RequestUser }) {
+    // VIEWER (public mode) sees all channels in org without participant filter
+    if (req.user.role === 'VIEWER' || req.user.role === 'ADMIN' || req.user.role === 'MANAGER') {
+      return this.commsService.findAllOrgChannels(req.user.orgId);
+    }
     return this.commsService.findAllChannels(req.user.id, req.user.orgId);
   }
 

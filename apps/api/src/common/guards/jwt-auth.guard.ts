@@ -10,6 +10,10 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
   }
 
   canActivate(context: ExecutionContext) {
+    // If PublicViewerGuard already injected a virtual user, skip JWT validation
+    const request = context.switchToHttp().getRequest();
+    if (request.user?.id === 'public-viewer') return true;
+
     const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
       context.getHandler(),
       context.getClass(),

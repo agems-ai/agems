@@ -11,7 +11,9 @@ RUN pnpm install --frozen-lockfile
 FROM base AS build
 WORKDIR /app
 ARG NEXT_PUBLIC_API_URL=
+ARG NEXT_PUBLIC_PUBLIC_MODE=
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_PUBLIC_MODE=$NEXT_PUBLIC_PUBLIC_MODE
 COPY --from=deps /app ./
 COPY . .
 RUN pnpm --filter @agems/web build

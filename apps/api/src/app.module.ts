@@ -32,6 +32,7 @@ import { PluginsModule } from './modules/plugins/plugins.module';
 import { EvalsModule } from './modules/evals/evals.module';
 import { WorktreesModule } from './modules/worktrees/worktrees.module';
 
+import { PublicViewerGuard } from './common/guards/public-viewer.guard';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { HealthController } from './health.controller';
@@ -82,6 +83,7 @@ import { HealthController } from './health.controller';
   ],
   controllers: [HealthController],
   providers: [
+    { provide: APP_GUARD, useClass: PublicViewerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
