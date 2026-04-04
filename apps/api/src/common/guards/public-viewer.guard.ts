@@ -1,7 +1,6 @@
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC_KEY } from '../decorators/roles.decorator';
-import { verify } from 'jsonwebtoken';
 
 @Injectable()
 export class PublicViewerGuard implements CanActivate {
@@ -17,17 +16,8 @@ export class PublicViewerGuard implements CanActivate {
     if (!request.user?.id) {
       const authHeader = request.headers?.authorization;
       if (authHeader?.startsWith('Bearer ')) {
-        try {
-          const token = authHeader.slice(7);
-          const payload = verify(token, process.env.JWT_SECRET || '') as any;
-          if (payload?.sub) {
-            // Valid JWT — authenticated user, let JwtAuthGuard handle normally
-            return true;
-          }
-        } catch {
-          // Invalid token — let JwtAuthGuard handle the error
-          return true;
-        }
+        // Has a token — let JwtAuthGuard validate it properly
+        return true;
       }
     }
 
