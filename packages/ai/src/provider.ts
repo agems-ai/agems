@@ -16,7 +16,7 @@ export interface AIProviderConfig {
 // Default base URLs per provider (used when no custom baseUrl is set)
 const DEFAULT_BASE_URLS: Record<string, string> = {
   MISTRAL: 'https://api.mistral.ai/v1',
-  MINIMAX: 'https://api.minimaxi.chat/v1',
+  MINIMAX: 'https://api.minimax.io/anthropic/v1',
   GLM: 'https://open.bigmodel.cn/api/paas/v4',
   XAI: 'https://api.x.ai/v1',
   COHERE: 'https://api.cohere.com/compatibility/v1',
