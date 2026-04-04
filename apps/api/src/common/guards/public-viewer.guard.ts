@@ -1,14 +1,11 @@
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { JwtService } from '@nestjs/jwt';
 import { IS_PUBLIC_KEY } from '../decorators/roles.decorator';
+import { verify } from 'jsonwebtoken';
 
 @Injectable()
 export class PublicViewerGuard implements CanActivate {
-  constructor(
-    private reflector: Reflector,
-    private jwtService: JwtService,
-  ) {}
+  constructor(private reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
     // Only active when PUBLIC_MODE is enabled
@@ -22,9 +19,9 @@ export class PublicViewerGuard implements CanActivate {
       if (authHeader?.startsWith('Bearer ')) {
         try {
           const token = authHeader.slice(7);
-          const payload = this.jwtService.verify(token);
+          const payload = verify(token, process.env.JWT_SECRET || '') as any;
           if (payload?.sub) {
-            // Valid JWT — let JwtAuthGuard handle normally
+            // Valid JWT — authenticated user, let JwtAuthGuard handle normally
             return true;
           }
         } catch {
