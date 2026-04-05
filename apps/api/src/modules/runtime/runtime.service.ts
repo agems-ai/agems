@@ -3509,7 +3509,18 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
       }
     }
 
-    // 2. From MCP_SERVER type tools attached to the agent
+    // 2. Default Playwright MCP (always available unless already configured)
+    if (!servers.some(s => s.name === 'playwright')) {
+      const playwrightUrl = process.env.PLAYWRIGHT_MCP_URL || 'http://playwright-mcp:3002/sse';
+      servers.push({
+        name: 'playwright',
+        url: playwrightUrl,
+        authorizationToken: undefined,
+        toolConfiguration: undefined,
+      });
+    }
+
+    // 3. From MCP_SERVER type tools attached to the agent
     const mcpTools = await this.prisma.agentTool.findMany({
       where: { agentId, enabled: true, tool: { type: 'MCP_SERVER' } },
       include: { tool: true },
