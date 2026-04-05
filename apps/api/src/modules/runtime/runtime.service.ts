@@ -64,6 +64,20 @@ export class RuntimeService {
     private browserService: BrowserService,
   ) {}
 
+  /** Pending browser sessions — started lazily on first browser tool call */
+  private readonly pendingBrowserSessions = new Map<string, { agentId: string; agentName: string; channelId?: string }>();
+
+  /** Start browser session on-demand (called when agent uses a browser tool) */
+  async ensureBrowserSession(executionId: string): Promise<void> {
+    const pending = this.pendingBrowserSessions.get(executionId);
+    if (!pending) return;
+    this.pendingBrowserSessions.delete(executionId);
+    const browserSession = await this.browserService.startSession(executionId, pending.agentId, pending.channelId);
+    if (browserSession) {
+      this.logger.log(`Browser session started on-demand for ${pending.agentName}`);
+    }
+  }
+
   // ========== Redis queue helpers ==========
   private async enqueueMessage(channelId: string, message: any): Promise<void> {
     const queueKey = `channel:${channelId}:queue`;
@@ -975,6 +989,11 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
         return {
           ...t,
           execute: async (params: any) => {
+            // Lazy browser session: start screencast on first browser tool call
+            const browserKeywords = ['browser', 'playwright', 'puppeteer', 'navigate', 'screenshot', 'snapshot'];
+            if (browserKeywords.some(kw => t.name.toLowerCase().includes(kw))) {
+              await this.ensureBrowserSession(execution.id);
+            }
             if (context?.channelId) {
               this.events.emit('agent.tool.start', {
                 channelId: context.channelId, agentId, agentName: agent.name,
@@ -1042,13 +1061,11 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       // Collect MCP servers from runtimeConfig + MCP_SERVER tools
       const mcpServers = await this.collectMcpServers(agent.id, runtimeConfig);
 
-      // Detect browser-related tools/MCP servers and start a browser session for live streaming
+      // Browser session is started lazily — only when agent actually calls a browser tool.
+      // Store context so we can start it on-demand in the tool call handler.
       const hasBrowserTools = this.detectBrowserTools(liveTools, mcpServers);
       if (hasBrowserTools) {
-        const browserSession = await this.browserService.startSession(execution.id, agentId, context?.channelId);
-        if (browserSession) {
-          this.logger.log(`Browser session started for ${agent.name} — CDP: ${browserSession.cdpWsUrl}`);
-        }
+        this.pendingBrowserSessions.set(execution.id, { agentId, agentName: agent.name, channelId: context?.channelId });
       }
 
       const runner = new AgentRunner({
