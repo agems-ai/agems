@@ -18,12 +18,25 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   /** Track last agent comment timestamp per task to prevent ping-pong */
   private readonly lastAgentCommentAt = new Map<string, number>();
 
-  /** Max times a task can bounce between IN_PROGRESS ↔ IN_REVIEW before auto-completing */
-  private static readonly MAX_REVIEW_ROUNDS = 3;
-  /** Max subtask nesting depth to prevent infinite task cascades */
-  private static readonly MAX_SUBTASK_DEPTH = 3;
-  /** Cooldown (ms) between agent-triggered comments on same task */
-  private static readonly COMMENT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+  // ── Circuit breaker limits derived from module settings ──
+
+  /** Max review rounds: activityLevel + 1 (Passive=2, Balanced=4, Aggressive=6) */
+  private async getMaxReviewRounds(orgId?: string): Promise<number> {
+    const config = await this.settings.getModuleConfig('tasks', orgId);
+    return config.activityLevel + 1;
+  }
+
+  /** Max subtask depth: equals autonomyLevel (Solo=1, Balanced=3, Full team=5) */
+  private async getMaxSubtaskDepth(orgId?: string): Promise<number> {
+    const config = await this.settings.getModuleConfig('tasks', orgId);
+    return config.autonomyLevel;
+  }
+
+  /** Comment cooldown: (6 - activityLevel) * 2 min (Passive=10min, Balanced=6min, Aggressive=2min) */
+  private async getCommentCooldownMs(orgId?: string): Promise<number> {
+    const config = await this.settings.getModuleConfig('tasks', orgId);
+    return (6 - config.activityLevel) * 2 * 60 * 1000;
+  }
 
   constructor(
     private prisma: PrismaService,
@@ -269,9 +282,11 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
 
     // Check subtask depth to prevent infinite task cascades
     if (task.parentTaskId) {
+      const agent = await this.prisma.agent.findUnique({ where: { id: task.assigneeId }, select: { orgId: true } });
+      const maxDepth = await this.getMaxSubtaskDepth(agent?.orgId);
       const depth = await this.getTaskDepth(task.parentTaskId);
-      if (depth >= TaskSchedulerService.MAX_SUBTASK_DEPTH) {
-        this.logger.warn(`Task "${task.title}" exceeds max subtask depth (${depth}) — skipping auto-execution`);
+      if (depth >= maxDepth) {
+        this.logger.warn(`Task "${task.title}" exceeds max subtask depth (${depth}/${maxDepth}) — skipping auto-execution`);
         await this.prisma.task.update({
           where: { id: task.id },
           data: { status: 'BLOCKED' },
@@ -281,7 +296,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
             taskId: task.id,
             authorType: 'SYSTEM',
             authorId: 'system',
-            content: `Auto-blocked: subtask depth ${depth + 1} exceeds max ${TaskSchedulerService.MAX_SUBTASK_DEPTH}. Manual intervention required.`,
+            content: `Auto-blocked: subtask depth ${depth + 1} exceeds max ${maxDepth} (autonomy level). Manual intervention required.`,
           },
         }).catch(() => {});
         return;
@@ -400,9 +415,11 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
         const meta = (task.metadata || {}) as any;
         const reviewRound = (meta.reviewRounds || 0) + 1;
 
-        // Track review rounds and auto-complete if exceeded max
-        if (reviewRound > TaskSchedulerService.MAX_REVIEW_ROUNDS) {
-          this.logger.warn(`Task "${task.title}" exceeded ${TaskSchedulerService.MAX_REVIEW_ROUNDS} review rounds — auto-completing`);
+        // Track review rounds and auto-complete if exceeded max (derived from activity level)
+        const assigneeAgent = task.assigneeId ? await this.prisma.agent.findUnique({ where: { id: task.assigneeId }, select: { orgId: true } }) : null;
+        const maxReviewRounds = await this.getMaxReviewRounds(assigneeAgent?.orgId);
+        if (reviewRound > maxReviewRounds) {
+          this.logger.warn(`Task "${task.title}" exceeded ${maxReviewRounds} review rounds (activity level) — auto-completing`);
           await this.prisma.task.update({
             where: { id: task.id },
             data: {
@@ -785,11 +802,19 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    // Cooldown: don't re-trigger same agent for same task within cooldown period
+    // Check daily budget before triggering
+    const triggerBudgetOk = await this.checkReviewBudget(agentId);
+    if (!triggerBudgetOk) {
+      this.logger.debug(`Agent ${agent.name} exceeded daily task budget, skipping trigger for "${task.title}"`);
+      return;
+    }
+
+    // Cooldown: don't re-trigger same agent for same task within cooldown period (derived from activity level)
+    const cooldownMs = await this.getCommentCooldownMs(agent.orgId);
     const cooldownKey = `${agentId}:${task.id}`;
     const lastTriggered = this.lastAgentCommentAt.get(cooldownKey) || 0;
-    if (Date.now() - lastTriggered < TaskSchedulerService.COMMENT_COOLDOWN_MS) {
-      this.logger.debug(`Agent ${agent.name} cooldown for task "${task.title}" — skipping`);
+    if (Date.now() - lastTriggered < cooldownMs) {
+      this.logger.debug(`Agent ${agent.name} cooldown (${cooldownMs / 1000}s) for task "${task.title}" — skipping`);
       return;
     }
     this.lastAgentCommentAt.set(cooldownKey, Date.now());
@@ -883,6 +908,13 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
 
     // Check if tasks module is enabled for this agent's org
     if (!(await this.settings.isModuleEnabled('tasks', agent.orgId))) return;
+
+    // Check daily budget before executing any task (not just review cycles)
+    const budgetOk = await this.checkReviewBudget(agentId);
+    if (!budgetOk) {
+      this.logger.debug(`Agent ${agent.name} exceeded daily task budget, skipping task "${task.title}"`);
+      return;
+    }
 
     this.runningAgents.add(agentId);
 
