@@ -15,6 +15,15 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly failureCounters = new Map<string, number>();
   /** Review cycle counter — triggers review every N ticks */
   private reviewTickCounter = 0;
+  /** Track last agent comment timestamp per task to prevent ping-pong */
+  private readonly lastAgentCommentAt = new Map<string, number>();
+
+  /** Max times a task can bounce between IN_PROGRESS ↔ IN_REVIEW before auto-completing */
+  private static readonly MAX_REVIEW_ROUNDS = 3;
+  /** Max subtask nesting depth to prevent infinite task cascades */
+  private static readonly MAX_SUBTASK_DEPTH = 3;
+  /** Cooldown (ms) between agent-triggered comments on same task */
+  private static readonly COMMENT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 
   constructor(
     private prisma: PrismaService,
@@ -257,11 +266,49 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   @OnEvent('task.created')
   async onTaskCreated(task: any) {
     if (task.assigneeType !== 'AGENT' || !task.assigneeId) return;
+
+    // Check subtask depth to prevent infinite task cascades
+    if (task.parentTaskId) {
+      const depth = await this.getTaskDepth(task.parentTaskId);
+      if (depth >= TaskSchedulerService.MAX_SUBTASK_DEPTH) {
+        this.logger.warn(`Task "${task.title}" exceeds max subtask depth (${depth}) — skipping auto-execution`);
+        await this.prisma.task.update({
+          where: { id: task.id },
+          data: { status: 'BLOCKED' },
+        }).catch(() => {});
+        await this.prisma.taskComment.create({
+          data: {
+            taskId: task.id,
+            authorType: 'SYSTEM',
+            authorId: 'system',
+            content: `Auto-blocked: subtask depth ${depth + 1} exceeds max ${TaskSchedulerService.MAX_SUBTASK_DEPTH}. Manual intervention required.`,
+          },
+        }).catch(() => {});
+        return;
+      }
+    }
+
     // Small delay to let the transaction complete
     setTimeout(async () => {
       // executeAgentTask already checks isModuleEnabled per-org inside
       this.executeAgentTask(task);
     }, 2000);
+  }
+
+  /** Calculate nesting depth of a task by following parentTaskId chain */
+  private async getTaskDepth(taskId: string, maxLookup = 10): Promise<number> {
+    let depth = 0;
+    let currentId: string | null = taskId;
+    while (currentId && depth < maxLookup) {
+      const parent: { parentTaskId: string | null } | null = await this.prisma.task.findUnique({
+        where: { id: currentId },
+        select: { parentTaskId: true },
+      });
+      if (!parent?.parentTaskId) break;
+      currentId = parent.parentTaskId;
+      depth++;
+    }
+    return depth;
   }
 
   /** When a comment is added to a task, trigger the assigned agent to respond */
@@ -272,6 +319,9 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
 
       // Don't trigger for system comments
       if (comment.authorType === 'SYSTEM') return;
+
+      // Don't trigger agent-to-agent ping-pong: if an agent comments, don't notify other agents
+      if (comment.authorType === 'AGENT') return;
 
       // Find the task
       const task = await this.prisma.task.findUnique({
@@ -348,6 +398,27 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
       // When executor sets IN_REVIEW, auto-assign a reviewer and trigger them
       if (task.status === 'IN_REVIEW') {
         const meta = (task.metadata || {}) as any;
+        const reviewRound = (meta.reviewRounds || 0) + 1;
+
+        // Track review rounds and auto-complete if exceeded max
+        if (reviewRound > TaskSchedulerService.MAX_REVIEW_ROUNDS) {
+          this.logger.warn(`Task "${task.title}" exceeded ${TaskSchedulerService.MAX_REVIEW_ROUNDS} review rounds — auto-completing`);
+          await this.prisma.task.update({
+            where: { id: task.id },
+            data: {
+              status: 'COMPLETED',
+              metadata: { ...meta, reviewRounds: reviewRound, autoCompleted: true, autoCompleteReason: 'max_review_rounds_exceeded' },
+            },
+          });
+          return;
+        }
+
+        // Persist the incremented review round counter
+        await this.prisma.task.update({
+          where: { id: task.id },
+          data: { metadata: { ...meta, reviewRounds: reviewRound } },
+        });
+
         let reviewerId = meta.reviewerId;
         if (!reviewerId) {
           const reviewer = await this.findReviewer(task);
@@ -713,6 +784,15 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
       this.logger.debug(`Agent ${agent.name} is busy, skipping task trigger`);
       return;
     }
+
+    // Cooldown: don't re-trigger same agent for same task within cooldown period
+    const cooldownKey = `${agentId}:${task.id}`;
+    const lastTriggered = this.lastAgentCommentAt.get(cooldownKey) || 0;
+    if (Date.now() - lastTriggered < TaskSchedulerService.COMMENT_COOLDOWN_MS) {
+      this.logger.debug(`Agent ${agent.name} cooldown for task "${task.title}" — skipping`);
+      return;
+    }
+    this.lastAgentCommentAt.set(cooldownKey, Date.now());
 
     this.runningAgents.add(agentId);
 
