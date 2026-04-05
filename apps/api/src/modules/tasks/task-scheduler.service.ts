@@ -20,21 +20,34 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
 
   // ── Circuit breaker limits derived from module settings ──
 
+  /** Get tasks module config (compatible with both old and new SettingsService) */
+  private async getTasksModuleConfig(orgId?: string): Promise<{ activityLevel: number; autonomyLevel: number }> {
+    try {
+      if (typeof (this.settings as any).getModuleConfig === 'function') {
+        return await (this.settings as any).getModuleConfig('tasks', orgId);
+      }
+      const all = await this.settings.getAllModulesConfig(orgId);
+      return (all as any)?.tasks ?? { activityLevel: 3, autonomyLevel: 3 };
+    } catch {
+      return { activityLevel: 3, autonomyLevel: 3 };
+    }
+  }
+
   /** Max review rounds: activityLevel + 1 (Passive=2, Balanced=4, Aggressive=6) */
   private async getMaxReviewRounds(orgId?: string): Promise<number> {
-    const config = await this.settings.getModuleConfig('tasks', orgId);
+    const config = await this.getTasksModuleConfig(orgId);
     return config.activityLevel + 1;
   }
 
   /** Max subtask depth: equals autonomyLevel (Solo=1, Balanced=3, Full team=5) */
   private async getMaxSubtaskDepth(orgId?: string): Promise<number> {
-    const config = await this.settings.getModuleConfig('tasks', orgId);
+    const config = await this.getTasksModuleConfig(orgId);
     return config.autonomyLevel;
   }
 
   /** Comment cooldown: (6 - activityLevel) * 2 min (Passive=10min, Balanced=6min, Aggressive=2min) */
   private async getCommentCooldownMs(orgId?: string): Promise<number> {
-    const config = await this.settings.getModuleConfig('tasks', orgId);
+    const config = await this.getTasksModuleConfig(orgId);
     return (6 - config.activityLevel) * 2 * 60 * 1000;
   }
 
