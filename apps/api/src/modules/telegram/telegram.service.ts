@@ -477,7 +477,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         participants: {
           create: [
             { participantType: 'AGENT', participantId: agentId, role: 'MEMBER' },
-            { participantType: 'SYSTEM', participantId: `tg-${chatId}`, role: 'MEMBER' },
+            { participantType: 'HUMAN', participantId: `tg-${chatId}`, role: 'MEMBER' },
           ],
         },
       },
