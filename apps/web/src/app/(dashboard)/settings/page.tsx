@@ -23,6 +23,9 @@ export default function SettingsPage() {
     default_max_tokens: '4096',
     max_concurrent_executions: '10',
     execution_timeout: '300',
+    default_hourly_budget_usd: '0.5',
+    task_review_daily_budget_usd: '5.0',
+    cross_channel_messages: '10',
   });
   const [savingPlatform, setSavingPlatform] = useState(false);
   const [platformSaved, setPlatformSaved] = useState(false);
@@ -86,6 +89,9 @@ export default function SettingsPage() {
         default_max_tokens: s.default_max_tokens || '4096',
         max_concurrent_executions: s.max_concurrent_executions || '10',
         execution_timeout: s.execution_timeout || '300',
+        default_hourly_budget_usd: s.default_hourly_budget_usd || '0.5',
+        task_review_daily_budget_usd: s.task_review_daily_budget_usd || '5.0',
+        cross_channel_messages: s.cross_channel_messages || '10',
       });
     }).catch(() => {});
     api.getN8nSettings().then((c) => {
@@ -313,6 +319,29 @@ export default function SettingsPage() {
                 <input type="number" value={platformForm.execution_timeout}
                   onChange={(e) => setPlatformForm({ ...platformForm, execution_timeout: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Hourly Budget (USD)</label>
+                  <input type="number" step="0.1" min="0" value={platformForm.default_hourly_budget_usd}
+                    onChange={(e) => setPlatformForm({ ...platformForm, default_hourly_budget_usd: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]" />
+                  <p className="text-xs text-[var(--muted)] mt-1">Default per agent per hour. 0 = no limit.</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Daily Budget (USD)</label>
+                  <input type="number" step="0.5" min="0" value={platformForm.task_review_daily_budget_usd}
+                    onChange={(e) => setPlatformForm({ ...platformForm, task_review_daily_budget_usd: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]" />
+                  <p className="text-xs text-[var(--muted)] mt-1">Default per agent per day. 0 = no limit.</p>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Agent-to-Agent Message Limit</label>
+                <input type="number" min="1" max="100" value={platformForm.cross_channel_messages}
+                  onChange={(e) => setPlatformForm({ ...platformForm, cross_channel_messages: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]" />
+                <p className="text-xs text-[var(--muted)] mt-1">Max messages agents can exchange per channel per conversation. Prevents chat loops.</p>
               </div>
             </div>
           </div>

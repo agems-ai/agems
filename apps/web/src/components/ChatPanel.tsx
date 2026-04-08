@@ -28,6 +28,8 @@ interface ChatPanelProps {
   onApprovalResolved?: () => void;
   /** Auto-create direct channel if needed */
   autoCreateChannel?: { targetType: string; targetId: string };
+  /** Read-only mode (no input, for viewer/public mode) */
+  readOnly?: boolean;
   /** External channel ID setter (for auto-create flow) */
   onChannelCreated?: (channelId: string) => void;
   /** Empty state JSX */
@@ -161,9 +163,33 @@ function ExecutionDetails({ execution }: { execution: any }) {
                       </div>
                       <div>
                         <span className="text-[10px] text-[var(--muted)] uppercase">{tc.error ? 'Error:' : 'Output:'}</span>
-                        <pre className={`text-[10px] rounded px-2 py-1 overflow-x-auto max-h-32 whitespace-pre-wrap font-mono ${tc.error ? 'bg-red-500/10 text-red-300' : 'bg-black/20'}`}>
-                          {tc.error || JSON.stringify(tc.output, null, 2)?.substring(0, 500)}
-                        </pre>
+                        {(() => {
+                          const output = tc.error || JSON.stringify(tc.output, null, 2) || '';
+                          const outputStr = typeof output === 'string' ? output : String(output);
+                          // Detect HTML content and render in sandboxed iframe
+                          if (!tc.error && outputStr.length > 200 && (outputStr.includes('<!DOCTYPE') || outputStr.includes('<!doctype') || (outputStr.includes('<html') && outputStr.includes('</html>')))) {
+                            return (
+                              <div className="mt-1">
+                                <iframe
+                                  srcDoc={typeof tc.output === 'string' ? tc.output : outputStr}
+                                  sandbox="allow-same-origin"
+                                  className="w-full h-64 rounded border border-[var(--border)] bg-white"
+                                  title="Page preview"
+                                />
+                              </div>
+                            );
+                          }
+                          // Detect base64 image
+                          if (!tc.error && typeof tc.output === 'string' && (tc.output.startsWith('data:image') || tc.output.startsWith('iVBOR') || tc.output.startsWith('/9j/'))) {
+                            const src = tc.output.startsWith('data:') ? tc.output : `data:image/png;base64,${tc.output}`;
+                            return <img src={src} alt="Screenshot" className="mt-1 rounded border border-[var(--border)] max-w-full max-h-64" />;
+                          }
+                          return (
+                            <pre className={`text-[10px] rounded px-2 py-1 overflow-x-auto max-h-32 whitespace-pre-wrap font-mono ${tc.error ? 'bg-red-500/10 text-red-300' : 'bg-black/20'}`}>
+                              {outputStr.substring(0, 500)}
+                            </pre>
+                          );
+                        })()}
                       </div>
                     </div>
                   )}
@@ -231,6 +257,7 @@ export default function ChatPanel({
   const [browserFullscreen, setBrowserFullscreen] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const socketRef = useRef<any>(null);
   const prevChannelRef = useRef('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -378,10 +405,23 @@ export default function ChatPanel({
     prevChannelRef.current = externalChannelId;
   }, [externalChannelId]);
 
-  // Auto-scroll
+  // Auto-scroll: only when user sends a message or on initial load
+  const prevMsgCountRef = useRef(0);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, agentThinking]);
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const count = messages.length;
+    if (prevMsgCountRef.current === 0 && count > 0) {
+      container.scrollTop = container.scrollHeight;
+    }
+    if (count > prevMsgCountRef.current) {
+      const lastMsg = messages[count - 1];
+      if (lastMsg?.senderType === 'HUMAN') {
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+    prevMsgCountRef.current = count;
+  }, [messages]);
 
   // Send message
   const sendMessage = useCallback(async () => {
@@ -571,14 +611,14 @@ export default function ChatPanel({
           isMe ? 'bg-[var(--accent)] text-white' : 'bg-[var(--card)] border border-[var(--border)]'
         }`}>
           {!isMe && <div className="text-xs opacity-70 mb-1">{senderInfo.name}{senderInfo.role ? <span className="ml-1 opacity-60">· {senderInfo.role}</span> : ''}</div>}
-          <div className="text-sm whitespace-pre-wrap break-words prose prose-sm prose-invert max-w-none
+          <div className={`text-sm whitespace-pre-wrap break-words prose prose-sm prose-invert max-w-none
             prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5
             prose-headings:my-2 prose-headings:font-semibold
-            prose-a:text-[var(--accent)] prose-a:underline
+            ${isMe ? 'prose-a:text-white' : 'prose-a:text-[var(--accent)]'} prose-a:underline
             prose-img:rounded-lg prose-img:max-w-[300px] prose-img:max-h-[300px]
             prose-strong:text-inherit prose-em:text-inherit
             prose-code:text-[var(--accent)] prose-code:bg-[var(--bg)] prose-code:px-1 prose-code:rounded
-            prose-pre:bg-[var(--bg)] prose-pre:rounded-lg prose-pre:p-3 prose-pre:overflow-x-auto">
+            prose-pre:bg-[var(--bg)] prose-pre:rounded-lg prose-pre:p-3 prose-pre:overflow-x-auto`}>
             <ReactMarkdown remarkPlugins={[remarkGfm]}
               components={{
                 img: ({ src, alt }) => (
@@ -588,10 +628,31 @@ export default function ChatPanel({
                 ),
                 p: ({ children }) => <p className="my-1">{children}</p>,
                 a: ({ href, children }) => (
-                  <a href={href} target="_blank" rel="noopener noreferrer" className="text-[var(--accent)] underline">{children}</a>
+                  <a href={href} target="_blank" rel="noopener noreferrer" className={isMe ? "text-white underline" : "text-[var(--accent)] underline"}>{children}</a>
                 ),
               }}
             >{msg.content || ''}</ReactMarkdown>
+            {/* URL preview: render iframe for URLs in agent messages */}
+            {!isMe && (() => {
+              const urlMatch = (msg.content || '').match(/https?:\/\/[^\s)>"]+/);
+              if (urlMatch && !urlMatch[0].includes('github.com') && !urlMatch[0].includes('agems.ai/api')) {
+                return (
+                  <div className="mt-2">
+                    <div className="text-[10px] text-[var(--muted)] mb-1 flex items-center gap-1">
+                      <span>🌐</span> <span>Preview: {urlMatch[0]}</span>
+                    </div>
+                    <iframe
+                      src={urlMatch[0]}
+                      sandbox="allow-same-origin allow-scripts"
+                      className="w-full rounded-lg border border-[var(--border)] bg-white"
+                      style={{ height: '70vh', minHeight: '400px' }}
+                      title="URL preview"
+                    />
+                  </div>
+                );
+              }
+              return null;
+            })()}
           </div>
           {msg.metadata?.execution && <ExecutionDetails execution={msg.metadata.execution} />}
           <div className="text-[10px] opacity-50 mt-1">
@@ -612,7 +673,7 @@ export default function ChatPanel({
   return (
     <div className={`flex flex-col min-h-0 ${className}`} style={height ? { height } : { flex: 1 }}>
       {/* Messages */}
-      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 flex flex-col">
+      <div ref={messagesContainerRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 flex flex-col">
         <div className="mt-auto space-y-3">
         {messages.length === 0 && emptyState ? (
           emptyState
@@ -652,6 +713,21 @@ export default function ChatPanel({
                     <div className="whitespace-pre-wrap break-all">{state.thinkingText}</div>
                   </div>
                 )}
+
+                {/* URL preview during streaming */}
+                {(() => {
+                  const text = state.streamingText || state.thinkingText || '';
+                  const urlMatch = text.match(/https?:\/\/[^\s)>"]+/);
+                  if (urlMatch && !urlMatch[0].includes('github.com') && !urlMatch[0].includes('agems.ai/api') && !urlMatch[0].includes('/api/')) {
+                    return (
+                      <div className="mb-2">
+                        <div className="text-[10px] text-[var(--muted)] mb-1 flex items-center gap-1"><span>🌐</span> <span>{urlMatch[0]}</span></div>
+                        <iframe src={urlMatch[0]} sandbox="allow-same-origin allow-scripts" className="w-full rounded-lg border border-[var(--border)] bg-white" style={{ height: '50vh', minHeight: '300px' }} title="Live preview" />
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
 
                 {/* Streaming response text */}
                 {state.streamingText ? (

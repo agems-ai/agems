@@ -158,6 +158,7 @@ export class AgentsService {
       include: { owner: { select: { id: true, name: true, email: true } } },
     });
 
+    this.events.emit('agent.updated', { id });
     this.events.emit('audit.create', {
       actorType: 'HUMAN', actorId: userId, action: 'UPDATE',
       resourceType: 'agent', resourceId: agent.id, orgId,

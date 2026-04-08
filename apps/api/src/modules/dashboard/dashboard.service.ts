@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../config/prisma.service';
 import { SettingsService } from '../settings/settings.service';
+import { decryptJson } from '../../common/crypto.util';
 
 @Injectable()
 export class DashboardService {
@@ -10,6 +11,123 @@ export class DashboardService {
     private prisma: PrismaService,
     private settings: SettingsService,
   ) {}
+
+  // ── Google platforms summary (AdSense + GSC + GA4) ──
+  // Cached in-memory for 5 minutes per org so dashboard refreshes don't hammer Google.
+  private googleSummaryCache = new Map<string, { data: any; expires: number }>();
+  private googleAccessTokenCache = new Map<string, { token: string; expires: number }>();
+
+  private async getGoogleAccessToken(orgId: string): Promise<string> {
+    const cached = this.googleAccessTokenCache.get(orgId);
+    if (cached && cached.expires > Date.now() + 60_000) return cached.token;
+    const clientId = await this.settings.get('GOOGLE_OAUTH_CLIENT_ID', orgId);
+    const clientSecret = await this.settings.get('GOOGLE_OAUTH_CLIENT_SECRET', orgId);
+    const refreshToken = await this.settings.get('GOOGLE_OAUTH_REFRESH_TOKEN', orgId);
+    if (!clientId || !clientSecret || !refreshToken) {
+      throw new Error('Google OAuth not configured');
+    }
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken, grant_type: 'refresh_token' }).toString(),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (!res.ok || !data.access_token) throw new Error(`Google token refresh: ${JSON.stringify(data).substring(0, 200)}`);
+    this.googleAccessTokenCache.set(orgId, { token: data.access_token, expires: Date.now() + ((data.expires_in || 3600) * 1000) });
+    return data.access_token;
+  }
+
+  async getGoogleSummary(orgId: string): Promise<any> {
+    const cached = this.googleSummaryCache.get(orgId);
+    if (cached && cached.expires > Date.now()) return cached.data;
+
+    const out: any = { adsense: null, ga: null, gsc: null };
+    let token: string;
+    try {
+      token = await this.getGoogleAccessToken(orgId);
+    } catch (err: any) {
+      return { error: err.message };
+    }
+    const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const today = new Date();
+    const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const sevenAgo = new Date(today); sevenAgo.setDate(sevenAgo.getDate() - 7);
+    const twoAgo = new Date(today); twoAgo.setDate(twoAgo.getDate() - 2);
+    const nineAgo = new Date(today); nineAgo.setDate(nineAgo.getDate() - 9);
+
+    // AdSense earnings last 7 days (account is auto-discovered)
+    try {
+      const accs: any = await fetch('https://adsense.googleapis.com/v2/accounts', { headers, signal: AbortSignal.timeout(20_000) }).then(r => r.json());
+      const accountName = accs?.accounts?.[0]?.name;
+      if (accountName) {
+        const sd = sevenAgo, ed = today;
+        const qs = new URLSearchParams();
+        qs.append('dateRange', 'CUSTOM');
+        qs.append('startDate.year', String(sd.getFullYear())); qs.append('startDate.month', String(sd.getMonth() + 1)); qs.append('startDate.day', String(sd.getDate()));
+        qs.append('endDate.year', String(ed.getFullYear())); qs.append('endDate.month', String(ed.getMonth() + 1)); qs.append('endDate.day', String(ed.getDate()));
+        for (const m of ['ESTIMATED_EARNINGS', 'IMPRESSIONS', 'CLICKS']) qs.append('metrics', m);
+        const rep: any = await fetch(`https://adsense.googleapis.com/v2/${accountName}/reports:generate?${qs.toString()}`, { headers, signal: AbortSignal.timeout(20_000) }).then(r => r.json());
+        const totals = rep?.totals?.cells || [];
+        out.adsense = {
+          earnings7d: parseFloat(totals[0]?.value || '0'),
+          impressions7d: parseInt(totals[1]?.value || '0', 10),
+          clicks7d: parseInt(totals[2]?.value || '0', 10),
+          currency: rep?.headers?.[0]?.currencyCode || 'USD',
+        };
+      }
+    } catch (err: any) { out.adsense = { error: err.message }; }
+
+    // GA4 realtime + sessions today
+    try {
+      const propertyIdRaw = await this.settings.get('GA4_PROPERTY_ID', orgId);
+      if (propertyIdRaw) {
+        const property = propertyIdRaw.startsWith('properties/') ? propertyIdRaw : `properties/${propertyIdRaw}`;
+        const [rt, today7d]: any = await Promise.all([
+          fetch(`https://analyticsdata.googleapis.com/v1beta/${property}:runRealtimeReport`, {
+            method: 'POST', headers, signal: AbortSignal.timeout(20_000),
+            body: JSON.stringify({ metrics: [{ name: 'activeUsers' }] }),
+          }).then(r => r.json()),
+          fetch(`https://analyticsdata.googleapis.com/v1beta/${property}:runReport`, {
+            method: 'POST', headers, signal: AbortSignal.timeout(20_000),
+            body: JSON.stringify({
+              dateRanges: [{ startDate: '7daysAgo', endDate: 'today' }],
+              metrics: [{ name: 'activeUsers' }, { name: 'sessions' }, { name: 'screenPageViews' }],
+            }),
+          }).then(r => r.json()),
+        ]);
+        out.ga = {
+          realtimeUsers: parseInt(rt?.rows?.[0]?.metricValues?.[0]?.value || '0', 10),
+          users7d: parseInt(today7d?.rows?.[0]?.metricValues?.[0]?.value || '0', 10),
+          sessions7d: parseInt(today7d?.rows?.[0]?.metricValues?.[1]?.value || '0', 10),
+          pageviews7d: parseInt(today7d?.rows?.[0]?.metricValues?.[2]?.value || '0', 10),
+        };
+      }
+    } catch (err: any) { out.ga = { error: err.message }; }
+
+    // GSC clicks + impressions last 7 days (data has ~2-day delay, so query nineAgo..twoAgo)
+    try {
+      const sites: any = await fetch('https://searchconsole.googleapis.com/webmasters/v3/sites', { headers, signal: AbortSignal.timeout(20_000) }).then(r => r.json());
+      const learnenglish = sites?.siteEntry?.find((s: any) => s.siteUrl?.includes('learnenglish.life')) || sites?.siteEntry?.[0];
+      if (learnenglish?.siteUrl) {
+        const rep: any = await fetch(`https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(learnenglish.siteUrl)}/searchAnalytics/query`, {
+          method: 'POST', headers, signal: AbortSignal.timeout(20_000),
+          body: JSON.stringify({ startDate: ymd(nineAgo), endDate: ymd(twoAgo) }),
+        }).then(r => r.json());
+        const row = rep?.rows?.[0];
+        out.gsc = {
+          siteUrl: learnenglish.siteUrl,
+          clicks7d: row?.clicks || 0,
+          impressions7d: row?.impressions || 0,
+          ctr7d: row?.ctr || 0,
+          position7d: row?.position || 0,
+        };
+      }
+    } catch (err: any) { out.gsc = { error: err.message }; }
+
+    this.googleSummaryCache.set(orgId, { data: out, expires: Date.now() + 5 * 60_000 });
+    return out;
+  }
 
   private isBlockedHostname(hostname: string): boolean {
     const normalized = hostname.toLowerCase();
@@ -150,7 +268,8 @@ export class DashboardService {
     }
 
     const config = tool.config as any;
-    const authConfig = (tool.authConfig || {}) as any;
+    const rawAuth = (tool.authConfig || {}) as any;
+    const authConfig = (rawAuth._enc ? decryptJson(rawAuth._enc) : rawAuth) as Record<string, any>;
 
     const upper = sql.trim().toUpperCase();
     if (
@@ -210,7 +329,8 @@ export class DashboardService {
     }
 
     const config = tool.config as any;
-    const authConfig = (tool.authConfig || {}) as any;
+    const rawAuth = (tool.authConfig || {}) as any;
+    const authConfig = (rawAuth._enc ? decryptJson(rawAuth._enc) : rawAuth) as Record<string, any>;
     const baseUrl = (config.url || '').replace(/\/$/, '');
 
     try {

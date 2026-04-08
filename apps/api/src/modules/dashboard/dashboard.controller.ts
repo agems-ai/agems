@@ -40,6 +40,12 @@ export class DashboardController {
     return this.dashboardService.getSystemStats(req.user.orgId);
   }
 
+  /** AdSense + GA4 + GSC summary numbers, cached 5 min per org */
+  @Get('google-summary')
+  getGoogleSummary(@Request() req: { user: RequestUser }) {
+    return this.dashboardService.getGoogleSummary(req.user.orgId);
+  }
+
   /** List all tools (DATABASE + REST_API) available for widgets */
   @Get('tools')
   getTools(@Request() req: { user: RequestUser }) {
