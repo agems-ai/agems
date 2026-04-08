@@ -1042,13 +1042,11 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
         }
       }
 
-      // Self-sufficiency fallback: if there are no agent-assigned PENDING tasks
-      // AND no agent in the org has executed anything in the last 30 minutes,
-      // wake the org's CEO to regenerate the plan. This stops the org from
-      // dying silently when planning runs dry.
-      if (pendingTasks.length === 0) {
-        await this.maybeWakePlanner();
-      }
+      // Self-sufficiency fallback: run every tick regardless of queue depth.
+      // autoWake is per-agent — even when one agent gets a PENDING task picked up,
+      // other agents may still need to be poked. The internal cooldown
+      // (autoWakeLastFiredMs + interval) prevents over-firing.
+      await this.maybeWakePlanner();
     } catch (err) {
       this.logger.error('Error picking up pending tasks', err);
     }
