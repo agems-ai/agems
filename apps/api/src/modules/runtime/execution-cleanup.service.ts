@@ -34,13 +34,16 @@ export class ExecutionCleanupService implements OnModuleInit, OnModuleDestroy {
     try {
       const now = new Date();
 
-      // 1. Stale RUNNING executions (older than 35 minutes)
-      const staleCutoff = new Date(now.getTime() - this.STALE_RUNNING_MINUTES * 60 * 1000);
+      // 1. Stale RUNNING executions.
+      //    On startup: ALL RUNNING records are zombies — the previous container died,
+      //    so anything still flagged RUNNING has no live process behind it.
+      //    On periodic: only flag executions older than STALE_RUNNING_MINUTES (35 min).
+      const where: any = { status: 'RUNNING' };
+      if (trigger === 'periodic') {
+        where.startedAt = { lt: new Date(now.getTime() - this.STALE_RUNNING_MINUTES * 60 * 1000) };
+      }
       const staleRunning = await this.prisma.agentExecution.updateMany({
-        where: {
-          status: 'RUNNING',
-          startedAt: { lt: staleCutoff },
-        },
+        where,
         data: {
           status: 'FAILED',
           error: trigger === 'startup'
