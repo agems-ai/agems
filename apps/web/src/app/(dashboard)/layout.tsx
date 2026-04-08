@@ -298,7 +298,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-auto pt-14 lg:pt-0 main-content-mobile-pad">
+      <main className="flex-1 overflow-auto pt-14 lg:pt-0 main-content-mobile-pad" style={{ overflowAnchor: 'none' as any }}>
         {children}
       </main>
 

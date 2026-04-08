@@ -104,6 +104,38 @@ return s.channels ?? 0;`,
     display: 'number',
     refreshMin: 10,
   },
+  {
+    id: 'sys-ga-realtime',
+    title: 'Live visitors',
+    code: `const g = await agems('/dashboard/google-summary');
+return g.ga?.realtimeUsers ?? 0;`,
+    display: 'number',
+    refreshMin: 1,
+  },
+  {
+    id: 'sys-ga-sessions',
+    title: 'Sessions (7d)',
+    code: `const g = await agems('/dashboard/google-summary');
+return g.ga?.sessions7d ?? 0;`,
+    display: 'number',
+    refreshMin: 5,
+  },
+  {
+    id: 'sys-adsense-earnings',
+    title: 'AdSense $ (7d)',
+    code: `const g = await agems('/dashboard/google-summary');
+return Number((g.adsense?.earnings7d ?? 0).toFixed(2));`,
+    display: 'number',
+    refreshMin: 10,
+  },
+  {
+    id: 'sys-gsc-clicks',
+    title: 'Search clicks (7d)',
+    code: `const g = await agems('/dashboard/google-summary');
+return g.gsc?.clicks7d ?? 0;`,
+    display: 'number',
+    refreshMin: 15,
+  },
 ];
 
 /* ═══════════════════════════════════════════════════════════
@@ -571,6 +603,21 @@ export default function DashboardPage() {
                         )}
                       </div>
                     );
+                  })()}
+                  {/* URL preview iframe */}
+                  {(() => {
+                    const s = liveStreams[e.id] || liveStreams[e.agentId];
+                    const allText = (s?.text || '') + ' ' + (s?.thinking || '');
+                    const urlMatch = allText.match(/https?:\/\/[^\s)>"]+/);
+                    if (urlMatch && !urlMatch[0].includes('github.com') && !urlMatch[0].includes('/api/')) {
+                      return (
+                        <div className="px-3 pb-2">
+                          <div className="text-[10px] text-[var(--muted)] mb-1 flex items-center gap-1"><span>🌐</span> <span>{urlMatch[0]}</span></div>
+                          <iframe src={urlMatch[0]} sandbox="allow-same-origin allow-scripts" className="w-full rounded-lg border border-[var(--border)] bg-white" style={{ height: '40vh', minHeight: '250px' }} title="Preview" />
+                        </div>
+                      );
+                    }
+                    return null;
                   })()}
                   {/* Browser live preview */}
                   {browserFrames[e.id] && (

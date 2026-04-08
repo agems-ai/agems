@@ -9,14 +9,28 @@ import { SettingsService } from '../settings/settings.service';
 export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TaskSchedulerService.name);
   private intervalId: NodeJS.Timeout | null = null;
-  /** Prevent concurrent execution of same agent for tasks */
-  private readonly runningAgents = new Set<string>();
+  /** Prevent concurrent execution of same agent for tasks. Map<agentId, startedAt-ms> so we can self-recover stuck flags. */
+  private readonly runningAgents = new Map<string, number>();
+  /** TTL after which a running flag is considered stuck and forcibly cleared. 5 minutes is plenty for any single execution. */
+  private readonly RUNNING_AGENT_TTL_MS = 5 * 60 * 1000;
   /** Track consecutive failures per task/agent to avoid infinite retries */
   private readonly failureCounters = new Map<string, number>();
   /** Review cycle counter — triggers review every N ticks */
   private reviewTickCounter = 0;
   /** Track last agent comment timestamp per task to prevent ping-pong */
   private readonly lastAgentCommentAt = new Map<string, number>();
+
+  /** Returns true if an agent is currently running a task. Auto-clears stale flags older than RUNNING_AGENT_TTL_MS so a stuck flag never blocks scheduling forever. */
+  private isAgentRunning(agentId: string): boolean {
+    const startedAt = this.runningAgents.get(agentId);
+    if (!startedAt) return false;
+    if (Date.now() - startedAt > this.RUNNING_AGENT_TTL_MS) {
+      this.logger.warn(`Clearing stale running flag for agent ${agentId} after ${Math.round((Date.now() - startedAt) / 1000)}s`);
+      this.runningAgents.delete(agentId);
+      return false;
+    }
+    return true;
+  }
 
   // ── Circuit breaker limits derived from module settings ──
 
@@ -142,7 +156,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   async onGoalUpdated(goal: any) {
     if (!goal.agentId) return;
     if (goal.status !== 'ACTIVE' && goal.status !== 'PLANNED') return;
-    if (this.runningAgents.has(goal.agentId)) return;
+    if (this.isAgentRunning(goal.agentId)) return;
     // Don't re-trigger if goal already has tasks (avoid duplicate planning)
     const taskCount = await this.prisma.task.count({ where: { goalId: goal.id } });
     if (taskCount > 0 && goal.status === 'PLANNED') return;
@@ -160,7 +174,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   /** Trigger agent to plan a goal — decompose into tasks */
   private async executeGoalPlanning(goal: any) {
     const agentId = goal.agentId;
-    if (this.runningAgents.has(agentId)) {
+    if (this.isAgentRunning(agentId)) {
       this.logger.debug(`Agent ${agentId} is busy, goal "${goal.title}" planning deferred`);
       return;
     }
@@ -172,7 +186,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
     if (!agent || agent.status !== 'ACTIVE') return;
     if (!(await this.settings.isModuleEnabled('tasks', agent.orgId))) return;
 
-    this.runningAgents.add(agentId);
+    this.runningAgents.set(agentId, Date.now());
 
     try {
       const channelId = await this.findOrCreateAgentChannel(agentId, agent.name, agent.orgId);
@@ -226,7 +240,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   /** Trigger agent to progress on an active goal */
   private async executeGoalProgress(goal: any) {
     const agentId = goal.agentId;
-    if (this.runningAgents.has(agentId)) return;
+    if (this.isAgentRunning(agentId)) return;
 
     const agent = await this.prisma.agent.findUnique({
       where: { id: agentId },
@@ -235,7 +249,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
     if (!agent || agent.status !== 'ACTIVE') return;
     if (!(await this.settings.isModuleEnabled('tasks', agent.orgId))) return;
 
-    this.runningAgents.add(agentId);
+    this.runningAgents.set(agentId, Date.now());
 
     try {
       const channelId = await this.findOrCreateAgentChannel(agentId, agent.name, agent.orgId);
@@ -386,7 +400,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
       }
 
       for (const agentId of agentsToNotify) {
-        if (this.runningAgents.has(agentId)) continue;
+        if (this.isAgentRunning(agentId)) continue;
 
         // Resolve comment author name
         let authorName = comment.authorId;
@@ -463,7 +477,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
         }
 
         // Trigger the reviewer agent to actually review the task
-        if (reviewerId && !this.runningAgents.has(reviewerId)) {
+        if (reviewerId && !this.isAgentRunning(reviewerId)) {
           const reviewPrompt = [
             `=== TASK READY FOR YOUR REVIEW ===`,
             `Task ID: ${task.id}`,
@@ -531,7 +545,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
 
       const batch = agentsWithWork.slice(0, batchSize);
       for (const agentId of batch) {
-        if (this.runningAgents.has(agentId)) continue;
+        if (this.isAgentRunning(agentId)) continue;
         this.executeReviewCycle(agentId).catch(err =>
           this.logger.error(`Review cycle failed for agent ${agentId}: ${err}`),
         );
@@ -612,7 +626,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    this.runningAgents.add(agentId);
+    this.runningAgents.set(agentId, Date.now());
 
     try {
       const reviewPrompt = await this.buildReviewPrompt(agentId);
@@ -743,29 +757,41 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
     ].join('\n');
   }
 
-  /** Check if agent has exceeded daily review budget */
+  /** Check if agent has exceeded hourly or daily budget */
   private async checkReviewBudget(agentId: string): Promise<boolean> {
     try {
-      const budgetStr = await this.settings.get('task_review_daily_budget_usd');
-      const budget = budgetStr ? parseFloat(budgetStr) : 1.0;
-      if (budget <= 0) return true; // No limit
+      const agent = await this.prisma.agent.findUnique({ where: { id: agentId }, select: { llmConfig: true, orgId: true } });
+      const agentConfig = (agent?.llmConfig as any) || {};
 
+      // Helper to check a budget window
+      const checkWindow = async (since: Date, agentKey: string, settingsKey: string, defaultVal: number): Promise<boolean> => {
+        let limit = agentConfig[agentKey] !== undefined && agentConfig[agentKey] !== null
+          ? parseFloat(agentConfig[agentKey]) : -1;
+        if (limit < 0) {
+          const s = await this.settings.get(settingsKey, agent?.orgId);
+          limit = s ? parseFloat(s) : defaultVal;
+        }
+        if (limit <= 0) return true; // No limit = allow
+
+        const result = await this.prisma.agentExecution.aggregate({
+          where: { agentId, startedAt: { gte: since } },
+          _sum: { costUsd: true },
+        });
+        return (result._sum.costUsd || 0) < limit;
+      };
+
+      // Hourly check
+      const hourAgo = new Date(Date.now() - 3600_000);
+      const hourlyOk = await checkWindow(hourAgo, 'hourlyBudgetUsd', 'default_hourly_budget_usd', 0);
+      if (!hourlyOk) return false;
+
+      // Daily check
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
-
-      const result = await this.prisma.agentExecution.aggregate({
-        where: {
-          agentId,
-          triggerType: 'SCHEDULE',
-          startedAt: { gte: todayStart },
-        },
-        _sum: { costUsd: true },
-      });
-
-      const spent = result._sum.costUsd || 0;
-      return spent < budget;
+      const dailyOk = await checkWindow(todayStart, 'dailyBudgetUsd', 'task_review_daily_budget_usd', 5.0);
+      return dailyOk;
     } catch {
-      return true; // On error, allow execution
+      return true;
     }
   }
 
@@ -810,7 +836,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
     // Check if tasks module is enabled for this agent's org
     if (!(await this.settings.isModuleEnabled('tasks', agent.orgId))) return;
 
-    if (this.runningAgents.has(agentId)) {
+    if (this.isAgentRunning(agentId)) {
       this.logger.debug(`Agent ${agent.name} is busy, skipping task trigger`);
       return;
     }
@@ -832,7 +858,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
     }
     this.lastAgentCommentAt.set(cooldownKey, Date.now());
 
-    this.runningAgents.add(agentId);
+    this.runningAgents.set(agentId, Date.now());
 
     try {
       const channelId = await this.findOrCreateAgentChannel(agentId, agent.name, agent.orgId);
@@ -907,7 +933,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
     const agentId = task.assigneeId;
 
     // Skip if agent is already running a task
-    if (this.runningAgents.has(agentId)) {
+    if (this.isAgentRunning(agentId)) {
       this.logger.debug(`Agent ${agentId} is busy, task "${task.title}" stays PENDING`);
       return;
     }
@@ -929,7 +955,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    this.runningAgents.add(agentId);
+    this.runningAgents.set(agentId, Date.now());
 
     try {
       // Set task to IN_PROGRESS
@@ -1008,15 +1034,90 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
       });
 
       for (const task of pendingTasks) {
-        if (!this.runningAgents.has(task.assigneeId)) {
+        if (!this.isAgentRunning(task.assigneeId)) {
           // Don't await — let tasks run concurrently for different agents
           this.executeAgentTask(task).catch(err =>
             this.logger.error(`Failed to pickup task ${task.id}: ${err}`),
           );
         }
       }
+
+      // Self-sufficiency fallback: if there are no agent-assigned PENDING tasks
+      // AND no agent in the org has executed anything in the last 30 minutes,
+      // wake the org's CEO to regenerate the plan. This stops the org from
+      // dying silently when planning runs dry.
+      if (pendingTasks.length === 0) {
+        await this.maybeWakePlanner();
+      }
     } catch (err) {
       this.logger.error('Error picking up pending tasks', err);
+    }
+  }
+
+  /** Tracks last time we auto-woke each agent, to enforce per-agent cooldown. */
+  private readonly autoWakeLastFiredMs = new Map<string, number>();
+
+  /** Iterate every agent with autoWake.enabled in their llmConfig and wake them if they've been idle long enough. The wake prompt instructs the agent to read goals, company profile, and open tasks before acting in its role. */
+  private async maybeWakePlanner() {
+    try {
+      const candidates = await this.prisma.agent.findMany({
+        where: { status: 'ACTIVE' },
+        select: { id: true, name: true, orgId: true, llmConfig: true },
+      });
+
+      for (const agent of candidates) {
+        if (!agent.orgId) continue;
+        const llmCfg = (agent.llmConfig as any) || {};
+        const autoWake = llmCfg.autoWake || {};
+        if (!autoWake.enabled) continue;
+        if (!(await this.settings.isModuleEnabled('tasks', agent.orgId))) continue;
+
+        const intervalMin = Number(autoWake.intervalMinutes) > 0 ? Number(autoWake.intervalMinutes) : 30;
+        const intervalMs = intervalMin * 60 * 1000;
+
+        // Per-agent cooldown so a single tick can't fire the same agent twice
+        const lastFired = this.autoWakeLastFiredMs.get(agent.id) || 0;
+        if (Date.now() - lastFired < intervalMs) continue;
+
+        // Only wake if the agent itself has been idle for at least intervalMs
+        const lastExec = await this.prisma.agentExecution.findFirst({
+          where: { agentId: agent.id },
+          orderBy: { startedAt: 'desc' },
+          select: { startedAt: true },
+        });
+        const idleMs = lastExec ? Date.now() - lastExec.startedAt.getTime() : Infinity;
+        if (idleMs < intervalMs) continue;
+
+        if (this.isAgentRunning(agent.id)) continue;
+
+        this.logger.warn(`Auto-waking ${agent.name} after ${Math.round(idleMs / 60000)}m idle (autoWake interval ${intervalMin}m)`);
+        this.autoWakeLastFiredMs.set(agent.id, Date.now());
+
+        const channelId = await this.findOrCreateAgentChannel(agent.id, agent.name, agent.orgId);
+        const wakePrompt = [
+          'Auto check-in. You have been idle for the last ' + Math.round(idleMs / 60000) + ' minutes and the team needs you to take stock of where things stand.',
+          '',
+          'Before doing anything else, gather context. Use these tools in order:',
+          '1) agems_goals action="list" — see what active goals exist for this org.',
+          '2) agems_company_profile action="get" — refresh on the company mission, market, voice and constraints.',
+          '3) agems_tasks action="list" — see everything currently in PENDING, IN_PROGRESS and IN_REVIEW across the team.',
+          '',
+          'Then act in your role:',
+          '- If you find a concrete next move toward an active goal that has not been planned yet, create new agent-assigned PENDING tasks (assigneeType AGENT) for the right teammates with clear deliverables.',
+          '- If you find work waiting on you (drafts to review, decisions to make, things to ship) — handle it now.',
+          '- If everything is genuinely on track and you have nothing to do, post a one-line status note in the team channel and stop.',
+          '',
+          'Hard rules: do not create HUMAN tasks. No vague tasks. Concrete deliverables only. Keep it short and useful, not a wall of planning text.',
+        ].join('\n');
+
+        this.runningAgents.set(agent.id, Date.now());
+        this.runtime
+          .execute(agent.id, wakePrompt, { type: 'SCHEDULE' }, { channelId })
+          .catch((err) => this.logger.error(`Auto-wake failed for ${agent.name}: ${err}`))
+          .finally(() => this.runningAgents.delete(agent.id));
+      }
+    } catch (err) {
+      this.logger.error(`maybeWakePlanner error: ${err}`);
     }
   }
 

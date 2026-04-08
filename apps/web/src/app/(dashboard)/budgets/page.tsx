@@ -19,7 +19,7 @@ export default function BudgetsPage() {
   const [summary, setSummary] = useState<any>(null);
   const [modalMode, setModalMode] = useState<'create' | 'edit' | null>(null);
   const [selectedBudget, setSelectedBudget] = useState<any>(null);
-  const [form, setForm] = useState({ agentId: '', monthlyLimitUsd: 100, softAlertPercent: 80, hardStopEnabled: true });
+  const [form, setForm] = useState({ agentId: '', monthlyLimitUsd: 100, dailyLimitUsd: 3, hourlyLimitUsd: 0.5, softAlertPercent: 80, hardStopEnabled: true });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [agents, setAgents] = useState<any[]>([]);
@@ -48,16 +48,21 @@ export default function BudgetsPage() {
   useEffect(() => { loadData(); }, []);
 
   const openCreate = () => {
-    setForm({ agentId: '', monthlyLimitUsd: 100, softAlertPercent: 80, hardStopEnabled: true });
+    setForm({ agentId: '', monthlyLimitUsd: 100, dailyLimitUsd: 3, hourlyLimitUsd: 0.5, softAlertPercent: 80, hardStopEnabled: true });
     setSelectedBudget(null);
     setError('');
     setModalMode('create');
   };
 
   const openEdit = (budget: any) => {
+    // Get daily/hourly from agent's llmConfig
+    const agent = agentMap.get(budget.agentId);
+    const lc = (agent?.llmConfig || {}) as any;
     setForm({
       agentId: budget.agentId,
       monthlyLimitUsd: budget.monthlyLimitUsd,
+      dailyLimitUsd: lc.dailyBudgetUsd ?? 3,
+      hourlyLimitUsd: lc.hourlyBudgetUsd ?? 0.5,
       softAlertPercent: budget.softAlertPercent ?? 80,
       hardStopEnabled: budget.hardStopEnabled ?? true,
     });
@@ -72,10 +77,24 @@ export default function BudgetsPage() {
     setSaving(true);
     setError('');
     try {
+      const budgetPayload = {
+        agentId: form.agentId,
+        monthlyLimitUsd: form.monthlyLimitUsd,
+        softAlertPercent: form.softAlertPercent,
+        hardStopEnabled: form.hardStopEnabled,
+      };
       if (modalMode === 'create') {
-        await api.createBudget(form);
+        await api.createBudget(budgetPayload);
       } else if (modalMode === 'edit' && selectedBudget) {
-        await api.updateBudget(selectedBudget.id, form);
+        await api.updateBudget(selectedBudget.id, budgetPayload);
+      }
+      // Save daily/hourly limits to agent's llmConfig
+      if (form.agentId) {
+        try {
+          const agentData = await api.getAgent(form.agentId);
+          const llmConfig = { ...(agentData.llmConfig || {}), dailyBudgetUsd: form.dailyLimitUsd, hourlyBudgetUsd: form.hourlyLimitUsd };
+          await api.updateAgent(form.agentId, { llmConfig });
+        } catch { /* silent */ }
       }
       setModalMode(null);
       loadData();
@@ -175,8 +194,8 @@ export default function BudgetsPage() {
         <div className="space-y-3">
           {/* Table Header */}
           <div className="hidden md:grid grid-cols-12 gap-4 px-5 py-2 text-xs text-[var(--muted)] uppercase tracking-wide">
-            <div className="col-span-3">Agent</div>
-            <div className="col-span-2">Monthly Limit</div>
+            <div className="col-span-2">Agent</div>
+            <div className="col-span-3">Limits (hr / day / mo)</div>
             <div className="col-span-3">Current Spend</div>
             <div className="col-span-2">Alerts</div>
             <div className="col-span-2 text-right">Actions</div>
@@ -192,7 +211,7 @@ export default function BudgetsPage() {
                 <div className="bg-[var(--card)] hover:bg-[var(--card-hover)] border border-[var(--border)] rounded-xl p-5 transition-colors">
                   <div className="md:grid md:grid-cols-12 md:gap-4 md:items-center space-y-3 md:space-y-0">
                     {/* Agent */}
-                    <div className="col-span-3">
+                    <div className="col-span-2">
                       <p className="font-semibold">{agentName}</p>
                       {budget.periodStart && (
                         <p className="text-xs text-[var(--muted)]">
@@ -201,10 +220,26 @@ export default function BudgetsPage() {
                       )}
                     </div>
 
-                    {/* Monthly Limit */}
-                    <div className="col-span-2">
-                      <p className="font-medium">{formatUsd(budget.monthlyLimitUsd)}</p>
-                      <p className="text-xs text-[var(--muted)]">per month</p>
+                    {/* Limits: hourly / daily / monthly */}
+                    <div className="col-span-3">
+                      {(() => {
+                        const lc = (agent?.llmConfig || {}) as any;
+                        const h = lc.hourlyBudgetUsd;
+                        const d = lc.dailyBudgetUsd;
+                        return (
+                          <div className="flex items-center gap-2 text-sm">
+                            <span className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 text-xs font-mono" title="Hourly">
+                              {h ? `$${h}/h` : '—'}
+                            </span>
+                            <span className="px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 text-xs font-mono" title="Daily">
+                              {d ? `$${d}/d` : '—'}
+                            </span>
+                            <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-xs font-mono" title="Monthly">
+                              {formatUsd(budget.monthlyLimitUsd)}/mo
+                            </span>
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {/* Spend + Progress */}
@@ -345,19 +380,46 @@ export default function BudgetsPage() {
                 </select>
               </div>
 
-              {/* Monthly Limit */}
-              <div>
-                <label className="block text-sm font-medium mb-1">Monthly Limit (USD)</label>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={form.monthlyLimitUsd}
-                  onChange={(e) => setForm({ ...form, monthlyLimitUsd: parseFloat(e.target.value) || 0 })}
-                  className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
-                  placeholder="100"
-                />
+              {/* Spending Limits */}
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-medium mb-1 text-[var(--muted)]">Hourly (USD)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value={form.hourlyLimitUsd}
+                    onChange={(e) => setForm({ ...form, hourlyLimitUsd: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
+                    placeholder="0.50"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1 text-[var(--muted)]">Daily (USD)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    value={form.dailyLimitUsd}
+                    onChange={(e) => setForm({ ...form, dailyLimitUsd: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
+                    placeholder="3.00"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1 text-[var(--muted)]">Monthly (USD)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={form.monthlyLimitUsd}
+                    onChange={(e) => setForm({ ...form, monthlyLimitUsd: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
+                    placeholder="100"
+                  />
+                </div>
               </div>
+              <p className="text-xs text-[var(--muted)] -mt-2">Hourly and daily limits prevent overspending in short bursts. 0 = no limit.</p>
 
               {/* Soft Alert Percent */}
               <div>

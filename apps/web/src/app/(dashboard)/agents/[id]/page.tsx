@@ -194,8 +194,17 @@ export default function AgentDetailPage() {
       temperature: lc.temperature ?? 0.7,
       maxTokens: lc.maxTokens ?? 4096,
       thinkingBudget: lc.thinkingBudget ?? 4000,
+      hourlyBudgetUsd: lc.hourlyBudgetUsd ?? '',
+      dailyBudgetUsd: lc.dailyBudgetUsd ?? '',
+      executionTimeout: lc.executionTimeout ?? '',
+      maxMessages: lc.maxMessages ?? '',
       apiFormat: lc.apiFormat || '',
       baseUrl: lc.baseUrl || '',
+      autoWakeEnabled: lc.autoWake?.enabled ?? false,
+      autoWakeIntervalMinutes: lc.autoWake?.intervalMinutes ?? 30,
+      maxIterations: rc.maxIterations ?? '',
+      memoryKnowledgeLimit: rc.memoryKnowledgeLimit ?? '',
+      memoryConversationLimit: rc.memoryConversationLimit ?? '',
       mcpServers: Array.isArray(rc.mcpServers) ? rc.mcpServers : [],
     });
     setSaveError('');
@@ -206,19 +215,33 @@ export default function AgentDetailPage() {
     setSaving(true);
     setSaveError('');
     try {
-      const { values: valuesStr, temperature, maxTokens, thinkingBudget, apiFormat, baseUrl, mcpServers: mcpRaw, ...rest } = editForm;
+      const { values: valuesStr, temperature, maxTokens, thinkingBudget, hourlyBudgetUsd, dailyBudgetUsd, executionTimeout, maxMessages, apiFormat, baseUrl, autoWakeEnabled, autoWakeIntervalMinutes, maxIterations, memoryKnowledgeLimit, memoryConversationLimit, mcpServers: mcpRaw, ...rest } = editForm;
       const values = valuesStr ? valuesStr.split(',').map((v: string) => v.trim()).filter(Boolean) : [];
       const llmConfig: Record<string, any> = {
         temperature: parseFloat(temperature) || 0.7,
         maxTokens: parseInt(maxTokens) || 4096,
         thinkingBudget: parseInt(thinkingBudget) || 4000,
       };
+      if (hourlyBudgetUsd) llmConfig.hourlyBudgetUsd = parseFloat(hourlyBudgetUsd);
+      if (dailyBudgetUsd) llmConfig.dailyBudgetUsd = parseFloat(dailyBudgetUsd);
+      if (executionTimeout) llmConfig.executionTimeout = parseInt(executionTimeout);
+      if (maxMessages) llmConfig.maxMessages = parseInt(maxMessages);
       if (apiFormat) llmConfig.apiFormat = apiFormat;
       if (baseUrl) llmConfig.baseUrl = baseUrl;
-      // Merge MCP servers into existing runtimeConfig
+      llmConfig.autoWake = {
+        enabled: !!autoWakeEnabled,
+        intervalMinutes: parseInt(autoWakeIntervalMinutes) || 30,
+      };
+      // Merge MCP servers + runtime limits into existing runtimeConfig
       const existingRc = (agent.runtimeConfig as any) || {};
       const mcpServers = Array.isArray(mcpRaw) ? mcpRaw.filter((s: any) => s.name && s.url) : [];
-      const runtimeConfig = { ...existingRc, mcpServers };
+      const runtimeConfig: Record<string, any> = { ...existingRc, mcpServers };
+      const mi = parseInt(maxIterations);
+      if (Number.isFinite(mi) && mi > 0) runtimeConfig.maxIterations = mi; else delete runtimeConfig.maxIterations;
+      const mkl = parseInt(memoryKnowledgeLimit);
+      if (Number.isFinite(mkl) && mkl >= 0) runtimeConfig.memoryKnowledgeLimit = mkl; else delete runtimeConfig.memoryKnowledgeLimit;
+      const mcl = parseInt(memoryConversationLimit);
+      if (Number.isFinite(mcl) && mcl >= 0) runtimeConfig.memoryConversationLimit = mcl; else delete runtimeConfig.memoryConversationLimit;
       await api.updateAgent(agent.id, { ...rest, values, llmConfig, runtimeConfig });
       setEditing(false);
       loadAgent();
@@ -479,6 +502,30 @@ export default function AgentDetailPage() {
           <InfoRow label="Max Tokens" value={(agent.llmConfig as any)?.maxTokens ?? 4096} />
           {['ANTHROPIC', 'GOOGLE'].includes(agent.llmProvider) && (
             <InfoRow label="Thinking Budget" value={(agent.llmConfig as any)?.thinkingBudget ?? 4000} />
+          )}
+          {(agent.llmConfig as any)?.hourlyBudgetUsd && (
+            <InfoRow label="Hourly Budget" value={`$${(agent.llmConfig as any).hourlyBudgetUsd}/hr`} />
+          )}
+          {(agent.llmConfig as any)?.autoWake?.enabled && (
+            <InfoRow label="Auto-wake" value={`every ${(agent.llmConfig as any).autoWake.intervalMinutes ?? 30} min idle`} />
+          )}
+          {(agent.runtimeConfig as any)?.maxIterations != null && (
+            <InfoRow label="Max Iterations" value={(agent.runtimeConfig as any).maxIterations} />
+          )}
+          {(agent.runtimeConfig as any)?.memoryKnowledgeLimit != null && (
+            <InfoRow label="Memory: Knowledge" value={(agent.runtimeConfig as any).memoryKnowledgeLimit} />
+          )}
+          {(agent.runtimeConfig as any)?.memoryConversationLimit != null && (
+            <InfoRow label="Memory: Conversations" value={(agent.runtimeConfig as any).memoryConversationLimit} />
+          )}
+          {(agent.llmConfig as any)?.dailyBudgetUsd && (
+            <InfoRow label="Daily Budget" value={`$${(agent.llmConfig as any).dailyBudgetUsd}/day`} />
+          )}
+          {(agent.llmConfig as any)?.executionTimeout && (
+            <InfoRow label="Timeout" value={`${(agent.llmConfig as any).executionTimeout}s`} />
+          )}
+          {(agent.llmConfig as any)?.maxMessages && (
+            <InfoRow label="Max Messages" value={(agent.llmConfig as any).maxMessages} />
           )}
           <InfoRow label="Type" value={agent.type} />
           <InfoRow label="Owner" value={agent.owner?.name || agent.ownerId} />
@@ -1041,6 +1088,119 @@ export default function AgentDetailPage() {
                     <p className="text-[10px] text-[var(--muted)] mt-1">Internal reasoning tokens. 0 = off</p>
                   </div>
                 )}
+                <div>
+                  <label className="block text-xs font-medium mb-1 text-[var(--muted)]">Daily Budget (USD)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    value={editForm.dailyBudgetUsd ?? ''}
+                    onChange={(e) => setEditForm({ ...editForm, dailyBudgetUsd: e.target.value })}
+                    placeholder="Use default"
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
+                  />
+                  <p className="text-[10px] text-[var(--muted)] mt-1">Override daily limit. Empty = default.</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1 text-[var(--muted)]">Hourly Budget (USD)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    value={editForm.hourlyBudgetUsd ?? ''}
+                    onChange={(e) => setEditForm({ ...editForm, hourlyBudgetUsd: e.target.value })}
+                    placeholder="Use default"
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
+                  />
+                  <p className="text-[10px] text-[var(--muted)] mt-1">Override hourly limit. Empty = default.</p>
+                </div>
+                <div>
+                  <label className="flex items-center gap-2 text-xs font-medium mb-1 text-[var(--muted)]">
+                    <input
+                      type="checkbox"
+                      checked={!!editForm.autoWakeEnabled}
+                      onChange={(e) => setEditForm({ ...editForm, autoWakeEnabled: e.target.checked })}
+                    />
+                    Auto-wake when idle
+                  </label>
+                  <input
+                    type="number"
+                    step="5"
+                    min="5"
+                    max="1440"
+                    value={editForm.autoWakeIntervalMinutes ?? 30}
+                    onChange={(e) => setEditForm({ ...editForm, autoWakeIntervalMinutes: e.target.value })}
+                    disabled={!editForm.autoWakeEnabled}
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm disabled:opacity-50"
+                  />
+                  <p className="text-[10px] text-[var(--muted)] mt-1">Interval in minutes. After this much idle time the agent self-checks goals, company profile and open tasks, then plans new work.</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1 text-[var(--muted)]">Max Iterations / execution</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="200"
+                    value={editForm.maxIterations ?? ''}
+                    onChange={(e) => setEditForm({ ...editForm, maxIterations: e.target.value })}
+                    placeholder="Default 40"
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
+                  />
+                  <p className="text-[10px] text-[var(--muted)] mt-1">Cap on tool-call iterations per execution. Lower = cheaper, less risk of loops. Empty = system default (40).</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1 text-[var(--muted)]">Memory: Knowledge entries injected</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={editForm.memoryKnowledgeLimit ?? ''}
+                    onChange={(e) => setEditForm({ ...editForm, memoryKnowledgeLimit: e.target.value })}
+                    placeholder="Default 10"
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
+                  />
+                  <p className="text-[10px] text-[var(--muted)] mt-1">How many KNOWLEDGE memories to inject into the system prompt every execution. Lower = cheaper. 0 disables. Empty = system default (10). Sorted LRU by last read.</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1 text-[var(--muted)]">Memory: Conversation entries injected</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="50"
+                    value={editForm.memoryConversationLimit ?? ''}
+                    onChange={(e) => setEditForm({ ...editForm, memoryConversationLimit: e.target.value })}
+                    placeholder="Default 5"
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
+                  />
+                  <p className="text-[10px] text-[var(--muted)] mt-1">How many cross-channel CONVERSATION summaries to inject. Lower = cheaper. 0 disables. Empty = system default (5).</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1 text-[var(--muted)]">Timeout (seconds)</label>
+                  <input
+                    type="number"
+                    step="30"
+                    min="30"
+                    max="600"
+                    value={editForm.executionTimeout ?? ''}
+                    onChange={(e) => setEditForm({ ...editForm, executionTimeout: e.target.value })}
+                    placeholder="Use default"
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
+                  />
+                  <p className="text-[10px] text-[var(--muted)] mt-1">Max execution time. Empty = platform default.</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1 text-[var(--muted)]">Max Messages</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={editForm.maxMessages ?? ''}
+                    onChange={(e) => setEditForm({ ...editForm, maxMessages: e.target.value })}
+                    placeholder="Use default"
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
+                  />
+                  <p className="text-[10px] text-[var(--muted)] mt-1">Max agent-to-agent messages per channel. Empty = platform default.</p>
+                </div>
               </div>
 
               {/* MCP Servers */}

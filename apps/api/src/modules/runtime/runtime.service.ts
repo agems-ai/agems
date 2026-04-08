@@ -31,6 +31,48 @@ export class RuntimeService {
   private readonly EXECUTION_STOP_TTL_SECONDS = 10 * 60; // 10 minutes
   private readonly STOP_POLL_INTERVAL_MS = 1000;
 
+  /** In-memory cache of buildSystemPrompt() result, keyed by agentId. TTL configurable via setting `system_prompt_cache_seconds` (default 60s). */
+  private readonly systemPromptCache = new Map<string, { prompt: string; ts: number }>();
+  private readonly DEFAULT_SYSTEM_PROMPT_CACHE_MS = 60_000;
+  private readonly DEFAULT_MEMORY_KNOWLEDGE_LIMIT = 10;
+  private readonly DEFAULT_MEMORY_CONVERSATION_LIMIT = 5;
+  private readonly DEFAULT_MAX_ITERATIONS = 40;
+
+  private invalidateSystemPromptCache(agentId: string) {
+    this.systemPromptCache.delete(agentId);
+  }
+
+  @OnEvent('agent.updated')
+  onAgentUpdated(payload: { id: string }) {
+    if (payload?.id) this.invalidateSystemPromptCache(payload.id);
+  }
+
+  /** Read a numeric setting (system-wide), falling back to default. */
+  private async getNumericSetting(key: string, fallback: number): Promise<number> {
+    try {
+      const raw = await this.settings.get(key);
+      const parsed = parseInt(String(raw ?? ''), 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    } catch {}
+    return fallback;
+  }
+
+  /** Resolve a numeric runtime limit: agent.runtimeConfig override → system setting → default. */
+  private async resolveRuntimeLimit(
+    runtimeConfig: Record<string, unknown>,
+    field: string,
+    settingKey: string,
+    fallback: number,
+  ): Promise<number> {
+    const fromAgent = runtimeConfig[field];
+    if (typeof fromAgent === 'number' && Number.isFinite(fromAgent) && fromAgent > 0) return fromAgent;
+    if (typeof fromAgent === 'string') {
+      const parsed = parseInt(fromAgent, 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    return this.getNumericSetting(settingKey, fallback);
+  }
+
   private hasHostAccessEnabled(runtimeConfig: Record<string, unknown>) {
     return runtimeConfig.allowHostAccess === true;
   }
@@ -119,8 +161,19 @@ export class RuntimeService {
     }
   }
 
-  private readonly MAX_AGENT_EXCHANGES = 4; // max agent-to-agent rounds per channel per window
-  private readonly AGENT_EXCHANGE_WINDOW_MS = 5 * 60 * 1000; // 5 minute window
+  /** Default max agent-to-agent rounds per channel per window if no setting is set. */
+  private readonly DEFAULT_MAX_AGENT_EXCHANGES = 6;
+  private readonly AGENT_EXCHANGE_WINDOW_MS = 10 * 60 * 1000; // 10 minute window (extended to reduce chatter density)
+
+  /** Read MAX_AGENT_EXCHANGES from settings (key: max_agent_exchanges_per_window). Falls back to default if missing/invalid. */
+  private async getMaxAgentExchanges(): Promise<number> {
+    try {
+      const raw = await this.settings.get('max_agent_exchanges_per_window');
+      const parsed = parseInt(String(raw ?? ''), 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    } catch {}
+    return this.DEFAULT_MAX_AGENT_EXCHANGES;
+  }
 
   /** When a message arrives, trigger agent responses */
   @OnEvent('message.new')
@@ -134,7 +187,8 @@ export class RuntimeService {
     if (message.senderType === 'AGENT') {
       const exchKey = `a2a:${channelId}`;
       const count = await this.redisLock.incrementWithTtl(exchKey, this.AGENT_EXCHANGE_WINDOW_MS);
-      if (count > this.MAX_AGENT_EXCHANGES) {
+      const maxExchanges = await this.getMaxAgentExchanges();
+      if (count > maxExchanges) {
         this.logger.debug(`Agent-to-agent limit reached in channel ${channelId}, skipping`);
         return;
       }
@@ -182,7 +236,7 @@ export class RuntimeService {
       // Sequential dialogue: each agent sees previous agents' replies
       // For agent-to-agent: only 1 round to prevent loops
       // For human messages: 2 rounds so agents can react to each other
-      const maxRounds = message.senderType === 'AGENT' ? 1 : (agents.length > 1 ? 2 : 1);
+      const maxRounds = 1; // always 1 round — prevents circular agent-to-agent discussions
 
       for (let round = 0; round < maxRounds; round++) {
         for (const agent of agents) {
@@ -974,6 +1028,59 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
         return { text: noKeyMessage, toolCalls: [], tokensUsed: 0, costUsd: 0, waitingForApproval: false, thinking: [] as string[], iterations: 0, loopDetected: false, executionId: execution.id };
       }
 
+      // Check budget limits before execution (hourly + daily)
+      const agentLlmConfig = (agent.llmConfig as any) || {};
+      const settingsService = this.settings;
+
+      // Helper: check spend against limit
+      const checkBudgetLimit = async (since: Date, limitValue: number | null, defaultKey: string, label: string): Promise<string | null> => {
+        let limit = limitValue;
+        if (limit === null || limit === undefined) {
+          const defaultVal = await settingsService.get(defaultKey, agent.orgId);
+          limit = defaultVal ? parseFloat(defaultVal) : 0;
+        }
+        if (!limit || limit <= 0) return null;
+
+        const spent = await this.prisma.agentExecution.aggregate({
+          where: { agentId, startedAt: { gte: since } },
+          _sum: { costUsd: true },
+        });
+        const totalSpent = spent._sum.costUsd || 0;
+        if (totalSpent >= limit) {
+          return `${label} budget limit reached ($${totalSpent.toFixed(2)}/$${limit}).`;
+        }
+        return null;
+      };
+
+      // Hourly check
+      const hourAgo = new Date(Date.now() - 3600_000);
+      const hourlyBlock = await checkBudgetLimit(
+        hourAgo,
+        agentLlmConfig.hourlyBudgetUsd ?? null,
+        'default_hourly_budget_usd',
+        'Hourly',
+      );
+
+      // Daily check
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const dailyBlock = await checkBudgetLimit(
+        todayStart,
+        agentLlmConfig.dailyBudgetUsd ?? null,
+        'task_review_daily_budget_usd',
+        'Daily',
+      );
+
+      const budgetBlock = hourlyBlock || dailyBlock;
+      if (budgetBlock) {
+        this.logger.warn(`Agent ${agent.name}: ${budgetBlock}`);
+        await this.prisma.agentExecution.update({
+          where: { id: execution.id },
+          data: { status: 'COMPLETED', output: { text: budgetBlock }, endedAt: new Date() },
+        });
+        return { text: budgetBlock, toolCalls: [], tokensUsed: 0, costUsd: 0, waitingForApproval: false, thinking: [] as string[], iterations: 0, loopDetected: false, executionId: execution.id };
+      }
+
       this.logger.log(`Agent ${agent.name}: ${wrappedTools.length} tools, provider=${agent.llmProvider}, model=${agent.llmModel}`);
 
       // Emit execution start for real-time UI
@@ -1061,13 +1168,16 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       // Collect MCP servers from runtimeConfig + MCP_SERVER tools
       const mcpServers = await this.collectMcpServers(agent.id, runtimeConfig);
 
-      // Browser session is started lazily — only when agent actually calls a browser tool.
-      // Store context so we can start it on-demand in the tool call handler.
-      const hasBrowserTools = this.detectBrowserTools(liveTools, mcpServers);
+      // Browser screencast: disabled by default to save resources.
+      // Agents use playwright tools directly — screenshots are returned inline.
+      // Screencast only starts if agent has non-MCP browser tools (rare).
+      const hasBrowserTools = this.detectBrowserTools(liveTools, []);  // exclude MCP from detection
       if (hasBrowserTools) {
+      } else if (hasBrowserTools) {
         this.pendingBrowserSessions.set(execution.id, { agentId, agentName: agent.name, channelId: context?.channelId });
       }
 
+      const resolvedMaxIterations = await this.resolveRuntimeLimit(runtimeConfig, 'maxIterations', 'default_max_iterations', this.DEFAULT_MAX_ITERATIONS);
       const runner = new AgentRunner({
         provider: {
           provider: agent.llmProvider as any,
@@ -1078,7 +1188,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
         },
         systemPrompt: await this.buildSystemPrompt(agent),
         tools: liveTools,
-        maxIterations: (runtimeConfig.maxIterations as number) ?? 150,
+        maxIterations: resolvedMaxIterations,
         maxTokens: (llmConfig.maxTokens as number) ?? 4096,
         temperature: (llmConfig.temperature as number) ?? 0.7,
         thinkingBudget: (llmConfig.thinkingBudget as number) ?? 4000,
@@ -1418,9 +1528,23 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
     });
   }
 
-  /** Build full system prompt: AGEMS preamble + module directives + company context + skill names + agent's own system prompt */
+  /** Build full system prompt: AGEMS preamble + module directives + company context + skill names + agent's own system prompt.
+   *  Cached per agent for `system_prompt_cache_seconds` (default 60s) to avoid 4 DB queries on every execute. */
   private async buildSystemPrompt(agent: any): Promise<string> {
+    // Cache lookup
+    const cacheTtlMs = (await this.getNumericSetting('system_prompt_cache_seconds', 60)) * 1000;
+    if (cacheTtlMs > 0) {
+      const hit = this.systemPromptCache.get(agent.id);
+      if (hit && (Date.now() - hit.ts) < cacheTtlMs) {
+        return hit.prompt;
+      }
+    }
+
     const orgId = agent.orgId;
+    const runtimeConfig = (agent.runtimeConfig as Record<string, unknown>) ?? {};
+    const knowledgeLimit = await this.resolveRuntimeLimit(runtimeConfig, 'memoryKnowledgeLimit', 'memory_knowledge_limit', this.DEFAULT_MEMORY_KNOWLEDGE_LIMIT);
+    const conversationLimit = await this.resolveRuntimeLimit(runtimeConfig, 'memoryConversationLimit', 'memory_conversation_limit', this.DEFAULT_MEMORY_CONVERSATION_LIMIT);
+
     const [agemsPreamble, companyContext, modulesDirective] = await Promise.all([
       this.settings.getAgemsPreamble(orgId),
       this.settings.getCompanyContext(orgId),
@@ -1438,28 +1562,32 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       }
     }
 
-    // Inject persistent KNOWLEDGE memories into prompt
+    // Inject persistent KNOWLEDGE memories into prompt — sorted by updatedAt (LRU touch on read)
     let memoryContext = '';
     try {
-      const memories = await this.prisma.agentMemory.findMany({
-        where: { agentId: agent.id, type: 'KNOWLEDGE' },
-        orderBy: { createdAt: 'desc' },
-        take: 30,
-      });
-      if (memories.length > 0) {
-        const entries = memories.map(m => `- ${m.content}`).join('\n');
-        memoryContext = `\n=== YOUR PERSISTENT MEMORY ===\nThese are facts you saved from previous conversations. Use memory_write to add new knowledge, memory_delete to remove outdated entries.\n${entries}\n=== END MEMORY ===\n\n`;
+      if (knowledgeLimit > 0) {
+        const memories = await this.prisma.agentMemory.findMany({
+          where: { agentId: agent.id, type: 'KNOWLEDGE' },
+          orderBy: { createdAt: 'desc' },
+          take: knowledgeLimit,
+        });
+        if (memories.length > 0) {
+          const entries = memories.map(m => `- ${m.content}`).join('\n');
+          memoryContext = `\n=== YOUR PERSISTENT MEMORY ===\nThese are facts you saved from previous conversations. Use memory_write to add new knowledge, memory_delete to remove outdated entries.\n${entries}\n=== END MEMORY ===\n\n`;
+        }
       }
 
-      // Inject CONVERSATION summaries (cross-channel awareness)
-      const conversations = await this.prisma.agentMemory.findMany({
-        where: { agentId: agent.id, type: 'CONVERSATION' },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-      });
-      if (conversations.length > 0) {
-        const entries = conversations.map(m => `- ${m.content}`).join('\n');
-        memoryContext += `=== RECENT CONVERSATIONS (cross-channel) ===\nThese are your recent interactions across all channels. You DID have these conversations — do not deny them.\n${entries}\n=== END RECENT CONVERSATIONS ===\n\n`;
+      // Inject CONVERSATION summaries (cross-channel awareness) — sorted by updatedAt
+      if (conversationLimit > 0) {
+        const conversations = await this.prisma.agentMemory.findMany({
+          where: { agentId: agent.id, type: 'CONVERSATION' },
+          orderBy: { createdAt: 'desc' },
+          take: conversationLimit,
+        });
+        if (conversations.length > 0) {
+          const entries = conversations.map(m => `- ${m.content}`).join('\n');
+          memoryContext += `=== RECENT CONVERSATIONS (cross-channel) ===\nThese are your recent interactions across all channels. You DID have these conversations — do not deny them.\n${entries}\n=== END RECENT CONVERSATIONS ===\n\n`;
+        }
       }
     } catch { /* memory table might not exist yet */ }
 
@@ -1480,7 +1608,12 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       }
     } catch { /* goals table might not exist yet */ }
 
-    return agemsPreamble + '\n' + modulesDirective + '\n\n' + companyContext + skillsContext + memoryContext + goalsContext + (agent.systemPrompt || '');
+    const prompt = agemsPreamble + '\n' + modulesDirective + '\n\n' + companyContext + skillsContext + memoryContext + goalsContext + (agent.systemPrompt || '');
+
+    if (cacheTtlMs > 0) {
+      this.systemPromptCache.set(agent.id, { prompt, ts: Date.now() });
+    }
+    return prompt;
   }
 
   private async buildTools(agent: any, context?: { channelId?: string }) {
@@ -1655,6 +1788,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
               metadata: params.metadata ? JSON.parse(params.metadata) : undefined,
             },
           });
+          this.invalidateSystemPromptCache(agentId);
           return { success: true, id: mem.id, type: mem.type };
         },
       });
@@ -1668,6 +1802,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
         execute: async (params: { id: string }) => {
           try {
             await this.prisma.agentMemory.delete({ where: { id: params.id } });
+            this.invalidateSystemPromptCache(agentId);
             return { success: true };
           } catch {
             return { error: 'Memory entry not found' };
@@ -3479,6 +3614,555 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
       },
     });
 
+    // ── Meta page image upload (profile, cover, post photo) ──
+    // Wraps the full Facebook Page image upload flow that the generic REST_API
+    // tool can not do (multipart, page access token swap, set-cover round trip).
+    // Reads the System User token from the Meta Ads API tool's authConfig.
+    tools.push({
+      name: 'meta_upload_page_image',
+      description: 'Publish or upload an image to a Facebook Page or an Instagram Business account. Pass either a server upload path like /uploads/abc.jpg or a full https URL. Handles multipart upload, page-token resolution, and the Instagram container+publish dance automatically. CRITICAL: for Instagram posts the image MUST be at a public https URL that Meta can fetch — paths under /uploads/ on this server qualify. For Instagram you pass the linked Facebook Page id (NOT the IG user id) as fbPageId, and the tool will look up the connected IG account itself.',
+      parameters: z.object({
+        pageId: z.string().describe('Facebook Page id, e.g. 975102925697410. For Instagram posts pass the linked FB Page id, the tool resolves the IG account from it.'),
+        imagePathOrUrl: z.string().describe('Either a path under /uploads/ (e.g. /uploads/abc.jpg) or a full https:// URL Meta can fetch'),
+        kind: z.enum(['profile', 'cover', 'feed_photo', 'instagram_post']).describe('What to do. profile = FB page picture, cover = FB page cover photo, feed_photo = FB standalone photo post, instagram_post = publish a feed post on the linked Instagram Business account.'),
+        caption: z.string().optional().describe('Caption for feed_photo or instagram_post'),
+      }),
+      execute: async (params: { pageId: string; imagePathOrUrl: string; kind: 'profile' | 'cover' | 'feed_photo' | 'instagram_post'; caption?: string }) => {
+        try {
+          // 1. Pull System User token from the agent's Meta Ads API tool
+          const metaTool = await this.prisma.agentTool.findFirst({
+            where: { agentId: agent.id, enabled: true, tool: { name: { contains: 'Meta', mode: 'insensitive' } } },
+            include: { tool: { select: { authConfig: true } } },
+          });
+          if (!metaTool?.tool?.authConfig) {
+            return { error: 'No Meta Ads API tool attached to this agent.' };
+          }
+          const rawAuth = metaTool.tool.authConfig as any;
+          const authCfg = (rawAuth._enc ? decryptJson(rawAuth._enc) : rawAuth) as any;
+          const suToken = authCfg.token || authCfg.apiKey || authCfg.bearerToken;
+          if (!suToken) {
+            return { error: 'Meta Ads API tool has no token configured.' };
+          }
+
+          // 2. Resolve page access token via me/accounts
+          const accountsRes = await fetch(`https://graph.facebook.com/v21.0/me/accounts?access_token=${encodeURIComponent(suToken)}`);
+          const accountsData: any = await accountsRes.json();
+          if (!accountsRes.ok || !accountsData.data) {
+            return { error: 'me/accounts failed', details: accountsData };
+          }
+          const page = accountsData.data.find((p: any) => p.id === params.pageId);
+          if (!page) {
+            return { error: `Page ${params.pageId} not found in me/accounts. Available: ${accountsData.data.map((p: any) => `${p.id} (${p.name})`).join(', ')}` };
+          }
+          const pageToken: string = page.access_token;
+
+          // 3a. Instagram post: container + publish flow, no local file needed
+          if (params.kind === 'instagram_post') {
+            // Resolve image to a public URL (Meta crawler must fetch it)
+            let publicUrl: string;
+            if (params.imagePathOrUrl.startsWith('http://') || params.imagePathOrUrl.startsWith('https://')) {
+              publicUrl = params.imagePathOrUrl;
+            } else {
+              const cleanPath = params.imagePathOrUrl.startsWith('/') ? params.imagePathOrUrl : '/' + params.imagePathOrUrl;
+              publicUrl = `https://survival.agems.ai${cleanPath}`;
+            }
+            // Resolve linked IG business account from the FB page
+            const pageInfoRes = await fetch(`https://graph.facebook.com/v21.0/${params.pageId}?fields=instagram_business_account&access_token=${encodeURIComponent(pageToken)}`);
+            const pageInfo: any = await pageInfoRes.json();
+            const igId = pageInfo?.instagram_business_account?.id;
+            if (!igId) return { error: `No Instagram Business account linked to FB page ${params.pageId}. Connect IG via Business Manager first.`, details: pageInfo };
+            // Create media container
+            const containerRes = await fetch(`https://graph.facebook.com/v21.0/${igId}/media`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: `image_url=${encodeURIComponent(publicUrl)}&caption=${encodeURIComponent(params.caption || '')}&access_token=${encodeURIComponent(pageToken)}`,
+            });
+            const containerData: any = await containerRes.json();
+            if (!containerRes.ok || !containerData.id) return { error: 'IG container creation failed', details: containerData };
+            // Tiny wait so Meta finishes ingesting the image
+            await new Promise((r) => setTimeout(r, 4000));
+            // Publish
+            const pubRes = await fetch(`https://graph.facebook.com/v21.0/${igId}/media_publish`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: `creation_id=${encodeURIComponent(containerData.id)}&access_token=${encodeURIComponent(pageToken)}`,
+            });
+            const pubData: any = await pubRes.json();
+            if (!pubRes.ok) return { error: 'IG publish failed', details: pubData, containerId: containerData.id };
+            return { success: true, kind: 'instagram_post', igAccountId: igId, igPostId: pubData.id, containerId: containerData.id };
+          }
+
+          // 3. Resolve the image bytes (download if URL, otherwise read from /uploads/)
+          const { promises: fsP } = await import('fs');
+          const { join: pathJoin } = await import('path');
+          let imageBytes: Buffer;
+
+          if (params.imagePathOrUrl.startsWith('http://') || params.imagePathOrUrl.startsWith('https://')) {
+            const dl = await fetch(params.imagePathOrUrl);
+            if (!dl.ok) return { error: `Failed to download image: HTTP ${dl.status}` };
+            imageBytes = Buffer.from(await dl.arrayBuffer());
+          } else {
+            const cwd = process.cwd();
+            const isMonorepo = existsSync(pathJoin(cwd, 'apps', 'api')) && existsSync(pathJoin(cwd, 'apps', 'web'));
+            const uploadsBase = isMonorepo ? pathJoin(cwd, 'apps', 'web', 'public') : pathJoin(cwd, '..', 'web', 'public');
+            const cleanPath = params.imagePathOrUrl.startsWith('/') ? params.imagePathOrUrl.slice(1) : params.imagePathOrUrl;
+            const localPath = pathJoin(uploadsBase, cleanPath);
+            if (!existsSync(localPath)) return { error: `File not found at ${localPath}` };
+            imageBytes = await fsP.readFile(localPath);
+          }
+
+          // 4. Build native multipart (Node 18+ FormData + Blob) and POST
+          const endpoint =
+            params.kind === 'profile'
+              ? `https://graph.facebook.com/v21.0/${params.pageId}/picture`
+              : `https://graph.facebook.com/v21.0/${params.pageId}/photos`;
+
+          const form = new FormData();
+          // Blob is available globally in Node 18+
+          form.append('source', new Blob([new Uint8Array(imageBytes)], { type: 'image/jpeg' }), 'upload.jpg');
+          form.append('access_token', pageToken);
+          if (params.kind === 'cover') form.append('published', 'false');
+          if (params.kind === 'feed_photo' && params.caption) form.append('caption', params.caption);
+
+          const upRes = await fetch(endpoint, { method: 'POST', body: form });
+          const upData: any = await upRes.json();
+          if (!upRes.ok) return { error: 'Upload failed', details: upData };
+
+          // 5. For cover, run the second call to actually set it
+          if (params.kind === 'cover') {
+            const photoId = upData.id;
+            if (!photoId) return { error: 'No photo id returned from upload', details: upData };
+            const setRes = await fetch(`https://graph.facebook.com/v21.0/${params.pageId}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: `cover=${encodeURIComponent(photoId)}&access_token=${encodeURIComponent(pageToken)}`,
+            });
+            const setData: any = await setRes.json();
+            if (!setRes.ok) return { error: 'Cover set failed', details: setData, photoId };
+            return { success: true, kind: 'cover', photoId, set: setData };
+          }
+
+          return { success: true, kind: params.kind, ...upData };
+        } catch (err: any) {
+          return { error: err.message || String(err) };
+        }
+      },
+    });
+
+    // ── Visual check: look at a web page or image and describe what you see ──
+    // Uses MiniMax-Text-01 multimodal endpoint (image input → text output).
+    // Mirrors the gemini_generate_image pattern: direct HTTP call, bypasses the LLM adapter,
+    // so any agent on any provider can "see" a rendered page without changing their model.
+    tools.push({
+      name: 'visual_check',
+      description: 'Look at a rendered web page (or a saved image in /uploads/) and get a text description back. Use this before approving ANY visual task: homepage edits, review pages, comparisons, hero sections, layout changes, brand asset placements. Pass a URL (the page will be screenshot-rendered in a real browser first) or a local /uploads/ path. Returns what is actually visible on the page: headings, readability, contrast issues, broken layouts, missing elements. This is the only way to verify visual output — a 200 status code means nothing.',
+      parameters: z.object({
+        url: z.string().describe('The page URL to render and look at, e.g. https://learnenglish.life/ or https://learnenglish.life/reviews/italki/. Alternatively an /uploads/ file path to analyze an already-saved image.'),
+        question: z.string().optional().describe('What to look for. Default: general readability and contrast audit. Examples: "Any dark-on-dark text?", "Is the See Guru logo visible in the hero?", "Does the header navigation have all 5 links?", "Are all platform card headings readable?"'),
+        viewportWidth: z.number().optional().describe('Viewport width in pixels, default 1400'),
+      }),
+      execute: async (params: { url: string; question?: string; viewportWidth?: number }) => {
+        try {
+          // Get MiniMax API key (same one used by the main LLM adapter for this org)
+          const minimaxKey = await this.getApiKey('MINIMAX', agent.orgId);
+          if (!minimaxKey) {
+            return { error: 'MiniMax API key not configured. Visual check needs it for the image understanding model.' };
+          }
+
+          // Resolve the image bytes — either a local /uploads/ file or a freshly rendered screenshot.
+          let imgBase64: string;
+          let imgSource: string;
+          const cwd = process.cwd();
+          const isMonorepo = existsSync(join(cwd, 'apps', 'api')) && existsSync(join(cwd, 'apps', 'web'));
+          const uploadsBase = isMonorepo ? join(cwd, 'apps', 'web', 'public') : join(cwd, '..', 'web', 'public');
+
+          if (params.url.startsWith('/uploads/') || params.url.startsWith('uploads/')) {
+            // Local image path
+            const localPath = join(uploadsBase, params.url.replace(/^\/?uploads\//, 'uploads/'));
+            if (!existsSync(localPath)) {
+              return { error: `Image file not found: ${params.url}` };
+            }
+            imgBase64 = readFileSync(localPath).toString('base64');
+            imgSource = `local file ${params.url}`;
+          } else if (/^https?:\/\//.test(params.url)) {
+            // Render via thum.io (free, no key, real browser)
+            const viewport = params.viewportWidth || 1400;
+            const shotUrl = `https://image.thum.io/get/width/${viewport}/noanimate/viewportWidth/${viewport}/${params.url}?cb=${Date.now()}`;
+            const shotRes = await fetch(shotUrl, {
+              headers: { 'User-Agent': 'Mozilla/5.0 (AGEMS visual_check)' },
+              signal: AbortSignal.timeout(60000),
+            });
+            if (!shotRes.ok) {
+              return { error: `Screenshot service returned ${shotRes.status}. Try a different URL or use /uploads/ path.` };
+            }
+            const buf = Buffer.from(await shotRes.arrayBuffer());
+            if (buf.length < 2000) {
+              return { error: `Screenshot too small (${buf.length} bytes) — likely an error page, not a real render.` };
+            }
+            imgBase64 = buf.toString('base64');
+            imgSource = `rendered screenshot of ${params.url}`;
+          } else {
+            return { error: 'url must start with https:// or /uploads/' };
+          }
+
+          const question = params.question || 'Describe every section heading you see on this page. Then list any readability problems: dark text on dark background, white or light text on light background, missing or invisible elements, broken layouts, overlapping content. Be specific about which element and what color combination.';
+
+          // Call MiniMax-Text-01 multimodal endpoint directly
+          const res = await fetch('https://api.minimax.io/v1/text/chatcompletion_v2', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${minimaxKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: 'MiniMax-Text-01',
+              messages: [
+                {
+                  role: 'user',
+                  content: [
+                    { type: 'text', text: question },
+                    { type: 'image_url', image_url: { url: `data:image/png;base64,${imgBase64}` } },
+                  ],
+                },
+              ],
+              max_tokens: 1200,
+            }),
+            signal: AbortSignal.timeout(120000),
+          });
+
+          const data = await res.json();
+          if (!res.ok) {
+            return { error: `Visual check API error ${res.status}: ${JSON.stringify(data).substring(0, 400)}` };
+          }
+
+          const description = data?.choices?.[0]?.message?.content || '';
+          if (!description) {
+            return { error: 'No description returned', raw: JSON.stringify(data).substring(0, 400) };
+          }
+
+          return {
+            success: true,
+            source: imgSource,
+            question,
+            description,
+          };
+        } catch (err: any) {
+          return { error: err.message };
+        }
+      },
+    });
+
+    // ── Google AdSense suite ──
+    // Lets agents read AdSense earnings, list/create ad units, and fetch the embed snippet
+    // (the actual <script>...</script> code) for any ad unit so they can paste it into pages.
+    // Reads OAuth credentials from org settings: GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_OAUTH_REFRESH_TOKEN.
+    {
+      const adsenseTokenCache = ((this as any)._adsenseTokenCache ||= new Map<string, { token: string; expires: number }>());
+      const getGoogleAccessToken = async (): Promise<string> => {
+        const cached = adsenseTokenCache.get(agent.orgId);
+        if (cached && cached.expires > Date.now() + 60_000) return cached.token;
+        const clientId = await this.settings.get('GOOGLE_OAUTH_CLIENT_ID', agent.orgId);
+        const clientSecret = await this.settings.get('GOOGLE_OAUTH_CLIENT_SECRET', agent.orgId);
+        const refreshToken = await this.settings.get('GOOGLE_OAUTH_REFRESH_TOKEN', agent.orgId);
+        if (!clientId || !clientSecret || !refreshToken) {
+          throw new Error('Google OAuth credentials not configured (need GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_OAUTH_REFRESH_TOKEN in org settings).');
+        }
+        const tres = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken, grant_type: 'refresh_token' }).toString(),
+          signal: AbortSignal.timeout(30_000),
+        });
+        const tdata: any = await tres.json().catch(() => ({}));
+        if (!tres.ok || !tdata.access_token) {
+          throw new Error(`Google token refresh failed: ${JSON.stringify(tdata).substring(0, 300)}`);
+        }
+        adsenseTokenCache.set(agent.orgId, { token: tdata.access_token, expires: Date.now() + ((tdata.expires_in || 3600) * 1000) });
+        return tdata.access_token;
+      };
+      const adsenseFetch = async (path: string, init?: RequestInit): Promise<any> => {
+        const token = await getGoogleAccessToken();
+        const res = await fetch(`https://adsense.googleapis.com/v2${path}`, {
+          ...init,
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', ...(init?.headers || {}) },
+          signal: AbortSignal.timeout(60_000),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(`AdSense API ${res.status}: ${JSON.stringify(data).substring(0, 400)}`);
+        }
+        return data;
+      };
+
+      tools.push({
+        name: 'adsense_list_ad_clients',
+        description: 'List the AdSense ad clients (publisher accounts) connected to this org. Usually returns one entry such as ca-pub-XXXXXXXXX. Call this first — every other adsense_* tool needs the full ad client name (accounts/pub-X/adclients/ca-pub-X) returned here.',
+        parameters: z.object({}),
+        execute: async () => {
+          try {
+            const accounts = await adsenseFetch('/accounts');
+            if (!accounts.accounts?.length) return { error: 'No AdSense accounts found' };
+            const accountName = accounts.accounts[0].name;
+            const clients = await adsenseFetch(`/${accountName}/adclients`);
+            return { account: accountName, ad_clients: clients.adClients || [] };
+          } catch (err: any) { return { error: err.message }; }
+        },
+      });
+
+      tools.push({
+        name: 'adsense_list_ad_units',
+        description: 'List existing AdSense ad units (banner placements) under an ad client. Each entry includes name, displayName, state, and contentAdsSettings (size/type). Use the returned name with adsense_get_adcode to get the embed snippet.',
+        parameters: z.object({
+          adClient: z.string().describe('Full ad client name from adsense_list_ad_clients, e.g. accounts/pub-7792548915836467/adclients/ca-pub-7792548915836467'),
+        }),
+        execute: async (params: { adClient: string }) => {
+          try {
+            const data = await adsenseFetch(`/${params.adClient}/adunits`);
+            return { ad_units: data.adUnits || [] };
+          } catch (err: any) { return { error: err.message }; }
+        },
+      });
+
+      tools.push({
+        name: 'adsense_get_adcode',
+        description: 'Fetch the HTML/JavaScript embed snippet for a specific AdSense ad unit. Returns the exact <script>...</script> code, ready to paste into a page or component (Astro, React, plain HTML).',
+        parameters: z.object({
+          adUnit: z.string().describe('Full ad unit name, e.g. accounts/pub-X/adclients/ca-pub-X/adunits/1234567890'),
+        }),
+        execute: async (params: { adUnit: string }) => {
+          try {
+            const data = await adsenseFetch(`/${params.adUnit}/adcode`);
+            return { ad_code: data.adCode || '' };
+          } catch (err: any) { return { error: err.message }; }
+        },
+      });
+
+      tools.push({
+        name: 'adsense_create_ad_unit',
+        description: 'Create a new AdSense display ad unit. Use when you need a banner format that does not exist yet. After creation, call adsense_get_adcode with the returned name to get the embed snippet to paste into the site.',
+        parameters: z.object({
+          adClient: z.string().describe('Full ad client name from adsense_list_ad_clients'),
+          displayName: z.string().describe('Human-readable name, e.g. "Homepage hero leaderboard" or "Review page sidebar 300x250"'),
+          size: z.enum(['RESPONSIVE', 'FIXED']).optional().describe('RESPONSIVE (recommended, default) auto-sizes to container; FIXED uses width/height'),
+          width: z.number().optional().describe('Width in px, only used when size=FIXED'),
+          height: z.number().optional().describe('Height in px, only used when size=FIXED'),
+        }),
+        execute: async (params: any) => {
+          try {
+            const sizeStr = (params.size === 'FIXED' && params.width && params.height)
+              ? `SIZE_${params.width}_${params.height}`
+              : 'RESPONSIVE';
+            const body = { displayName: params.displayName, contentAdsSettings: { type: 'DISPLAY', size: sizeStr } };
+            const data = await adsenseFetch(`/${params.adClient}/adunits`, { method: 'POST', body: JSON.stringify(body) });
+            return { ad_unit: data };
+          } catch (err: any) { return { error: err.message }; }
+        },
+      });
+
+      // Google Search Console — same OAuth, different host
+      const gscFetch = async (path: string, init?: RequestInit): Promise<any> => {
+        const token = await getGoogleAccessToken();
+        const res = await fetch(`https://searchconsole.googleapis.com${path}`, {
+          ...init,
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', ...(init?.headers || {}) },
+          signal: AbortSignal.timeout(60_000),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(`Search Console API ${res.status}: ${JSON.stringify(data).substring(0, 400)}`);
+        }
+        return data;
+      };
+
+      // Google Analytics 4 — Data API for reports, Admin API for property listing
+      const gaFetch = async (host: string, path: string, init?: RequestInit): Promise<any> => {
+        const token = await getGoogleAccessToken();
+        const res = await fetch(`https://${host}${path}`, {
+          ...init,
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', ...(init?.headers || {}) },
+          signal: AbortSignal.timeout(60_000),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(`Google Analytics API ${res.status}: ${JSON.stringify(data).substring(0, 400)}`);
+        }
+        return data;
+      };
+      const resolveGa4Property = async (param?: string): Promise<string> => {
+        if (param) return param.startsWith('properties/') ? param : `properties/${param}`;
+        const stored = await this.settings.get('GA4_PROPERTY_ID', agent.orgId);
+        if (!stored) throw new Error('No GA4 property set. Pass propertyId or set GA4_PROPERTY_ID in org settings.');
+        return stored.startsWith('properties/') ? stored : `properties/${stored}`;
+      };
+
+      tools.push({
+        name: 'ga_list_properties',
+        description: 'List all Google Analytics 4 properties (websites being tracked) the account can access. Returns each property name (e.g. properties/531486394), displayName, timeZone, currencyCode. Use the property name with other ga_* tools.',
+        parameters: z.object({}),
+        execute: async () => {
+          try {
+            const accs = await gaFetch('analyticsadmin.googleapis.com', '/v1beta/accounts');
+            if (!accs.accounts?.length) return { error: 'No GA accounts found' };
+            const all: any[] = [];
+            for (const acc of accs.accounts) {
+              const data = await gaFetch('analyticsadmin.googleapis.com', `/v1beta/properties?filter=parent:${acc.name}`);
+              if (data.properties) all.push(...data.properties);
+            }
+            return { properties: all };
+          } catch (err: any) { return { error: err.message }; }
+        },
+      });
+
+      tools.push({
+        name: 'ga_run_report',
+        description: 'Run a Google Analytics 4 report: pull metrics like sessions, activeUsers, screenPageViews, conversions, totalRevenue across a date range, optionally grouped by dimensions like date, country, deviceCategory, pagePath, sessionSource, sessionMedium. Defaults to the configured site property if propertyId is omitted.',
+        parameters: z.object({
+          propertyId: z.string().optional().describe('GA4 property ID like 531486394 or properties/531486394. Omit to use the configured default.'),
+          startDate: z.string().describe('Start date YYYY-MM-DD or relative like "7daysAgo", "yesterday", "today"'),
+          endDate: z.string().describe('End date YYYY-MM-DD or relative like "today", "yesterday"'),
+          metrics: z.array(z.string()).optional().describe('Metric names. Default: ["activeUsers","sessions","screenPageViews"]. Other useful: "newUsers","engagementRate","averageSessionDuration","conversions","totalRevenue","eventCount".'),
+          dimensions: z.array(z.string()).optional().describe('Dimension names. Default: none (totals). Useful: "date","country","deviceCategory","pagePath","pageTitle","sessionSource","sessionMedium","sessionCampaignName".'),
+          limit: z.number().optional().describe('Max rows to return, default 25'),
+        }),
+        execute: async (params: any) => {
+          try {
+            const property = await resolveGa4Property(params.propertyId);
+            const body: any = {
+              dateRanges: [{ startDate: params.startDate, endDate: params.endDate }],
+              metrics: (params.metrics || ['activeUsers', 'sessions', 'screenPageViews']).map((name: string) => ({ name })),
+              limit: params.limit || 25,
+            };
+            if (params.dimensions?.length) body.dimensions = params.dimensions.map((name: string) => ({ name }));
+            const data = await gaFetch('analyticsdata.googleapis.com', `/v1beta/${property}:runReport`, {
+              method: 'POST',
+              body: JSON.stringify(body),
+            });
+            return data;
+          } catch (err: any) { return { error: err.message }; }
+        },
+      });
+
+      tools.push({
+        name: 'ga_realtime',
+        description: 'Get a real-time Google Analytics 4 report — who is on the site right now (last 30 minutes). Returns active users, optionally grouped by country, deviceCategory, or unifiedPageScreen (current page). Useful to check if a campaign or post just landed.',
+        parameters: z.object({
+          propertyId: z.string().optional().describe('GA4 property ID. Omit to use the configured default.'),
+          dimensions: z.array(z.string()).optional().describe('Dimensions: country, deviceCategory, unifiedPageScreen. Default: none (single total).'),
+        }),
+        execute: async (params: any) => {
+          try {
+            const property = await resolveGa4Property(params.propertyId);
+            const body: any = { metrics: [{ name: 'activeUsers' }] };
+            if (params.dimensions?.length) body.dimensions = params.dimensions.map((name: string) => ({ name }));
+            const data = await gaFetch('analyticsdata.googleapis.com', `/v1beta/${property}:runRealtimeReport`, {
+              method: 'POST',
+              body: JSON.stringify(body),
+            });
+            return data;
+          } catch (err: any) { return { error: err.message }; }
+        },
+      });
+
+      tools.push({
+        name: 'gsc_list_sites',
+        description: 'List all Google Search Console properties (websites) the account has access to. Returns each siteUrl and your permissionLevel. Use this first to find the property identifier (e.g. sc-domain:learnenglish.life) needed by the other gsc_* tools.',
+        parameters: z.object({}),
+        execute: async () => {
+          try {
+            const data = await gscFetch('/webmasters/v3/sites');
+            return { sites: data.siteEntry || [] };
+          } catch (err: any) { return { error: err.message }; }
+        },
+      });
+
+      tools.push({
+        name: 'gsc_search_analytics',
+        description: 'Pull Google Search Console search analytics: clicks, impressions, CTR, average position. Group by query, page, country, or device. This is how you see what people search for to find the site, which pages they land on, and how the site is ranking. Data is available with ~2 day delay.',
+        parameters: z.object({
+          siteUrl: z.string().describe('Property identifier from gsc_list_sites, e.g. sc-domain:learnenglish.life'),
+          startDate: z.string().describe('Start date YYYY-MM-DD'),
+          endDate: z.string().describe('End date YYYY-MM-DD'),
+          dimensions: z.array(z.enum(['query','page','country','device','date','searchAppearance'])).optional().describe('How to group rows. Default: ["query"] (top search queries). Use ["page"] to see top landing pages.'),
+          rowLimit: z.number().optional().describe('Max rows to return, default 25, max 25000'),
+        }),
+        execute: async (params: { siteUrl: string; startDate: string; endDate: string; dimensions?: string[]; rowLimit?: number }) => {
+          try {
+            const body = {
+              startDate: params.startDate,
+              endDate: params.endDate,
+              dimensions: params.dimensions || ['query'],
+              rowLimit: params.rowLimit || 25,
+            };
+            const data = await gscFetch(`/webmasters/v3/sites/${encodeURIComponent(params.siteUrl)}/searchAnalytics/query`, {
+              method: 'POST',
+              body: JSON.stringify(body),
+            });
+            return { rows: data.rows || [], responseAggregationType: data.responseAggregationType };
+          } catch (err: any) { return { error: err.message }; }
+        },
+      });
+
+      tools.push({
+        name: 'gsc_inspect_url',
+        description: 'Inspect a specific URL in Google Search Console: is it indexed, when was it last crawled, is the sitemap referencing it, are there robots.txt or canonical issues. Use this to debug why a page is not showing up in search.',
+        parameters: z.object({
+          siteUrl: z.string().describe('Property identifier from gsc_list_sites, e.g. sc-domain:learnenglish.life'),
+          inspectionUrl: z.string().describe('Full URL to inspect, e.g. https://learnenglish.life/reviews/see-guru/'),
+        }),
+        execute: async (params: { siteUrl: string; inspectionUrl: string }) => {
+          try {
+            const data = await gscFetch('/v1/urlInspection/index:inspect', {
+              method: 'POST',
+              body: JSON.stringify({ inspectionUrl: params.inspectionUrl, siteUrl: params.siteUrl }),
+            });
+            return data;
+          } catch (err: any) { return { error: err.message }; }
+        },
+      });
+
+      tools.push({
+        name: 'gsc_submit_sitemap',
+        description: 'Submit a sitemap.xml URL to Google Search Console so Google starts crawling it. Run once per sitemap. Returns success or an error if the sitemap is unreachable or malformed.',
+        parameters: z.object({
+          siteUrl: z.string().describe('Property identifier from gsc_list_sites, e.g. sc-domain:learnenglish.life'),
+          sitemapUrl: z.string().describe('Full sitemap URL, e.g. https://learnenglish.life/sitemap.xml or https://learnenglish.life/sitemap-index.xml'),
+        }),
+        execute: async (params: { siteUrl: string; sitemapUrl: string }) => {
+          try {
+            await gscFetch(`/webmasters/v3/sites/${encodeURIComponent(params.siteUrl)}/sitemaps/${encodeURIComponent(params.sitemapUrl)}`, { method: 'PUT' });
+            return { success: true, sitemap: params.sitemapUrl };
+          } catch (err: any) { return { error: err.message }; }
+        },
+      });
+
+      tools.push({
+        name: 'adsense_earnings_report',
+        description: 'Generate an AdSense earnings report for a date range. Returns metrics: ESTIMATED_EARNINGS, IMPRESSIONS, CLICKS, IMPRESSIONS_CTR, COST_PER_CLICK, PAGE_VIEWS. Use to track how the site is monetizing day-by-day or per ad unit.',
+        parameters: z.object({
+          startDate: z.string().describe('Start date YYYY-MM-DD, e.g. 2026-04-01'),
+          endDate: z.string().describe('End date YYYY-MM-DD, e.g. 2026-04-07'),
+          dimensions: z.array(z.string()).optional().describe('Optional dimensions to group by, e.g. ["DATE"], ["AD_UNIT_NAME"]. Default: totals only.'),
+        }),
+        execute: async (params: { startDate: string; endDate: string; dimensions?: string[] }) => {
+          try {
+            const accounts = await adsenseFetch('/accounts');
+            if (!accounts.accounts?.length) return { error: 'No AdSense accounts found' };
+            const accountName = accounts.accounts[0].name;
+            const [sy, sm, sd] = params.startDate.split('-');
+            const [ey, em, ed] = params.endDate.split('-');
+            const qs = new URLSearchParams();
+            qs.append('dateRange', 'CUSTOM');
+            qs.append('startDate.year', sy); qs.append('startDate.month', String(parseInt(sm))); qs.append('startDate.day', String(parseInt(sd)));
+            qs.append('endDate.year', ey); qs.append('endDate.month', String(parseInt(em))); qs.append('endDate.day', String(parseInt(ed)));
+            for (const m of ['ESTIMATED_EARNINGS','IMPRESSIONS','CLICKS','IMPRESSIONS_CTR','COST_PER_CLICK','PAGE_VIEWS']) qs.append('metrics', m);
+            for (const d of (params.dimensions || [])) qs.append('dimensions', d);
+            const data = await adsenseFetch(`/${accountName}/reports:generate?${qs.toString()}`);
+            return data;
+          } catch (err: any) { return { error: err.message }; }
+        },
+      });
+    }
+
     // ── Send photo to Telegram contact ──
     if (tgConfig?.apiId && tgConfig?.apiHash && tgConfig?.sessionString) {
       tools.push({
@@ -4649,6 +5333,20 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     add('save_to_files', 'Save a file to Files library (/files page) for user access', 'AGEMS Platform');
     add('html_to_pdf', 'Convert HTML file to PDF and save to Files library', 'AGEMS Platform');
     add('gemini_generate_image', 'Generate images with Gemini AI (supports logo/reference images)', 'AGEMS Platform');
+    add('meta_upload_page_image', 'Upload or publish an image to a Facebook Page or linked Instagram Business account. Supports profile picture, cover photo, FB feed photo post, and Instagram post (kind=instagram_post — pass the FB Page id, the tool resolves the connected IG account itself). Handles multipart upload, token swap, and the IG container+publish dance.', 'AGEMS Platform');
+    add('visual_check', 'Look at a rendered web page or saved image and describe what is visible (headings, readability, contrast issues, broken layouts). Use before approving visual tasks.', 'AGEMS Platform');
+    add('adsense_list_ad_clients', 'List AdSense ad clients (publisher accounts) for this org. Call first to get the ad client name needed by other adsense tools.', 'AGEMS Platform');
+    add('adsense_list_ad_units', 'List existing AdSense ad units (banner placements) under an ad client. Returns name, displayName, state, size for each.', 'AGEMS Platform');
+    add('adsense_get_adcode', 'Fetch the HTML/JavaScript embed snippet for a specific AdSense ad unit, ready to paste into a page or component.', 'AGEMS Platform');
+    add('adsense_create_ad_unit', 'Create a new AdSense display ad unit (responsive or fixed size). Returns the new unit name to use with adsense_get_adcode.', 'AGEMS Platform');
+    add('adsense_earnings_report', 'Generate an AdSense earnings report (estimated earnings, impressions, clicks, CTR, CPC, page views) for a date range, optionally grouped by dimensions like DATE or AD_UNIT_NAME.', 'AGEMS Platform');
+    add('gsc_list_sites', 'List Google Search Console properties (websites) the org has access to. Call first to find the property identifier needed by other gsc_* tools.', 'AGEMS Platform');
+    add('gsc_search_analytics', 'Pull GSC search analytics: clicks, impressions, CTR, average position, grouped by query / page / country / device.', 'AGEMS Platform');
+    add('gsc_inspect_url', 'Inspect a specific URL in Google Search Console: indexed status, last crawl, sitemap and robots state.', 'AGEMS Platform');
+    add('gsc_submit_sitemap', 'Submit a sitemap.xml URL to Google Search Console so Google starts crawling it.', 'AGEMS Platform');
+    add('ga_list_properties', 'List Google Analytics 4 properties (websites tracked) the org can access.', 'AGEMS Platform');
+    add('ga_run_report', 'Run a GA4 report: sessions, users, page views, conversions, revenue across a date range, optionally grouped by date / country / device / page / source / medium.', 'AGEMS Platform');
+    add('ga_realtime', 'Get a real-time GA4 report — who is on the site right now (last 30 minutes), optionally grouped by country / device / current page.', 'AGEMS Platform');
     add('dashboard_manage_widget', 'Manage dashboard widgets', 'AGEMS Platform');
 
     return result;
