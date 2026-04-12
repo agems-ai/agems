@@ -222,6 +222,50 @@ Check out our [open issues](https://github.com/agems-ai/agems/issues) — look f
 
 See [CLAUDE.md](./CLAUDE.md) for detailed architecture docs and development conventions.
 
+## 🛠 Local Development
+
+For local development, everything runs inside Docker — the API, web frontend, PostgreSQL, and Redis are all containerized with hot-reload enabled.
+
+**Prerequisites:** Docker and Docker Compose.
+
+**Setup:**
+
+```bash
+# 1. Copy the dev templates
+cp apps/api/Dockerfile.dev.template apps/api/Dockerfile.dev
+cp docker-compose.override.yml.template docker-compose.override.yml
+
+# 2. Create .env and add your API keys
+cp .env.example .env
+# Edit .env — add at least one AI provider key
+
+# 3. Start all services
+docker compose up -d
+```
+
+Docker Compose automatically merges `docker-compose.override.yml` with the base `docker-compose.yml`, so a plain `docker compose up` launches the full dev environment:
+
+- **API** (NestJS) — `http://localhost:3001` with hot-reload
+- **Web** (Next.js) — `http://localhost:3000` with hot-reload
+- **PostgreSQL** — exposed on `localhost:5432`
+- **Redis** — exposed on `localhost:6379`
+
+Your local source code is mounted into the containers, so changes are reflected immediately without rebuilding.
+
+<details>
+<summary><strong>Useful commands</strong></summary>
+
+```bash
+docker compose logs -f api        # Follow API logs
+docker compose logs -f web        # Follow Web logs
+docker compose exec api pnpm db:push   # Apply schema changes
+docker compose exec api pnpm db:studio # Open Prisma Studio
+docker compose down               # Stop all services
+docker compose up -d --build      # Rebuild after dependency changes
+```
+
+</details>
+
 ## 📄 License
 
 AGEMS is [fair-code](https://faircode.io) distributed under the [**Sustainable Use License**](LICENSE).
