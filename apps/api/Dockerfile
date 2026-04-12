@@ -20,7 +20,7 @@ RUN pnpm --filter @agems/db generate
 RUN pnpm --filter @agems/api build
 
 FROM base AS runner
-RUN apk add --no-cache ffmpeg git curl chromium poppler-utils \
+RUN apk add --no-cache ffmpeg git curl chromium poppler-utils grep findutils \
     && ln -s /usr/bin/chromium-browser /usr/local/bin/chromium 2>/dev/null || true
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV CHROMIUM_PATH=/usr/bin/chromium-browser

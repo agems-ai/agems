@@ -44,6 +44,7 @@ export default function AgentDetailPage() {
   // Avatar lightbox
   const [showAvatarFull, setShowAvatarFull] = useState(false);
   const [showSkillPicker, setShowSkillPicker] = useState(false);
+  const [showRepoPicker, setShowRepoPicker] = useState(false);
 
   // Spawn
   const [showSpawn, setShowSpawn] = useState(false);
@@ -611,6 +612,46 @@ export default function AgentDetailPage() {
           </div>
         </Section>
 
+        <Section title="Repositories" wide>
+          <div className="space-y-2">
+            {(agent.repositories && agent.repositories.length > 0) ? agent.repositories.map((ar: any) => {
+              const repo = ar.repo || {};
+              const repoStatusColors: Record<string, string> = {
+                SYNCED: 'bg-emerald-500/20 text-emerald-400',
+                SYNCING: 'bg-amber-500/20 text-amber-400',
+                CLONING: 'bg-amber-500/20 text-amber-400',
+                ERROR: 'bg-red-500/20 text-red-400',
+                PENDING: 'bg-gray-500/20 text-gray-400',
+              };
+              return (
+                <div key={ar.id} className="flex items-center gap-3 p-3 bg-[var(--background)] border border-[var(--border)] rounded-lg">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-sm">{repo.name || repo.slug}</div>
+                    <div className="text-xs text-[var(--muted)] truncate font-mono">{repo.gitUrl}</div>
+                  </div>
+                  <span className="text-[10px] px-1 text-[var(--muted)]">{repo.branch}</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${repoStatusColors[repo.syncStatus] || 'bg-gray-500/20 text-gray-400'}`}>
+                    {repo.syncStatus}
+                  </span>
+                  <button
+                    onClick={async () => {
+                      await api.removeRepoFromAgent(agent.id, ar.repoId);
+                      loadAgent();
+                    }}
+                    className="text-xs text-red-400 hover:text-red-300 px-2 py-1"
+                  >Remove</button>
+                </div>
+              );
+            }) : (
+              <p className="text-sm text-[var(--muted)]">No repositories connected. Connect repositories to give the agent code search tools.</p>
+            )}
+            <button
+              onClick={() => setShowRepoPicker(true)}
+              className="text-sm px-3 py-2 rounded-lg border border-dashed border-[var(--border)] text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)] transition w-full"
+            >+ Connect Repository</button>
+          </div>
+        </Section>
+
         {/* MCP Servers (read-only display) */}
         {(() => {
           const rc = (agent.runtimeConfig as any) || {};
@@ -977,6 +1018,23 @@ export default function AgentDetailPage() {
             </div>
             <div className="flex justify-end mt-4">
               <button onClick={() => setShowSkillPicker(false)} className="px-4 py-2 rounded-lg border border-[var(--border)]">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Repo Picker modal */}
+      {showRepoPicker && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowRepoPicker(false)}>
+          <div className="bg-[var(--card)] rounded-xl p-6 w-full max-w-[480px] mx-4 max-h-[70vh] overflow-y-auto border border-[var(--border)]" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold mb-4">Connect Repository to {agent.name}</h3>
+            <RepoPickerContent
+              agentId={agent.id}
+              connectedRepoIds={(agent.repositories || []).map((ar: any) => ar.repoId)}
+              onConnected={() => { setShowRepoPicker(false); loadAgent(); }}
+            />
+            <div className="flex justify-end mt-4">
+              <button onClick={() => setShowRepoPicker(false)} className="px-4 py-2 rounded-lg border border-[var(--border)]">Close</button>
             </div>
           </div>
         </div>
@@ -1418,6 +1476,52 @@ export default function AgentDetailPage() {
           <img src={agent.avatar} alt={agent.name} className="max-w-[90vw] max-h-[90vh] rounded-2xl shadow-2xl object-contain" />
         </div>
       )}
+    </div>
+  );
+}
+
+function RepoPickerContent({ agentId, connectedRepoIds, onConnected }: { agentId: string; connectedRepoIds: string[]; onConnected: () => void }) {
+  const [repos, setRepos] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.getRepos().then((data: any) => {
+      setRepos(Array.isArray(data) ? data : data.data || []);
+      setLoading(false);
+    });
+  }, []);
+
+  if (loading) return <p className="text-sm text-[var(--muted)]">Loading repositories...</p>;
+
+  const available = repos.filter(r => !connectedRepoIds.includes(r.id));
+  if (available.length === 0) return <p className="text-sm text-[var(--muted)]">No repositories available. Create one in the Repositories page first.</p>;
+
+  const statusColors: Record<string, string> = {
+    SYNCED: 'bg-emerald-500/20 text-emerald-400',
+    SYNCING: 'bg-amber-500/20 text-amber-400',
+    CLONING: 'bg-amber-500/20 text-amber-400',
+    ERROR: 'bg-red-500/20 text-red-400',
+    PENDING: 'bg-gray-500/20 text-gray-400',
+  };
+
+  return (
+    <div className="space-y-2">
+      {available.map(repo => (
+        <div key={repo.id} className="flex items-center gap-3 p-3 bg-[var(--background)] border border-[var(--border)] rounded-lg">
+          <div className="flex-1 min-w-0">
+            <div className="font-medium text-sm">{repo.name}</div>
+            <div className="text-xs text-[var(--muted)] truncate font-mono">{repo.gitUrl}</div>
+          </div>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusColors[repo.syncStatus] || 'bg-gray-500/20 text-gray-400'}`}>{repo.syncStatus}</span>
+          <button
+            onClick={async () => {
+              await api.assignRepoToAgent(agentId, repo.id);
+              onConnected();
+            }}
+            className="text-xs px-3 py-1.5 bg-[var(--accent)] text-white rounded-lg hover:opacity-90"
+          >Connect</button>
+        </div>
+      ))}
     </div>
   );
 }
