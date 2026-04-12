@@ -1557,7 +1557,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
         .filter((as: any) => as.enabled !== false && as.skill?.name)
         .map((as: any) => as.skill);
       if (activeSkills.length > 0) {
-        const names = activeSkills.map((s: any) => `- ${s.name}`).join('\n');
+        const names = activeSkills.map((s: any) => s.description ? `- ${s.name}: ${s.description}` : `- ${s.name}`).join('\n');
         skillsContext = `=== AVAILABLE SKILLS ===\nYou have the following skills available. Use the "use_skill" tool to load a skill when you need its knowledge:\n${names}\n=== END AVAILABLE SKILLS ===\n\n`;
       }
     }
@@ -1624,25 +1624,28 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
 
     // ── Skill loader tool ──
     if (agent.skills?.length) {
-      const skillMap = new Map<string, string>();
+      const skillMap = new Map<string, { content: string; description: string }>();
       for (const as of agent.skills) {
         if (as.enabled !== false && as.skill?.name && as.skill?.content) {
-          skillMap.set(as.skill.name, as.skill.content);
+          skillMap.set(as.skill.name, { content: as.skill.content, description: as.skill.description || '' });
         }
       }
       if (skillMap.size > 0) {
+        const skillList = Array.from(skillMap.entries())
+          .map(([name, s]) => s.description ? `- ${name}: ${s.description}` : `- ${name}`)
+          .join('\n');
         tools.push({
           name: 'use_skill',
-          description: `Load a skill to gain its knowledge. Available skills: ${Array.from(skillMap.keys()).join(', ')}`,
+          description: `Load a skill to gain its knowledge. Available skills:\n${skillList}`,
           parameters: z.object({
             skillName: z.string().describe('Name of the skill to load'),
           }),
           execute: async (params: { skillName: string }) => {
-            const content = skillMap.get(params.skillName);
-            if (!content) {
+            const entry = skillMap.get(params.skillName);
+            if (!entry) {
               return { error: `Skill "${params.skillName}" not found. Available: ${Array.from(skillMap.keys()).join(', ')}` };
             }
-            return { skill: params.skillName, content };
+            return { skill: params.skillName, content: entry.content };
           },
         });
       }
