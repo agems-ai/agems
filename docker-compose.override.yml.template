@@ -1,0 +1,55 @@
+# Local development overrides
+# Auto-merged with docker-compose.yml by Docker Compose
+#
+# Dev workflow:
+#   docker compose up -d                → postgres + redis + api + web (dev mode)
+#   docker compose exec api <command>   → run commands inside container
+
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile.dev
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/apps/api/node_modules
+      - /app/apps/web/node_modules
+      - /app/packages/ai/node_modules
+      - /app/packages/db/node_modules
+      - /app/packages/shared/node_modules
+      - /app/packages/adapters/node_modules
+      - /app/packages/plugins/node_modules
+      - ./data/repos:/app/data/repos
+    environment:
+      REPOS_BASE_DIR: /app/data/repos
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile.dev
+    command: sh -c "cd /app/apps/web && pnpm dev"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/apps/api/node_modules
+      - /app/apps/web/node_modules
+      - /app/packages/ai/node_modules
+      - /app/packages/db/node_modules
+      - /app/packages/shared/node_modules
+      - /app/packages/adapters/node_modules
+      - /app/packages/plugins/node_modules
+    environment:
+      HOSTNAME: "0.0.0.0"
+      NEXT_PUBLIC_API_URL: "http://localhost:3001"
+
+  playwright-mcp:
+    profiles: [full]
