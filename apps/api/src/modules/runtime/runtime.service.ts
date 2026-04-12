@@ -1667,7 +1667,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
     if (!disabledTools.has('read_file')) {
       tools.push({
         name: 'read_file',
-        description: 'Read the contents of a file. Supports text files and PDF (auto-extracts text from PDF).',
+        description: 'Read the contents of a file. Supports text files and PDF (auto-extracts text from PDF). IMPORTANT: uploaded files have UUID filenames (e.g. /uploads/028ba906-xxxx.pdf), NOT their original names. You MUST call list_org_files first to get the actual url, then pass that url to read_file. Never guess filenames.',
         parameters: z.object({
           path: z.string().describe('Absolute path to the file'),
           maxLines: z.number().optional().describe('Max lines to read (default 200)'),
@@ -3330,7 +3330,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     // ── List organisation files ──
     tools.push({
       name: 'list_org_files',
-      description: 'List files uploaded to this organisation. Use to find logos, images, documents etc. Returns file URL, name, type and size.',
+      description: 'List files uploaded to this organisation. Use to find logos, images, documents etc. Returns file URL, name, type and size. The url field (e.g. /uploads/028ba906-xxxx.pdf) can be passed directly to read_file to read the file contents.',
       parameters: z.object({
         search: z.string().optional().describe('Search by filename (case-insensitive)'),
         type: z.enum(['image', 'document', 'all']).optional().describe('Filter by type (default: all)'),
@@ -5180,10 +5180,21 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
   }
 
   private async readFile(filePath: string, maxLines: number, runtimeConfig: Record<string, unknown>) {
-    const { readFileSync, statSync } = await import('fs');
-    const { extname } = await import('path');
+    const { readFileSync, statSync, existsSync } = await import('fs');
+    const { extname, join } = await import('path');
     try {
-      const safePath = this.resolveWorkspacePath(filePath, runtimeConfig);
+      let safePath: string;
+      const trimmed = filePath.replace(/^\/+/, '');
+      if (trimmed.startsWith('uploads/') || trimmed.startsWith('avatars/')) {
+        const cwd = process.cwd();
+        const isMonorepoRoot = existsSync(join(cwd, 'apps', 'api')) && existsSync(join(cwd, 'apps', 'web'));
+        const uploadsBase = isMonorepoRoot
+          ? join(cwd, 'apps', 'web', 'public')
+          : join(cwd, '..', 'web', 'public');
+        safePath = join(uploadsBase, trimmed);
+      } else {
+        safePath = this.resolveWorkspacePath(filePath, runtimeConfig);
+      }
       const stats = statSync(safePath);
       if (stats.size > 10 * 1024 * 1024) return { error: 'File too large (>10MB)' };
 
