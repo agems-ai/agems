@@ -36,6 +36,7 @@ model Organization {
   projects     Project[]
   labels       Label[]
   plugins      Plugin[]
+  repositories Repository[]
 
   @@map("organizations")
 }
@@ -153,6 +154,7 @@ model Agent {
   apiKeys          AgentApiKey[]
   budgets          AgentBudget[]
   ownedGoals       Goal[]
+  repositories     AgentRepository[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -1406,4 +1408,60 @@ model Plugin {
 
   @@index([orgId])
   @@map("plugins")
+}
+
+// ── Repositories ──
+
+model Repository {
+  id             String          @id @default(uuid())
+  orgId          String          @map("org_id")
+  org            Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  name           String
+  slug           String
+  gitUrl         String          @map("git_url")
+  branch         String          @default("main")
+  localPath      String?         @map("local_path")
+  syncSchedule   String?         @map("sync_schedule")
+  syncStatus     RepoSyncStatus  @default(PENDING) @map("sync_status")
+  lastSyncAt     DateTime?       @map("last_sync_at")
+  lastSyncError  String?         @map("last_sync_error")
+  authType       RepoAuthType    @default(NONE) @map("auth_type")
+  authConfig     Json?           @map("auth_config")
+  excludes       String?
+  description    String?
+  metadata       Json?
+  agents         AgentRepository[]
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+
+  @@unique([orgId, slug])
+  @@index([orgId])
+  @@map("repositories")
+}
+
+model AgentRepository {
+  id       String     @id @default(uuid())
+  agentId  String     @map("agent_id")
+  agent    Agent      @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  repoId   String     @map("repo_id")
+  repo     Repository @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  enabled  Boolean    @default(true)
+
+  @@unique([agentId, repoId])
+  @@map("agent_repositories")
+}
+
+enum RepoSyncStatus {
+  PENDING
+  CLONING
+  SYNCING
+  SYNCED
+  ERROR
+}
+
+enum RepoAuthType {
+  NONE
+  SSH_KEY
+  TOKEN
+  BASIC
 }

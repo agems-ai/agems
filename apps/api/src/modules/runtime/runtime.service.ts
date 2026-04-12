@@ -1608,7 +1608,18 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       }
     } catch { /* goals table might not exist yet */ }
 
-    const prompt = agemsPreamble + '\n' + modulesDirective + '\n\n' + companyContext + skillsContext + memoryContext + goalsContext + (agent.systemPrompt || '');
+    let reposContext = '';
+    const agentRepos = (agent.repositories || [])
+      .filter((ar: any) => ar.enabled && ar.repo?.syncStatus === 'SYNCED');
+    if (agentRepos.length > 0) {
+      const repoList = agentRepos.map((ar: any) => {
+        const r = ar.repo;
+        return `- ${r.slug}: ${r.name}${r.description ? ' — ' + r.description : ''} (branch: ${r.branch})`;
+      }).join('\n');
+      reposContext = `=== CONNECTED REPOSITORIES ===\nYou have access to these code repositories via repo_search, repo_read_file, repo_file_summary, repo_structure, and repo_find_definition tools:\n${repoList}\nAlways specify the repo slug when searching. Search in specific repos, not all at once.\n=== END REPOSITORIES ===\n\n`;
+    }
+
+    const prompt = agemsPreamble + '\n' + modulesDirective + '\n\n' + companyContext + skillsContext + reposContext + memoryContext + goalsContext + (agent.systemPrompt || '');
 
     if (cacheTtlMs > 0) {
       this.systemPromptCache.set(agent.id, { prompt, ts: Date.now() });
@@ -1809,6 +1820,507 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
           }
         },
       });
+    }
+
+    // ── Repository code search tools ──
+    {
+      const agentRepos = (agent.repositories || [])
+        .filter((ar: any) => ar.enabled && ar.repo?.localPath && ar.repo?.syncStatus === 'SYNCED');
+
+      if (agentRepos.length > 0) {
+        const repoMap = new Map<string, string>(agentRepos.map((ar: any) => [ar.repo.slug, ar.repo.localPath]));
+        const repoNames = Array.from(repoMap.keys());
+
+        const getRepoPath = (slug: string): { path: string } | { error: string } => {
+          const p = repoMap.get(slug);
+          if (!p) return { error: `Repository "${slug}" not found. Available: ${repoNames.join(', ')}` };
+          if (!existsSync(p)) return { error: `Repository "${slug}" is not cloned yet. Trigger a sync first.` };
+          return { path: p };
+        };
+
+        const EXCLUDE_DIRS = ['node_modules', 'dist', 'build', '.git', '__pycache__', '.next'];
+        const EXCLUDE_FILES = ['*.lock', '*.min.js', '*.min.css', '*.map'];
+
+        const extToLang = (ext: string): string => {
+          const map: Record<string, string> = {
+            '.ts': 'TypeScript', '.tsx': 'TypeScript', '.js': 'JavaScript', '.jsx': 'JavaScript',
+            '.py': 'Python', '.java': 'Java', '.kt': 'Kotlin', '.cs': 'C#',
+            '.go': 'Go', '.rs': 'Rust', '.rb': 'Ruby', '.php': 'PHP', '.swift': 'Swift',
+            '.c': 'C', '.cpp': 'C++', '.h': 'C', '.hpp': 'C++',
+          };
+          return map[ext] || 'unknown';
+        };
+
+        const extractDefinitions = (lines: string[], language: string): Array<{ line: number; kind: string; name: string; signature: string }> => {
+          const defs: Array<{ line: number; kind: string; name: string; signature: string }> = [];
+          const lang = language.toLowerCase();
+
+          const patterns: Array<{ re: RegExp; kind: string | ((m: RegExpMatchArray) => string); nameGroup: number }> = [];
+
+          if (lang === 'typescript' || lang === 'javascript') {
+            patterns.push(
+              { re: /^(\s*)(export\s+)?(default\s+)?(abstract\s+)?class\s+(\w+)/, kind: 'class', nameGroup: 5 },
+              { re: /^(\s*)(export\s+)?(default\s+)?interface\s+(\w+)/, kind: 'interface', nameGroup: 4 },
+              { re: /^(\s*)(export\s+)?(default\s+)?type\s+(\w+)\s*=/, kind: 'type', nameGroup: 4 },
+              { re: /^(\s*)(export\s+)?(default\s+)?enum\s+(\w+)/, kind: 'enum', nameGroup: 4 },
+              { re: /^(\s*)(export\s+)?(default\s+)?(async\s+)?function\s+(\w+)/, kind: 'function', nameGroup: 5 },
+              { re: /^(export\s+)?(const|let|var)\s+(\w+)\s*[=:]/, kind: (m) => m[2] === 'const' ? 'const' : 'variable', nameGroup: 3 },
+              { re: /^\s+(public|private|protected|static|async|get|set|readonly)\s+(?:(?:public|private|protected|static|async|get|set|readonly)\s+)*(\w+)\s*[\(<]/, kind: 'method', nameGroup: 2 },
+              { re: /^\s*@(Controller|Injectable|Module|Guard|Resolver|Middleware|Interceptor)\b/, kind: 'decorator', nameGroup: 1 },
+            );
+          } else if (lang === 'python') {
+            patterns.push(
+              { re: /^class\s+(\w+)/, kind: 'class', nameGroup: 1 },
+              { re: /^(async\s+)?def\s+(\w+)/, kind: 'function', nameGroup: 2 },
+              { re: /^(\w+)\s*=\s*/, kind: 'variable', nameGroup: 1 },
+            );
+          } else if (lang === 'java' || lang === 'kotlin' || lang === 'c#') {
+            patterns.push(
+              { re: /(?:public|private|protected|internal|static|final|abstract|override|open|data|sealed|suspend)\s+.*?(class|interface|enum|record|struct|object)\s+(\w+)/, kind: (m) => m[1], nameGroup: 2 },
+              { re: /^\s*(?:public|private|protected|internal)?\s*(?:static\s+)?(?:abstract\s+)?(?:override\s+)?(?:suspend\s+)?(?:fun\s+)?[\w<>\[\].]+\s+(\w+)\s*\(/, kind: 'method', nameGroup: 1 },
+              { re: /^\s*(val|var|const val)\s+(\w+)/, kind: 'variable', nameGroup: 2 },
+              { re: /^\s*(?:abstract\s+)?(?:class|interface|enum|record|struct|object)\s+(\w+)/, kind: (m) => 'class', nameGroup: 1 },
+            );
+          } else if (lang === 'go') {
+            patterns.push(
+              { re: /^func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)\s*\(/, kind: 'function', nameGroup: 1 },
+              { re: /^type\s+(\w+)\s+(struct|interface)/, kind: (m) => m[2], nameGroup: 1 },
+              { re: /^type\s+(\w+)\s+/, kind: 'type', nameGroup: 1 },
+              { re: /^(?:var|const)\s+(\w+)/, kind: 'variable', nameGroup: 1 },
+            );
+          } else if (lang === 'rust') {
+            patterns.push(
+              { re: /^\s*(pub\s+)?(async\s+)?fn\s+(\w+)/, kind: 'function', nameGroup: 3 },
+              { re: /^\s*(pub\s+)?(struct|enum|trait|union)\s+(\w+)/, kind: (m) => m[2], nameGroup: 3 },
+              { re: /^\s*(pub\s+)?impl\s+(?:<[^>]+>\s+)?(\w+)/, kind: 'impl', nameGroup: 2 },
+              { re: /^\s*(pub\s+)?type\s+(\w+)/, kind: 'type', nameGroup: 2 },
+              { re: /^\s*(pub\s+)?(?:const|static)\s+(\w+)/, kind: 'const', nameGroup: 2 },
+              { re: /^\s*(pub\s+)?mod\s+(\w+)/, kind: 'module', nameGroup: 2 },
+            );
+          } else if (lang === 'ruby') {
+            patterns.push(
+              { re: /^\s*class\s+(\w+)/, kind: 'class', nameGroup: 1 },
+              { re: /^\s*module\s+(\w+)/, kind: 'module', nameGroup: 1 },
+              { re: /^\s*def\s+(\w+)/, kind: 'function', nameGroup: 1 },
+              { re: /^\s*attr_(?:accessor|reader|writer)\s+:(\w+)/, kind: 'variable', nameGroup: 1 },
+            );
+          } else if (lang === 'php') {
+            patterns.push(
+              { re: /^\s*(?:abstract\s+)?(?:class|interface|trait|enum)\s+(\w+)/, kind: 'class', nameGroup: 1 },
+              { re: /^\s*(?:public|private|protected|static)\s+.*?function\s+(\w+)/, kind: 'method', nameGroup: 1 },
+              { re: /^\s*function\s+(\w+)/, kind: 'function', nameGroup: 1 },
+            );
+          } else if (lang === 'swift') {
+            patterns.push(
+              { re: /^\s*(?:public\s+|private\s+|internal\s+|open\s+|fileprivate\s+)?(?:final\s+)?(class|struct|enum|protocol|extension|actor)\s+(\w+)/, kind: (m) => m[1], nameGroup: 2 },
+              { re: /^\s*(?:public\s+|private\s+|internal\s+|open\s+)?(?:static\s+|class\s+)?func\s+(\w+)/, kind: 'function', nameGroup: 1 },
+              { re: /^\s*(?:public\s+|private\s+|internal\s+|open\s+)?(?:static\s+)?(?:let|var)\s+(\w+)/, kind: 'variable', nameGroup: 1 },
+            );
+          }
+
+          // Fallback patterns for unknown languages
+          if (patterns.length === 0) {
+            patterns.push(
+              { re: /^\s*(export\s+)?(class|function|interface|type|enum|struct|def|fn|func)\s+(\w+)/, kind: (m) => m[2], nameGroup: 3 },
+            );
+          }
+
+          for (let i = 0; i < lines.length && defs.length < 100; i++) {
+            const line = lines[i];
+            for (const p of patterns) {
+              const m = line.match(p.re);
+              if (m && m[p.nameGroup]) {
+                const kind = typeof p.kind === 'function' ? p.kind(m) : p.kind;
+                defs.push({
+                  line: i + 1,
+                  kind,
+                  name: m[p.nameGroup],
+                  signature: line.trim().substring(0, 150),
+                });
+                break;
+              }
+            }
+            // Python decorators: only capture if next line is class/def
+            if (lang === 'python' && line.match(/^\s*@(\w+)/) && i + 1 < lines.length) {
+              const next = lines[i + 1];
+              if (next.match(/^\s*(class|async\s+def|def)\s+/)) {
+                const dm = line.match(/^\s*@(\w+)/);
+                if (dm) {
+                  defs.push({ line: i + 1, kind: 'decorator', name: dm[1], signature: line.trim().substring(0, 150) });
+                }
+              }
+            }
+          }
+
+          return defs;
+        };
+
+        if (!disabledTools.has('repo_list')) {
+          tools.push({
+            name: 'repo_list',
+            description: 'List available code repositories connected to this agent.',
+            parameters: z.object({}),
+            execute: async () => {
+              return {
+                repositories: agentRepos.map((ar: any) => ({
+                  slug: ar.repo.slug,
+                  name: ar.repo.name,
+                  branch: ar.repo.branch,
+                  description: ar.repo.description,
+                })),
+              };
+            },
+          });
+        }
+
+        if (!disabledTools.has('repo_search')) {
+          tools.push({
+            name: 'repo_search',
+            description: `Search for text/code patterns in a repository. Available repos: ${repoNames.join(', ')}.\n\nTwo modes:\n- mode="files" (default): Returns a ranked list of files containing matches, with match count and preview. Start with this to find relevant files.\n- mode="content": Returns full grep output with 25 lines of context, grouped by file. Use after identifying target files with mode="files".\n\nWorkflow: repo_search(mode="files") → identify relevant file → repo_search(mode="content", filePattern="exact/path.ts") or repo_read_file.`,
+            parameters: z.object({
+              repo: z.string().describe('Repository slug'),
+              query: z.string().describe('Search query (text or regex pattern)'),
+              filePattern: z.string().optional().default('*').describe('File glob pattern, e.g. "*.ts", "*.py", "*.java"'),
+              caseSensitive: z.boolean().optional().default(false),
+              mode: z.enum(['files', 'content']).optional().default('files').describe(
+                'files = list matching files with preview (default, start here); content = show full grep matches with surrounding context',
+              ),
+            }),
+            execute: async (params: { repo: string; query: string; filePattern?: string; caseSensitive?: boolean; mode?: 'files' | 'content' }) => {
+              const result = getRepoPath(params.repo);
+              if ('error' in result) return { error: result.error };
+              const repoPath = result.path;
+
+              const { execSync } = await import('child_process');
+              const prune = EXCLUDE_DIRS.map(d => `-name ${d}`).join(' -o ');
+              const excludeFiles = EXCLUDE_FILES.map(f => `! -name '${f}'`).join(' ');
+              const nameFilter = params.filePattern && params.filePattern !== '*'
+                ? `-name '${params.filePattern}'` : '';
+              const findCmd = `find . -maxdepth 20 \\( ${prune} \\) -prune -o -type f ${nameFilter} ${excludeFiles} -print`;
+              const caseFlag = params.caseSensitive ? '' : '-i';
+              const safeQuery = JSON.stringify(params.query);
+
+              if (params.mode === 'content') {
+                // ── content mode: grep with context, grouped by file ──
+                try {
+                  const cmd = `${findCmd} | xargs grep -n -C 25 ${caseFlag} -- ${safeQuery} | head -1000`;
+                  const output = execSync(cmd, {
+                    cwd: repoPath, timeout: 10_000, maxBuffer: 2 * 1024 * 1024, encoding: 'utf-8', shell: '/bin/sh',
+                  });
+                  return parseContentOutput(output);
+                } catch (err: any) {
+                  const partial = typeof err.stdout === 'string' ? err.stdout : '';
+                  if (partial.length > 0) return parseContentOutput(partial, true);
+                  if (err.status === 1 || err.status === 123) return { results: [], totalMatches: 0, truncated: false };
+                  return { error: `Search failed: ${(err.message || '').substring(0, 200)}` };
+                }
+              }
+
+              // ── files mode (default): ranked file list with previews ──
+              try {
+                const script = [
+                  `TOTAL=$(${findCmd} | xargs grep -l ${caseFlag} -- ${safeQuery} 2>/dev/null | wc -l)`,
+                  `echo "TOTAL:$TOTAL"`,
+                  `FILES=$(${findCmd} | xargs grep -l ${caseFlag} -- ${safeQuery} 2>/dev/null | head -30)`,
+                  `for f in $FILES; do`,
+                  `  COUNT=$(grep -c ${caseFlag} -- ${safeQuery} "$f" 2>/dev/null || echo 0)`,
+                  `  PREVIEW=$(grep -n -m 1 -A 1 -B 1 ${caseFlag} -- ${safeQuery} "$f" 2>/dev/null | head -5)`,
+                  `  echo "FILE:$f"`,
+                  `  echo "COUNT:$COUNT"`,
+                  `  echo "$PREVIEW"`,
+                  `  echo "---END---"`,
+                  `done`,
+                ].join('; ');
+                const output = execSync(script, {
+                  cwd: repoPath, timeout: 10_000, maxBuffer: 2 * 1024 * 1024, encoding: 'utf-8', shell: '/bin/sh',
+                });
+
+                // Parse total
+                const totalMatch = output.match(/^TOTAL:\s*(\d+)/m);
+                const totalFiles = totalMatch ? parseInt(totalMatch[1], 10) : 0;
+
+                // Parse file blocks
+                const defPattern = /\b(export|class|function|interface|type|enum|struct|trait|impl|def|fn|func|pub fn|pub struct|const|let|var|val|object|abstract class|public static|private|protected)\s/;
+                const importPattern = /\b(import|require|from|use)\b/;
+
+                const blocks = output.split('---END---').filter(b => b.includes('FILE:'));
+                const files = blocks.map(block => {
+                  const lines = block.trim().split('\n');
+                  const fileLine = lines.find(l => l.startsWith('FILE:'));
+                  const countLine = lines.find(l => l.startsWith('COUNT:'));
+                  const path = (fileLine?.substring(5) || '').replace(/^\.\//, '');
+                  const matchCount = parseInt(countLine?.substring(6) || '0', 10);
+                  const previewLines = lines.filter(l => !l.startsWith('FILE:') && !l.startsWith('COUNT:') && !l.startsWith('TOTAL:'));
+                  const preview = previewLines.join('\n').trim();
+
+                  // Determine weight from preview content
+                  let weight = 2;
+                  if (defPattern.test(preview)) weight = 3;
+                  else if (importPattern.test(preview)) weight = 1;
+
+                  return { path, matchCount, preview, weight };
+                }).filter(f => f.path);
+
+                files.sort((a, b) => (b.matchCount * b.weight) - (a.matchCount * a.weight));
+
+                return {
+                  files: files.map(f => ({ path: f.path, matchCount: f.matchCount, preview: f.preview })),
+                  totalFiles,
+                  query: params.query,
+                  hint: "Use repo_search with mode='content' and filePattern to read matches in a specific file, or repo_read_file to read the full file.",
+                };
+              } catch (err: any) {
+                const partial = typeof err.stdout === 'string' ? err.stdout : '';
+                if (partial.length > 0) {
+                  // Try to parse partial output
+                  const blocks = partial.split('---END---').filter((b: string) => b.includes('FILE:'));
+                  if (blocks.length > 0) {
+                    const files = blocks.map((block: string) => {
+                      const lines = block.trim().split('\n');
+                      const fileLine = lines.find((l: string) => l.startsWith('FILE:'));
+                      const countLine = lines.find((l: string) => l.startsWith('COUNT:'));
+                      const path = (fileLine?.substring(5) || '').replace(/^\.\//, '');
+                      const matchCount = parseInt(countLine?.substring(6) || '0', 10);
+                      const previewLines = lines.filter((l: string) => !l.startsWith('FILE:') && !l.startsWith('COUNT:') && !l.startsWith('TOTAL:'));
+                      return { path, matchCount, preview: previewLines.join('\n').trim() };
+                    }).filter((f: { path: string }) => f.path);
+                    return { files, totalFiles: files.length, query: params.query, hint: 'Partial results returned.' };
+                  }
+                }
+                if (err.status === 1 || err.status === 123) return { files: [], totalFiles: 0, query: params.query, hint: 'No matches found.' };
+                return { error: `Search failed: ${(err.message || '').substring(0, 200)}` };
+              }
+
+              function parseContentOutput(raw: string, truncated = false): any {
+                const outputLines = raw.split('\n');
+                const fileGroups: Array<{ file: string; matches: string }> = [];
+                let currentFile = '';
+                let currentLines: string[] = [];
+                let totalMatches = 0;
+                let totalOutputLines = 0;
+
+                for (const line of outputLines) {
+                  if (totalOutputLines >= 200) { truncated = true; break; }
+                  // grep -n output: ./path/file.ts:42:content or ./path/file.ts-42-context
+                  const fileMatch = line.match(/^\.\/([^:]+?)[:|-]\d+[:|-]/);
+                  const file = fileMatch ? fileMatch[1] : '';
+                  if (file && file !== currentFile) {
+                    if (currentFile && currentLines.length > 0) {
+                      fileGroups.push({ file: currentFile, matches: currentLines.join('\n') });
+                    }
+                    currentFile = file;
+                    currentLines = [];
+                  }
+                  if (line === '--') {
+                    currentLines.push(line);
+                  } else if (file) {
+                    currentLines.push(line);
+                    if (line.includes(':') && !line.startsWith('--')) totalMatches++;
+                  }
+                  totalOutputLines++;
+                }
+                if (currentFile && currentLines.length > 0) {
+                  fileGroups.push({ file: currentFile, matches: currentLines.join('\n') });
+                }
+
+                return { results: fileGroups, totalMatches, truncated };
+              }
+            },
+          });
+        }
+
+        if (!disabledTools.has('repo_read_file')) {
+          tools.push({
+            name: 'repo_read_file',
+            description: `Read a file from a repository. Returns content with line numbers. If the file is longer than the requested range, the response includes a hint with key definitions in the unread portion to help you decide whether to continue reading. Available repos: ${repoNames.join(', ')}`,
+            parameters: z.object({
+              repo: z.string().describe('Repository slug'),
+              path: z.string().describe('File path relative to repo root'),
+              startLine: z.number().optional().default(1).describe('Start line number (1-based)'),
+              endLine: z.number().optional().default(500).describe('End line number (max 500 lines per read)'),
+            }),
+            execute: async (params: { repo: string; path: string; startLine?: number; endLine?: number }) => {
+              const result = getRepoPath(params.repo);
+              if ('error' in result) return { error: result.error };
+              const repoPath = result.path;
+
+              const { resolve: pathResolve, join: pathJoin, extname } = await import('path');
+              const filePath = pathResolve(pathJoin(repoPath, params.path));
+              if (!filePath.startsWith(pathResolve(repoPath))) {
+                return { error: 'Path traversal not allowed' };
+              }
+
+              try {
+                const { readFileSync, statSync } = await import('fs');
+                const stat = statSync(filePath);
+                if (stat.size > 1024 * 1024) return { error: 'File too large (>1MB). Try reading a specific line range.' };
+
+                const content = readFileSync(filePath, 'utf-8');
+                const allLines = content.split('\n');
+                const start = Math.max(1, params.startLine || 1);
+                const end = Math.min(allLines.length, Math.min(params.endLine || 500, start + 499));
+                const slice = allLines.slice(start - 1, end);
+                const numbered = slice.map((line, i) => `${start + i}: ${line}`).join('\n');
+
+                const res: any = { content: numbered, startLine: start, endLine: end, totalLines: allLines.length };
+
+                if (end < allLines.length) {
+                  const ext = extname(params.path).toLowerCase();
+                  const language = extToLang(ext);
+                  const remaining = allLines.slice(end);
+                  const defs = extractDefinitions(remaining, language);
+                  res.hint = `File has ${allLines.length} lines. You read lines ${start}\u2013${end}. Call again with startLine=${end + 1} to continue reading.`;
+                  if (defs.length > 0) {
+                    const defSummary = defs.slice(0, 15).map(d =>
+                      `  L${end + d.line}: ${d.kind} ${d.name}`,
+                    ).join('\n');
+                    res.hint += `\nKey definitions in unread portion:\n${defSummary}`;
+                    if (defs.length > 15) res.hint += `\n  ... and ${defs.length - 15} more`;
+                  }
+                }
+
+                return res;
+              } catch (err: any) {
+                return { error: `Failed to read file: ${(err.message || '').substring(0, 200)}` };
+              }
+            },
+          });
+        }
+
+        if (!disabledTools.has('repo_structure')) {
+          tools.push({
+            name: 'repo_structure',
+            description: `List the file tree of a repository. Available repos: ${repoNames.join(', ')}`,
+            parameters: z.object({
+              repo: z.string().describe('Repository slug'),
+              path: z.string().optional().default('.').describe('Subdirectory path (default: repo root)'),
+              depth: z.number().optional().default(3).describe('Max depth (1-5, default 3)'),
+            }),
+            execute: async (params: { repo: string; path?: string; depth?: number }) => {
+              const result = getRepoPath(params.repo);
+              if ('error' in result) return { error: result.error };
+              const repoPath = result.path;
+
+              const { resolve: pathResolve, join: pathJoin } = await import('path');
+              const targetPath = pathResolve(pathJoin(repoPath, params.path || '.'));
+              if (!targetPath.startsWith(pathResolve(repoPath))) {
+                return { error: 'Path traversal not allowed' };
+              }
+
+              if (!existsSync(targetPath)) {
+                return { error: `Path "${params.path}" not found in repository` };
+              }
+
+              try {
+                const { execSync } = await import('child_process');
+                const depth = Math.min(5, Math.max(1, params.depth || 3));
+                const excludes = EXCLUDE_DIRS.map(d => `-name ${d} -prune -o`).join(' ');
+                const cmd = `find . -maxdepth ${depth} ${excludes} -print | head -500 | sort`;
+                const output = execSync(cmd, {
+                  cwd: targetPath,
+                  timeout: 10_000,
+                  encoding: 'utf-8',
+                });
+                return { tree: output.trim() };
+              } catch (err: any) {
+                return { error: `Failed to list structure: ${(err.message || '').substring(0, 200)}` };
+              }
+            },
+          });
+        }
+
+        if (!disabledTools.has('repo_file_summary')) {
+          tools.push({
+            name: 'repo_file_summary',
+            description: `Get a structural summary of a file: imports, exports, class/function/type definitions with line numbers. Much cheaper than reading the whole file — use this to decide if a file is relevant before reading it. Available repos: ${repoNames.join(', ')}`,
+            parameters: z.object({
+              repo: z.string().describe('Repository slug'),
+              path: z.string().describe('File path relative to repo root'),
+            }),
+            execute: async (params: { repo: string; path: string }) => {
+              const result = getRepoPath(params.repo);
+              if ('error' in result) return { error: result.error };
+              const repoPath = result.path;
+
+              const { resolve: pathResolve, join: pathJoin, extname } = await import('path');
+              const filePath = pathResolve(pathJoin(repoPath, params.path));
+              if (!filePath.startsWith(pathResolve(repoPath))) {
+                return { error: 'Path traversal not allowed' };
+              }
+
+              try {
+                const { readFileSync, statSync } = await import('fs');
+                const stat = statSync(filePath);
+                if (stat.size > 2 * 1024 * 1024) return { error: 'File too large (>2MB).' };
+
+                const content = readFileSync(filePath, 'utf-8');
+                const allLines = content.split('\n');
+                const ext = extname(params.path).toLowerCase();
+                const language = extToLang(ext);
+                const header = allLines.slice(0, 10).map((l, i) => `${i + 1}: ${l}`).join('\n');
+                const definitions = extractDefinitions(allLines, language);
+                const truncated = definitions.length >= 100;
+
+                return {
+                  path: params.path,
+                  totalLines: allLines.length,
+                  language,
+                  header,
+                  definitions: definitions.slice(0, 100),
+                  ...(truncated ? { truncated } : {}),
+                };
+              } catch (err: any) {
+                return { error: `Failed to read file: ${(err.message || '').substring(0, 200)}` };
+              }
+            },
+          });
+        }
+
+        if (!disabledTools.has('repo_find_definition')) {
+          tools.push({
+            name: 'repo_find_definition',
+            description: `Find definitions of classes, functions, types, etc. in a repository. Available repos: ${repoNames.join(', ')}`,
+            parameters: z.object({
+              repo: z.string().describe('Repository slug'),
+              name: z.string().describe('Name of the class, function, type, or variable to find'),
+              filePattern: z.string().optional().describe('File glob pattern to narrow search, e.g. "*.ts"'),
+            }),
+            execute: async (params: { repo: string; name: string; filePattern?: string }) => {
+              const result = getRepoPath(params.repo);
+              if ('error' in result) return { error: result.error };
+              const repoPath = result.path;
+
+              try {
+                const { execSync } = await import('child_process');
+                const pattern = `(class|interface|type|enum|function|const|let|var|export|def|struct)\\s+${params.name}\\b`;
+                const prune = EXCLUDE_DIRS.map(d => `-name ${d}`).join(' -o ');
+                const excludeFiles = EXCLUDE_FILES.map(f => `! -name '${f}'`).join(' ');
+                const nameFilter = params.filePattern ? `-name '${params.filePattern}'` : '';
+                const findCmd = `find . -maxdepth 20 \\( ${prune} \\) -prune -o -type f ${nameFilter} ${excludeFiles} -print`;
+                const cmd = `${findCmd} | xargs grep -n -E -C 30 -- ${JSON.stringify(pattern)} | head -300`;
+                const output = execSync(cmd, {
+                  cwd: repoPath,
+                  timeout: 10_000,
+                  maxBuffer: 2 * 1024 * 1024,
+                  encoding: 'utf-8',
+                  shell: '/bin/sh',
+                });
+
+                const lines = output.split('\n');
+                return { results: lines.slice(0, 50).join('\n'), truncated: lines.length > 50 };
+              } catch (err: any) {
+                const partial = typeof err.stdout === 'string' ? err.stdout : '';
+                if (partial.length > 0) {
+                  const lines = partial.split('\n');
+                  return { results: lines.slice(0, 50).join('\n'), truncated: true };
+                }
+                if (err.status === 1 || err.status === 123) return { results: 'No definitions found', truncated: false };
+                return { error: `Search failed: ${(err.message || '').substring(0, 200)}` };
+              }
+            },
+          });
+        }
+      }
     }
 
     // ── Agent-assigned tools from database (N8N, DigitalOcean, REST_API, DATABASE, etc.) ──
@@ -5243,7 +5755,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
   async getBuiltinToolNames(agentId: string): Promise<Array<{ name: string; description: string; category: string; enabled: boolean }>> {
     const agent = await this.prisma.agent.findUnique({
       where: { id: agentId },
-      include: { skills: { include: { skill: true } }, tools: { include: { tool: true } } },
+      include: { skills: { include: { skill: true } }, tools: { include: { tool: true } }, repositories: { include: { repo: true } } },
     });
     if (!agent) return [];
 
@@ -5318,6 +5830,17 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
       for (const t of ['tg_send_message', 'tg_read_messages', 'tg_find_contact', 'tg_list_dialogs', 'tg_send_photo']) {
         add(t, t.replace(/tg_/g, '').replace(/_/g, ' '), 'Telegram');
       }
+    }
+
+    // Repositories
+    const agentRepos = (agent as any).repositories?.filter((ar: any) => ar.enabled && ar.repo) || [];
+    if (agentRepos.length > 0) {
+      add('repo_list', 'List available repositories', 'Repositories');
+      add('repo_search', 'Search code in repositories', 'Repositories');
+      add('repo_read_file', 'Read file from repository', 'Repositories');
+      add('repo_structure', 'List repository file tree', 'Repositories');
+      add('repo_file_summary', 'Get structural summary of a file', 'Repositories');
+      add('repo_find_definition', 'Find code definitions', 'Repositories');
     }
 
     // AGEMS built-in
