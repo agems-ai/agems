@@ -30,6 +30,86 @@ export interface RunResult {
   tokensUsed: { input: number; output: number };
   iterations: number;
   loopDetected?: boolean;
+  /** Set when the runner caught a provider/transport error and converted it
+   * into a user-facing message in `text`. Callers can branch on this without
+   * parsing the message string. */
+  error?: {
+    kind: 'invalid_api_key' | 'rate_limit' | 'context_too_long' | 'connection' | 'unknown';
+    provider: string;
+    raw: string;
+    retryAfterSeconds?: number;
+  };
+}
+
+/**
+ * Convert a raw provider error into a user-facing message + structured kind.
+ * Centralised so both `run()` and the streaming variants can use it.
+ */
+function classifyProviderError(err: unknown, provider: string): NonNullable<RunResult['error']> & { text: string } {
+  const raw = err instanceof Error ? err.message : String(err);
+  const lower = raw.toLowerCase();
+  // status code can live on err.statusCode (ai-sdk) or err.status (fetch-style)
+  const status = (err as any)?.statusCode ?? (err as any)?.status;
+
+  // Invalid API key
+  if (
+    status === 401 ||
+    /invalid[_ -]?api[_ -]?key|incorrect api key|unauthori[sz]ed|authentication.*fail/.test(lower)
+  ) {
+    return {
+      kind: 'invalid_api_key',
+      provider,
+      raw,
+      text: `Agent cannot respond: invalid API key for ${provider}. Check Settings → LLM Keys.`,
+    };
+  }
+
+  // Rate limit
+  if (status === 429 || /rate[_ -]?limit|too many requests|quota/.test(lower)) {
+    const retryHeader = (err as any)?.responseHeaders?.['retry-after'];
+    const retryMatch = lower.match(/retry[_ -]?(?:after|in)\D{0,5}(\d+)/);
+    const retryAfterSeconds = retryHeader ? Number(retryHeader) : retryMatch ? Number(retryMatch[1]) : undefined;
+    return {
+      kind: 'rate_limit',
+      provider,
+      raw,
+      retryAfterSeconds,
+      text: retryAfterSeconds
+        ? `Agent is rate-limited by ${provider}. Will retry in ${retryAfterSeconds}s.`
+        : `Agent is rate-limited by ${provider}. Please retry shortly.`,
+    };
+  }
+
+  // Context too long
+  if (
+    /context[_ -]?length|max[_ -]?tokens|too many tokens|tokens exceed|prompt.*too long|input.*too long/.test(lower)
+  ) {
+    return {
+      kind: 'context_too_long',
+      provider,
+      raw,
+      text: `Conversation too long for this model. Trim history or switch to a model with a larger context window.`,
+    };
+  }
+
+  // Connection / transport
+  if (
+    /econnrefused|fetch failed|network|enotfound|etimedout|socket hang up|getaddrinfo/.test(lower)
+  ) {
+    return {
+      kind: 'connection',
+      provider,
+      raw,
+      text: `Cannot reach ${provider}. Network or service may be down. Check connectivity / provider status.`,
+    };
+  }
+
+  return {
+    kind: 'unknown',
+    provider,
+    raw,
+    text: `Agent error from ${provider}: ${raw.slice(0, 300)}`,
+  };
 }
 
 /**
@@ -295,9 +375,31 @@ export class AgentRunner {
       return this.runStream(input, common, toolResults, loopRef, abortSignal, streamCallbacks);
     }
 
-    const result = typeof input === 'string'
-      ? await generateText({ ...common, prompt: input, abortSignal } as any)
-      : await generateText({ ...common, messages: input as any, abortSignal } as any);
+    let result: any;
+    try {
+      result = typeof input === 'string'
+        ? await generateText({ ...common, prompt: input, abortSignal } as any)
+        : await generateText({ ...common, messages: input as any, abortSignal } as any);
+    } catch (err) {
+      // User-stop should propagate (called sites depend on the abort signature).
+      if (err instanceof Error && err.message === 'Execution stopped by user') throw err;
+
+      const classified = classifyProviderError(err, this.config.provider.provider || 'provider');
+      console.error(`[AgentRunner] ${classified.kind}: ${classified.raw}`);
+      return {
+        text: classified.text,
+        thinking: [],
+        toolCalls: toolResults,
+        tokensUsed: { input: 0, output: 0 },
+        iterations: 0,
+        error: {
+          kind: classified.kind,
+          provider: classified.provider,
+          raw: classified.raw,
+          retryAfterSeconds: classified.retryAfterSeconds,
+        },
+      };
+    }
 
     const { thinking, cleanText } = this.extractThinking(result, result.text);
     let text = cleanText;
