@@ -38,6 +38,14 @@ export class AgentsController {
     return this.agentsService.exportAgents(req.user.orgId);
   }
 
+  /** Export a single agent (with its tool/skill associations) for transfer
+   *  to another org or instance. Returns the same shape as bulk export but
+   *  with a single-element `agents` array. */
+  @Get(':id/export')
+  exportOne(@Param('id') id: string, @Request() req: { user: RequestUser }) {
+    return this.agentsService.exportAgent(id, req.user.orgId);
+  }
+
   @Post('import')
   @Roles('MANAGER')
   importAgents(@Body() body: any, @Request() req: { user: RequestUser }) {
