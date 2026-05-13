@@ -17,6 +17,8 @@ import { join, resolve } from 'path';
 import { decryptJson } from '../../common/crypto.util';
 import { RedisLockService } from '../../common/redis-lock.service';
 import { BrowserService } from './browser.service';
+import { buildExecutionAttribution } from './cost-attribution';
+import { rankMemories } from './memory-search';
 
 @Injectable()
 export class RuntimeService {
@@ -1016,10 +1018,16 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       const runtimeConfig = agent.runtimeConfig as Record<string, unknown> ?? {};
       const llmConfig = agent.llmConfig as Record<string, unknown> ?? {};
 
-      const apiKey = await this.getApiKey(agent.llmProvider, agent.orgId);
+      const isOllama = agent.llmProvider === 'OLLAMA';
+      // For Ollama-compat: llm_key_ollama stores the Base URL,
+      // llm_key_ollama_apikey (optional) stores the actual API key
+      // (used when pointing to Google AI Studio, OpenRouter, etc.).
+      const ollamaBaseUrlFromKey = isOllama ? await this.getApiKey('OLLAMA', agent.orgId) : undefined;
+      const ollamaApiKey = isOllama ? (await this.settings.get('llm_key_ollama_apikey', agent.orgId)) || 'ollama' : undefined;
+      const apiKey = isOllama ? ollamaApiKey : await this.getApiKey(agent.llmProvider, agent.orgId);
 
-      // If no API key configured, return a helpful welcome message instead of failing
-      if (!apiKey) {
+      // If no API key (or Ollama base URL) configured, return a helpful welcome message instead of failing
+      if (isOllama ? !ollamaBaseUrlFromKey : !apiKey) {
         const noKeyMessage = `Hello! I'm ${agent.name}, your AGEMS assistant.\n\nTo start working, I need an API key for any LLM provider. You can choose based on your needs and budget:\n\n**Popular options:**\n• **Google Gemini** — great free tier, good for getting started → [ai.google.dev](https://ai.google.dev)\n• **Anthropic Claude** — excellent reasoning and coding → [console.anthropic.com](https://console.anthropic.com)\n• **OpenAI GPT** — versatile, widely supported → [platform.openai.com](https://platform.openai.com)\n• **DeepSeek** — very affordable, strong performance → [platform.deepseek.com](https://platform.deepseek.com)\n\n**How to set up:**\n1. Get an API key from any provider above\n2. Go to **Settings** → **LLM Keys** and paste your key\n3. Come back here and I'm ready!\n\n**Want to change your model later?**\nGo to **Agents** → select me → change **LLM Provider** and **Model** anytime.\n\nPick what works for you — I'll work with any of them!`;
         await this.prisma.agentExecution.update({
           where: { id: execution.id },
@@ -1078,7 +1086,10 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
           where: { id: execution.id },
           data: { status: 'COMPLETED', output: { text: budgetBlock }, endedAt: new Date() },
         });
-        return { text: budgetBlock, toolCalls: [], tokensUsed: 0, costUsd: 0, waitingForApproval: false, thinking: [] as string[], iterations: 0, loopDetected: false, executionId: execution.id };
+        // Return empty text so budget-block messages are NOT forwarded to chat
+        // channels (they were spamming hundreds of "budget reached" messages per
+        // day). The block reason is preserved in execution.output for auditing.
+        return { text: '', toolCalls: [], tokensUsed: 0, costUsd: 0, waitingForApproval: false, thinking: [] as string[], iterations: 0, loopDetected: false, executionId: execution.id };
       }
 
       this.logger.log(`Agent ${agent.name}: ${wrappedTools.length} tools, provider=${agent.llmProvider}, model=${agent.llmModel}`);
@@ -1178,12 +1189,23 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
       }
 
       const resolvedMaxIterations = await this.resolveRuntimeLimit(runtimeConfig, 'maxIterations', 'default_max_iterations', this.DEFAULT_MAX_ITERATIONS);
+
+      // Resolve baseUrl: per-agent override → org-level setting (e.g. ollama_base_url) → undefined
+      let resolvedBaseUrl = llmConfig.baseUrl ? String(llmConfig.baseUrl) : undefined;
+      if (!resolvedBaseUrl && ollamaBaseUrlFromKey) resolvedBaseUrl = ollamaBaseUrlFromKey;
+      if (!resolvedBaseUrl && agent.llmProvider === 'OLLAMA') {
+        try {
+          const orgBase = await this.settings.get('ollama_base_url', agent.orgId);
+          if (orgBase) resolvedBaseUrl = orgBase;
+        } catch {}
+      }
+
       const runner = new AgentRunner({
         provider: {
           provider: agent.llmProvider as any,
           model: agent.llmModel,
           apiKey,
-          ...(llmConfig.baseUrl ? { baseUrl: String(llmConfig.baseUrl) } : {}),
+          ...(resolvedBaseUrl ? { baseUrl: resolvedBaseUrl } : {}),
           ...(llmConfig.apiFormat ? { apiFormat: String(llmConfig.apiFormat) as 'openai' | 'anthropic' | 'google' } : {}),
         },
         systemPrompt: await this.buildSystemPrompt(agent),
@@ -1197,10 +1219,11 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
 
       // Stream thinking & text chunks to frontend in real-time
       // Only use streaming for providers that support it (Anthropic, OpenAI, Google, DeepSeek)
-      const streamingProviders = ['ANTHROPIC', 'OPENAI', 'GOOGLE', 'DEEPSEEK', 'MISTRAL', 'GROQ', 'TOGETHER', 'FIREWORKS', 'PERPLEXITY', 'MINIMAX'];
+      const streamingProviders = ['ANTHROPIC', 'OPENAI', 'GOOGLE', 'DEEPSEEK', 'MISTRAL', 'GROQ', 'TOGETHER', 'FIREWORKS', 'PERPLEXITY', 'MINIMAX', 'OLLAMA', 'GLM'];
       const supportsStreaming = streamingProviders.includes(agent.llmProvider);
       const streamCallbacks = supportsStreaming ? {
         onThinkingChunk: (chunk: string) => {
+          console.log(`[THINKING-EMIT] agent=${agent.name} chunk=${chunk.length}chars channelId=${context?.channelId ?? 'none'}`);
           this.events.emit('agent.thinking.chunk', {
             channelId: context?.channelId, agentId, executionId: execution.id, chunk,
           });
@@ -1286,6 +1309,10 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
         (tc: any) => tc.output?.approval_required === true,
       );
 
+      // Per-execution cost attribution: write provider/model/in-out tokens
+      // so analytics can slice spend by model without separate aggregation.
+      const attribution = buildExecutionAttribution(agent, result.tokensUsed);
+
       if (needsApproval) {
         await this.prisma.agentExecution.update({
           where: { id: execution.id },
@@ -1295,6 +1322,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
             toolCalls: result.toolCalls as any,
             tokensUsed: result.tokensUsed.input + result.tokensUsed.output,
             costUsd: this.estimateCost(agent.llmProvider, result.tokensUsed),
+            ...attribution,
             endedAt: new Date(),
           },
         });
@@ -1314,6 +1342,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
           toolCalls: result.toolCalls as any,
           tokensUsed: result.tokensUsed.input + result.tokensUsed.output,
           costUsd: this.estimateCost(agent.llmProvider, result.tokensUsed),
+          ...attribution,
           endedAt: new Date(),
         },
       });
@@ -1624,10 +1653,14 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
 
     // ── Skill loader tool ──
     if (agent.skills?.length) {
-      const skillMap = new Map<string, { content: string; description: string }>();
+      const skillMap = new Map<string, { id: string; content: string; description: string }>();
       for (const as of agent.skills) {
         if (as.enabled !== false && as.skill?.name && as.skill?.content) {
-          skillMap.set(as.skill.name, { content: as.skill.content, description: as.skill.description || '' });
+          skillMap.set(as.skill.name, {
+            id: as.skill.id,
+            content: as.skill.content,
+            description: as.skill.description || '',
+          });
         }
       }
       if (skillMap.size > 0) {
@@ -1641,11 +1674,17 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
             skillName: z.string().describe('Name of the skill to load'),
           }),
           execute: async (params: { skillName: string }) => {
-            const entry = skillMap.get(params.skillName);
-            if (!entry) {
+            const hit = skillMap.get(params.skillName);
+            if (!hit) {
               return { error: `Skill "${params.skillName}" not found. Available: ${Array.from(skillMap.keys()).join(', ')}` };
             }
-            return { skill: params.skillName, content: entry.content };
+            // Touch lastUsedAt so the curator doesn't STALE skills the agent
+            // actually uses. Fire-and-forget — never block the agent on this.
+            this.prisma.skill.update({
+              where: { id: hit.id },
+              data: { lastUsedAt: new Date() },
+            }).catch(() => {});
+            return { skill: params.skillName, content: hit.content };
           },
         });
       }
@@ -1745,32 +1784,81 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
 
       tools.push({
         name: 'memory_read',
-        description: 'Read your persistent memory entries. Use to recall knowledge from past conversations. Filter by type: KNOWLEDGE (learned facts), CONTEXT (situational), FILE (saved files), CONVERSATION (past chats).',
+        description: 'Read your persistent memory entries. Use to recall knowledge from past conversations. Filter by type: KNOWLEDGE (learned facts), CONTEXT (situational), FILE (saved files), CONVERSATION (past chats). When `search` is given, entries are RANKED by relevance (token match + phrase bonus + recency) instead of plain newest-first.',
         parameters: z.object({
           type: z.string().optional().describe('Memory type filter: KNOWLEDGE, CONTEXT, FILE, CONVERSATION (default: all)'),
-          search: z.string().optional().describe('Search term to filter memories by content'),
+          search: z.string().optional().describe('Search term — switches output to relevance ranking'),
           limit: z.number().optional().describe('Max entries to return (default 20)'),
         }),
         execute: async (params: { type?: string; search?: string; limit?: number }) => {
           const where: any = { agentId };
           if (params.type) where.type = params.type;
+          const limit = params.limit ?? 20;
+
+          if (params.search?.trim()) {
+            const candidates = await this.prisma.agentMemory.findMany({
+              where,
+              orderBy: { createdAt: 'desc' },
+              take: Math.max(limit * 5, 100),
+            });
+            const ranked = rankMemories(candidates, params.search, { topK: limit });
+            const results = ranked.map(({ entry, score, matchedTokens }) => ({
+              id: entry.id,
+              type: (entry as any).type,
+              content: entry.content.substring(0, 5000),
+              metadata: (entry as any).metadata,
+              createdAt: entry.createdAt,
+              score,
+              matchedTokens,
+            }));
+            return { count: results.length, memories: results };
+          }
+
           const memories = await this.prisma.agentMemory.findMany({
             where,
             orderBy: { createdAt: 'desc' },
-            take: params.limit ?? 20,
+            take: limit,
           });
-          let results = memories.map(m => ({
+          const results = memories.map(m => ({
             id: m.id,
             type: m.type,
             content: m.content.substring(0, 5000),
             metadata: m.metadata,
             createdAt: m.createdAt,
           }));
-          if (params.search) {
-            const q = params.search.toLowerCase();
-            results = results.filter(r => r.content.toLowerCase().includes(q));
-          }
           return { count: results.length, memories: results };
+        },
+      });
+
+      tools.push({
+        name: 'memory_search',
+        description: 'Search your persistent memory by relevance to a natural-language query. Returns the top-K entries ranked by token overlap + phrase bonus + recency. Use this when you need to RECALL a specific fact rather than browse recent memory.',
+        parameters: z.object({
+          query: z.string().describe('Natural-language query — what fact / event / instruction are you trying to recall'),
+          type: z.string().optional().describe('Optional memory type filter: KNOWLEDGE, CONTEXT, FILE, CONVERSATION'),
+          topK: z.number().optional().describe('Max results to return (default 10, max 50)'),
+        }),
+        execute: async (params: { query: string; type?: string; topK?: number }) => {
+          const where: any = { agentId };
+          if (params.type) where.type = params.type;
+          const topK = Math.min(Math.max(params.topK ?? 10, 1), 50);
+
+          const candidates = await this.prisma.agentMemory.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            take: 500,
+          });
+          const ranked = rankMemories(candidates, params.query, { topK });
+          const results = ranked.map(({ entry, score, matchedTokens }) => ({
+            id: entry.id,
+            type: (entry as any).type,
+            content: entry.content.substring(0, 5000),
+            metadata: (entry as any).metadata,
+            createdAt: entry.createdAt,
+            score,
+            matchedTokens,
+          }));
+          return { count: results.length, query: params.query, memories: results };
         },
       });
 
@@ -5229,8 +5317,8 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
 
   /** Get LLM API key: Settings table first, then env vars fallback */
   private async getApiKey(provider: string, orgId?: string): Promise<string | undefined> {
-    const settingsMap: Record<string, string> = { ANTHROPIC: 'llm_key_anthropic', OPENAI: 'llm_key_openai', GOOGLE: 'llm_key_google', DEEPSEEK: 'llm_key_deepseek', MISTRAL: 'llm_key_mistral', MINIMAX: 'llm_key_minimax', GLM: 'llm_key_glm', XAI: 'llm_key_xai', COHERE: 'llm_key_cohere', PERPLEXITY: 'llm_key_perplexity', TOGETHER: 'llm_key_together', FIREWORKS: 'llm_key_fireworks', GROQ: 'llm_key_groq', MOONSHOT: 'llm_key_moonshot', QWEN: 'llm_key_qwen', AI21: 'llm_key_ai21', SAMBANOVA: 'llm_key_sambanova' };
-    const envMap: Record<string, string> = { ANTHROPIC: 'ANTHROPIC_API_KEY', OPENAI: 'OPENAI_API_KEY', GOOGLE: 'GOOGLE_AI_API_KEY', DEEPSEEK: 'DEEPSEEK_API_KEY', MISTRAL: 'MISTRAL_API_KEY', MINIMAX: 'MINIMAX_API_KEY', GLM: 'GLM_API_KEY', XAI: 'XAI_API_KEY', COHERE: 'COHERE_API_KEY', PERPLEXITY: 'PERPLEXITY_API_KEY', TOGETHER: 'TOGETHER_API_KEY', FIREWORKS: 'FIREWORKS_API_KEY', GROQ: 'GROQ_API_KEY', MOONSHOT: 'MOONSHOT_API_KEY', QWEN: 'QWEN_API_KEY', AI21: 'AI21_API_KEY', SAMBANOVA: 'SAMBANOVA_API_KEY' };
+    const settingsMap: Record<string, string> = { ANTHROPIC: 'llm_key_anthropic', OPENAI: 'llm_key_openai', GOOGLE: 'llm_key_google', DEEPSEEK: 'llm_key_deepseek', MISTRAL: 'llm_key_mistral', MINIMAX: 'llm_key_minimax', GLM: 'llm_key_glm', XAI: 'llm_key_xai', COHERE: 'llm_key_cohere', PERPLEXITY: 'llm_key_perplexity', TOGETHER: 'llm_key_together', FIREWORKS: 'llm_key_fireworks', GROQ: 'llm_key_groq', MOONSHOT: 'llm_key_moonshot', QWEN: 'llm_key_qwen', AI21: 'llm_key_ai21', SAMBANOVA: 'llm_key_sambanova', OLLAMA: 'llm_key_ollama' };
+    const envMap: Record<string, string> = { ANTHROPIC: 'ANTHROPIC_API_KEY', OPENAI: 'OPENAI_API_KEY', GOOGLE: 'GOOGLE_AI_API_KEY', DEEPSEEK: 'DEEPSEEK_API_KEY', MISTRAL: 'MISTRAL_API_KEY', MINIMAX: 'MINIMAX_API_KEY', GLM: 'GLM_API_KEY', XAI: 'XAI_API_KEY', COHERE: 'COHERE_API_KEY', PERPLEXITY: 'PERPLEXITY_API_KEY', TOGETHER: 'TOGETHER_API_KEY', FIREWORKS: 'FIREWORKS_API_KEY', GROQ: 'GROQ_API_KEY', MOONSHOT: 'MOONSHOT_API_KEY', QWEN: 'QWEN_API_KEY', AI21: 'AI21_API_KEY', SAMBANOVA: 'SAMBANOVA_API_KEY', OLLAMA: 'OLLAMA_API_KEY' };
 
     const sk = settingsMap[provider];
     if (sk) {
@@ -5274,6 +5362,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
 
     // Memory — persistent knowledge store
     add('memory_read', 'Read persistent memory entries', 'Memory');
+    add('memory_search', 'Recall memory by relevance to a query', 'Memory');
     add('memory_write', 'Save to persistent memory', 'Memory');
     add('memory_delete', 'Delete memory entry', 'Memory');
 

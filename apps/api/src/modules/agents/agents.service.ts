@@ -350,21 +350,85 @@ export class AgentsService {
     return { agent: { id: agent.id, name: agent.name, slug: agent.slug }, parentChain, children: descendants };
   }
 
+  /** Export a single agent (with tool + skill associations) by id. */
+  async exportAgent(agentId: string, orgId: string) {
+    const a: any = await this.prisma.agent.findFirst({
+      where: { id: agentId, orgId },
+      include: {
+        tools: { include: { tool: { select: { name: true, type: true } } } },
+        skills: { include: { skill: { select: { slug: true } } } },
+      },
+    });
+    if (!a) throw new NotFoundException(`Agent ${agentId} not found`);
+    const { id: _id, orgId: _org, ownerId: _o, createdAt: _c, tools: agentTools, skills: agentSkills, ...rest } = a;
+    return {
+      version: '1.1.0',
+      exportedAt: new Date().toISOString(),
+      agents: [{
+        ...rest,
+        tools: (agentTools ?? []).map((at: any) => ({
+          toolName: at.tool?.name,
+          toolType: at.tool?.type,
+          permissions: at.permissions,
+          approvalMode: at.approvalMode,
+          enabled: at.enabled,
+        })).filter((t: any) => t.toolName && t.toolType),
+        skills: (agentSkills ?? []).map((as: any) => ({
+          skillSlug: as.skill?.slug,
+          config: as.config,
+          enabled: as.enabled,
+        })).filter((s: any) => s.skillSlug),
+      }],
+    };
+  }
+
   async exportAgents(orgId: string) {
     const agents = await this.prisma.agent.findMany({
       where: { orgId },
       orderBy: { createdAt: 'desc' },
+      include: {
+        tools: { include: { tool: { select: { name: true, type: true } } } },
+        skills: { include: { skill: { select: { slug: true } } } },
+      },
     });
     return {
-      version: '1.0.0',
+      version: '1.1.0',
       exportedAt: new Date().toISOString(),
-      agents: agents.map(({ id, orgId: _org, ownerId: _o, createdAt: _c, ...rest }) => rest),
+      agents: agents.map((a) => {
+        const { id: _id, orgId: _org, ownerId: _o, createdAt: _c, tools: agentTools, skills: agentSkills, ...rest } = a as any;
+        return {
+          ...rest,
+          // Tool refs match by (name, type) in the importing org. Configs and
+          // secrets are not exported because they belong to the target env.
+          tools: (agentTools ?? []).map((at: any) => ({
+            toolName: at.tool?.name,
+            toolType: at.tool?.type,
+            permissions: at.permissions,
+            approvalMode: at.approvalMode,
+            enabled: at.enabled,
+          })).filter((t: any) => t.toolName && t.toolType),
+          // Skill refs match by slug.
+          skills: (agentSkills ?? []).map((as: any) => ({
+            skillSlug: as.skill?.slug,
+            config: as.config,
+            enabled: as.enabled,
+          })).filter((s: any) => s.skillSlug),
+        };
+      }),
     };
   }
 
   async importAgents(input: any, userId: string, orgId: string) {
     const items = Array.isArray(input) ? input : input.agents ?? [input];
-    const results: { created: number; skipped: number; errors: string[] } = { created: 0, skipped: 0, errors: [] };
+    const results: { created: number; skipped: number; toolsLinked: number; toolsMissing: string[]; skillsLinked: number; skillsMissing: string[]; errors: string[] } = {
+      created: 0,
+      skipped: 0,
+      toolsLinked: 0,
+      toolsMissing: [],
+      skillsLinked: 0,
+      skillsMissing: [],
+      errors: [],
+    };
 
     for (const item of items) {
       if (!item.name || !item.slug) {
@@ -408,6 +472,61 @@ export class AgentsService {
             parentId: importerPosition?.id ?? null,
           },
         });
+
+        // Re-link tools (match by name + type within target org). Missing
+        // tools are reported, not auto-created — Tool.config typically holds
+        // env-specific credentials.
+        if (Array.isArray(item.tools)) {
+          for (const t of item.tools) {
+            if (!t?.toolName || !t?.toolType) continue;
+            const tool = await this.prisma.tool.findFirst({
+              where: { orgId, name: t.toolName, type: t.toolType },
+            });
+            if (!tool) {
+              results.toolsMissing.push(`${item.slug}: ${t.toolName} (${t.toolType})`);
+              continue;
+            }
+            try {
+              await this.prisma.agentTool.create({
+                data: {
+                  agentId: imported.id,
+                  toolId: tool.id,
+                  permissions: t.permissions ?? { read: true, write: false, execute: true },
+                  approvalMode: t.approvalMode ?? 'FREE',
+                  enabled: t.enabled ?? true,
+                },
+              });
+              results.toolsLinked++;
+            } catch {/* unique constraint => already linked, ignore */}
+          }
+        }
+
+        // Re-link skills (match by slug). Skills are typically org-shared or
+        // global, so we expect most to resolve.
+        if (Array.isArray(item.skills)) {
+          for (const s of item.skills) {
+            if (!s?.skillSlug) continue;
+            const skill = await this.prisma.skill.findFirst({
+              where: { OR: [{ orgId, slug: s.skillSlug }, { orgId: null, slug: s.skillSlug }] },
+            });
+            if (!skill) {
+              results.skillsMissing.push(`${item.slug}: ${s.skillSlug}`);
+              continue;
+            }
+            try {
+              await this.prisma.agentSkill.create({
+                data: {
+                  agentId: imported.id,
+                  skillId: skill.id,
+                  config: s.config ?? null,
+                  enabled: s.enabled ?? true,
+                },
+              });
+              results.skillsLinked++;
+            } catch {/* unique constraint => already linked */}
+          }
+        }
+
         results.created++;
       } catch (e: any) {
         results.errors.push(`Failed to create "${item.name}": ${e.message}`);
