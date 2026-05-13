@@ -3797,6 +3797,70 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
       },
     });
 
+    // ── agems_send_dm — direct message to another agent (closes #18) ──
+    tools.push({
+      name: 'agems_send_dm',
+      description: 'Send a direct message to another agent in the same org. Creates a DIRECT channel between you and the target agent if one does not yet exist, then posts the message. Use this for 1-on-1 coordination instead of polluting the group chat.',
+      parameters: z.object({
+        targetAgent: z.string().describe('Slug or id of the target agent in this org'),
+        message: z.string().describe('The message text to send'),
+      }),
+      execute: async (params: { targetAgent: string; message: string }) => {
+        if (!params.message?.trim()) return { error: 'message is required' };
+        const target = await this.prisma.agent.findFirst({
+          where: {
+            orgId: agent.orgId,
+            OR: [{ id: params.targetAgent }, { slug: params.targetAgent }],
+          },
+          select: { id: true, name: true, slug: true },
+        });
+        if (!target) return { error: `agent "${params.targetAgent}" not found in this org` };
+        if (target.id === agent.id) return { error: 'cannot DM yourself' };
+
+        const candidates = await this.prisma.channel.findMany({
+          where: {
+            orgId: agent.orgId,
+            type: 'DIRECT',
+            participants: { every: { participantType: 'AGENT', participantId: { in: [agent.id, target.id] } } },
+          },
+          include: { participants: true },
+        });
+        const existing = candidates.find(c =>
+          c.participants.length === 2 &&
+          c.participants.some(p => p.participantId === agent.id) &&
+          c.participants.some(p => p.participantId === target.id),
+        );
+
+        let channelId: string;
+        if (existing) {
+          channelId = existing.id;
+        } else {
+          const created = await this.prisma.channel.create({
+            data: {
+              orgId: agent.orgId,
+              type: 'DIRECT',
+              name: `${agent.name} ↔ ${target.name}`,
+              participants: {
+                create: [
+                  { participantType: 'AGENT', participantId: agent.id },
+                  { participantType: 'AGENT', participantId: target.id },
+                ],
+              },
+            },
+          });
+          channelId = created.id;
+        }
+
+        const msg = await this.comms.sendMessage(
+          channelId,
+          { content: params.message.trim(), contentType: 'TEXT' },
+          'AGENT',
+          agent.id,
+        );
+        return { ok: true, channelId, messageId: msg.id, toAgent: target.slug ?? target.id };
+      },
+    });
+
     // ── Send image to chat channel ──
     if (context?.channelId) {
       tools.push({
@@ -5954,6 +6018,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
     add('agems_meetings', 'Schedule and manage meetings', 'AGEMS Platform');
     add('agems_approvals', 'Request and resolve approvals between agents/humans', 'AGEMS Platform');
     add('agems_send_image', 'Send image to chat channel', 'AGEMS Platform');
+    add('agems_send_dm', 'Send a direct message to another agent', 'AGEMS Platform');
     add('agems_send_file', 'Send any file to chat as downloadable attachment', 'AGEMS Platform');
     add('list_org_files', 'List and search uploaded files in the organisation', 'AGEMS Platform');
     add('save_to_files', 'Save a file to Files library (/files page) for user access', 'AGEMS Platform');
