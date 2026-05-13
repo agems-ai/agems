@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { RuntimeService } from './runtime.service';
 import { RuntimeController } from './runtime.controller';
+import { McpController } from './mcp.controller';
 import { ExecutionCleanupService } from './execution-cleanup.service';
 import { BrowserService } from './browser.service';
 import { AgentsModule } from '../agents/agents.module';
@@ -15,7 +16,7 @@ import { RedisLockService } from '../../common/redis-lock.service';
 
 @Module({
   imports: [AgentsModule, SettingsModule, N8nModule, CommsModule, forwardRef(() => TelegramModule), forwardRef(() => ApprovalsModule), DashboardModule, BudgetsModule],
-  controllers: [RuntimeController],
+  controllers: [RuntimeController, McpController],
   providers: [RuntimeService, RedisLockService, ExecutionCleanupService, BrowserService],
   exports: [RuntimeService],
 })

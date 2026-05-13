@@ -108,15 +108,15 @@ export class DashboardService {
     // GSC clicks + impressions last 7 days (data has ~2-day delay, so query nineAgo..twoAgo)
     try {
       const sites: any = await fetch('https://searchconsole.googleapis.com/webmasters/v3/sites', { headers, signal: AbortSignal.timeout(20_000) }).then(r => r.json());
-      const learnenglish = sites?.siteEntry?.find((s: any) => s.siteUrl?.includes('learnenglish.life')) || sites?.siteEntry?.[0];
-      if (learnenglish?.siteUrl) {
-        const rep: any = await fetch(`https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(learnenglish.siteUrl)}/searchAnalytics/query`, {
+      const firstSite = sites?.siteEntry?.[0];
+      if (firstSite?.siteUrl) {
+        const rep: any = await fetch(`https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(firstSite.siteUrl)}/searchAnalytics/query`, {
           method: 'POST', headers, signal: AbortSignal.timeout(20_000),
           body: JSON.stringify({ startDate: ymd(nineAgo), endDate: ymd(twoAgo) }),
         }).then(r => r.json());
         const row = rep?.rows?.[0];
         out.gsc = {
-          siteUrl: learnenglish.siteUrl,
+          siteUrl: firstSite.siteUrl,
           clicks7d: row?.clicks || 0,
           impressions7d: row?.impressions || 0,
           ctr7d: row?.ctr || 0,

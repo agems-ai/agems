@@ -6,7 +6,8 @@
     "build": "nest build",
     "dev": "nest start --watch",
     "start": "node dist/main.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "npx --yes tsx --test 'src/**/*.spec.ts'"
   },
   "dependencies": {
     "@agems/adapters": "workspace:*",

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from '../../config/prisma.service';
+import { redact } from '../../common/redaction';
 
 interface AuditEvent {
   actorType: 'AGENT' | 'HUMAN' | 'SYSTEM';
@@ -19,6 +20,10 @@ export class AuditService {
 
   @OnEvent('audit.create')
   async handleAuditEvent(event: AuditEvent) {
+    // Scrub details before persisting — emitters often pass through
+    // tool-call dumps, HTTP request bodies, or runtime config which may
+    // contain api keys / tokens.
+    const safeDetails = event.details ? redact(event.details) : undefined;
     await this.prisma.auditLog.create({
       data: {
         actorType: event.actorType,
@@ -26,7 +31,7 @@ export class AuditService {
         action: event.action as any,
         resourceType: event.resourceType,
         resourceId: event.resourceId,
-        details: event.details as any,
+        details: safeDetails as any,
         ipAddress: event.ipAddress,
         ...(event.orgId && { orgId: event.orgId }),
       },

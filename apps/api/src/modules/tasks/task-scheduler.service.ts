@@ -4,6 +4,16 @@ import { PrismaService } from '../../config/prisma.service';
 import { RuntimeService } from '../runtime/runtime.service';
 import { CommsService } from '../comms/comms.service';
 import { SettingsService } from '../settings/settings.service';
+import {
+  buildLockOwnerId,
+  tryClaimTask,
+  releaseTaskLock,
+  claimablePredicate,
+  DEFAULT_LOCK_TTL_MS,
+} from './task-claim';
+import { applyCuratorTick } from '../skills/skill-curator';
+import { findRecentSpikes } from '../budgets/spike-alerts';
+import { parseSchedule, isOneShotDue, isIntervalDue } from './schedule-grammar';
 
 @Injectable()
 export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
@@ -17,8 +27,17 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly failureCounters = new Map<string, number>();
   /** Review cycle counter — triggers review every N ticks */
   private reviewTickCounter = 0;
+  /** Curator tick counter — runs skill state machine once a day by default */
+  private curatorTickCounter = 0;
+  /** Spike-alert tick counter — checks recent cost spikes per org hourly */
+  private spikeTickCounter = 0;
+  /** Most recent spike timestamp per org, to skip alerts we've already fired */
+  private readonly lastSpikeAlertAt = new Map<string, Date>();
   /** Track last agent comment timestamp per task to prevent ping-pong */
   private readonly lastAgentCommentAt = new Map<string, number>();
+  /** Stable owner id for DB-level task locks. Lets multiple scheduler
+   *  instances (across processes / hosts) coexist without double-executing. */
+  private readonly lockOwnerId = buildLockOwnerId();
 
   /** Returns true if an agent is currently running a task. Auto-clears stale flags older than RUNNING_AGENT_TTL_MS so a stuck flag never blocks scheduling forever. */
   private isAgentRunning(agentId: string): boolean {
@@ -130,6 +149,34 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
         this.reviewTickCounter = 0;
         this.logger.log(`Review cycle starting (every ${reviewEveryNTicks} ticks / ${reviewIntervalSec}s)`);
         await this.runReviewCycle();
+      }
+
+      // Curator cycle: agent-authored skills go STALE / ARCHIVED if unused.
+      // Default cadence: daily. Setting `skill_curator_interval` in seconds.
+      this.curatorTickCounter++;
+      const curatorIntervalSec = parseInt(await this.settings.get('skill_curator_interval') || '86400');
+      const curatorEveryNTicks = Math.max(1, Math.round((curatorIntervalSec * 1000) / intervalMs));
+      if (this.curatorTickCounter >= curatorEveryNTicks) {
+        this.curatorTickCounter = 0;
+        try {
+          const result = await applyCuratorTick(this.prisma as any);
+          if (result.movedToStale > 0 || result.movedToArchived > 0) {
+            this.logger.log(
+              `Curator: scanned ${result.scanned} skills, ${result.movedToStale} → STALE, ${result.movedToArchived} → ARCHIVED`,
+            );
+          }
+        } catch (err) {
+          this.logger.error(`Curator tick failed: ${err}`);
+        }
+      }
+
+      // Spike-alert cycle: scan each org for recent cost anomalies.
+      this.spikeTickCounter++;
+      const spikeIntervalSec = parseInt(await this.settings.get('spike_alert_interval') || '3600');
+      const spikeEveryNTicks = Math.max(1, Math.round((spikeIntervalSec * 1000) / intervalMs));
+      if (this.spikeTickCounter >= spikeEveryNTicks) {
+        this.spikeTickCounter = 0;
+        await this.runSpikeAlertScan().catch(err => this.logger.error(`Spike scan failed: ${err}`));
       }
     } catch (err) {
       this.logger.error(`Tick error: ${err}`);
@@ -529,6 +576,25 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   // ══════════════════════════════════════════════════════════
   // REVIEW CYCLE ENGINE
   // ══════════════════════════════════════════════════════════
+
+  /** Per-org spike detection. Emits `budget.spike-detected` for each new
+   *  spike since the last tick. Notifier picks it up and pings admins. */
+  private async runSpikeAlertScan() {
+    const now = new Date();
+    const orgs = await this.prisma.organization.findMany({ select: { id: true } });
+    for (const { id: orgId } of orgs) {
+      try {
+        const since = this.lastSpikeAlertAt.get(orgId);
+        const spikes = await findRecentSpikes(this.prisma as any, { orgId, now, options: { since } });
+        for (const spike of spikes) {
+          this.events.emit('budget.spike-detected', { orgId, ...spike });
+        }
+        this.lastSpikeAlertAt.set(orgId, now);
+      } catch (err) {
+        this.logger.warn(`Spike scan failed for org ${orgId}: ${err}`);
+      }
+    }
+  }
 
   /** Run review cycle: find agents with actionable work and trigger review execution */
   private async runReviewCycle() {
@@ -1018,28 +1084,48 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
       }).catch(() => {});
     } finally {
       this.runningAgents.delete(agentId);
+      // Release the DB-level claim. Safe even if no lock was held.
+      await releaseTaskLock(this.prisma as any, { taskId: task.id, ownerId: this.lockOwnerId }).catch(
+        err => this.logger.warn(`Failed to release lock for task ${task.id}: ${err}`),
+      );
     }
   }
 
-  /** Pickup PENDING tasks assigned to agents that haven't been executed yet */
+  /** Pickup PENDING tasks assigned to agents that haven't been executed yet.
+   *  Uses DB-level atomic claim (Task.lockedBy/lockedUntil) so two scheduler
+   *  instances never run the same task. */
   private async pickupPendingAgentTasks() {
     try {
-      const pendingTasks = await this.prisma.task.findMany({
+      const now = new Date();
+      const candidates = await this.prisma.task.findMany({
         where: {
           assigneeType: 'AGENT',
-          status: 'PENDING',
+          ...claimablePredicate(now),
         },
+        select: { id: true, assigneeId: true },
         orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
         take: 10,
       });
 
-      for (const task of pendingTasks) {
-        if (!this.isAgentRunning(task.assigneeId)) {
-          // Don't await — let tasks run concurrently for different agents
-          this.executeAgentTask(task).catch(err =>
-            this.logger.error(`Failed to pickup task ${task.id}: ${err}`),
-          );
+      for (const { id: taskId, assigneeId } of candidates) {
+        if (this.isAgentRunning(assigneeId)) continue;
+        const claimed = await tryClaimTask(this.prisma as any, {
+          taskId,
+          ownerId: this.lockOwnerId,
+          now,
+          ttlMs: DEFAULT_LOCK_TTL_MS,
+        });
+        if (!claimed) continue;
+
+        const task = await this.prisma.task.findUnique({ where: { id: taskId } });
+        if (!task) {
+          await releaseTaskLock(this.prisma as any, { taskId, ownerId: this.lockOwnerId }).catch(() => {});
+          continue;
         }
+
+        this.executeAgentTask(task).catch(err =>
+          this.logger.error(`Failed to pickup task ${taskId}: ${err}`),
+        );
       }
 
       // Self-sufficiency fallback: run every tick regardless of queue depth.
@@ -1119,7 +1205,8 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Check RECURRING tasks with COMPLETED status — reset to PENDING if cron matches */
+  /** Check RECURRING tasks with COMPLETED status — reset to PENDING if the
+   *  schedule fires now. Supports four grammars via parseSchedule. */
   private async checkRecurringTasks() {
     try {
       const recurringTasks = await this.prisma.task.findMany({
@@ -1133,7 +1220,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
       const now = new Date();
 
       for (const task of recurringTasks) {
-        if (this.cronMatches(task.cronExpression!, now)) {
+        if (this.scheduleFires(task.cronExpression!, task.completedAt, now)) {
           await this.prisma.task.update({
             where: { id: task.id },
             data: { status: 'PENDING', completedAt: null },
@@ -1201,6 +1288,23 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
       },
     });
     return channel.id;
+  }
+
+  /** Dispatch schedule check across the four grammars supported by
+   *  parseSchedule. Returns true when the task should be re-queued NOW. */
+  private scheduleFires(expression: string, lastCompletedAt: Date | null, now: Date): boolean {
+    const parsed = parseSchedule(expression, now);
+    switch (parsed.kind) {
+      case 'cron':
+        return this.cronMatches(parsed.expression, now);
+      case 'interval':
+        return isIntervalDue(parsed, lastCompletedAt, now);
+      case 'one-shot':
+        return !lastCompletedAt && isOneShotDue(parsed, now);
+      case 'error':
+        this.logger.warn(`Task schedule "${expression}" is invalid: ${parsed.reason}`);
+        return false;
+    }
   }
 
   private cronMatches(expression: string, date: Date): boolean {
