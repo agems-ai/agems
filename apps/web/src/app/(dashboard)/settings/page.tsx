@@ -8,7 +8,7 @@ export default function SettingsPage() {
 
   // LLM Keys
   const [llmKeys, setLlmKeys] = useState<Record<string, { set: boolean; masked: string }>>({});
-  const [newKeys, setNewKeys] = useState<Record<string, string>>({ openai: '', anthropic: '', google: '', deepseek: '', mistral: '', minimax: '', glm: '', xai: '', cohere: '', perplexity: '', together: '', fireworks: '', groq: '', moonshot: '', qwen: '', ai21: '', sambanova: '' });
+  const [newKeys, setNewKeys] = useState<Record<string, string>>({ openai: '', anthropic: '', google: '', deepseek: '', mistral: '', minimax: '', glm: '', xai: '', cohere: '', perplexity: '', together: '', fireworks: '', groq: '', moonshot: '', qwen: '', ai21: '', sambanova: '', ollama: '' });
   const [savingKeys, setSavingKeys] = useState(false);
   const [keysSaved, setKeysSaved] = useState(false);
 
@@ -164,6 +164,7 @@ export default function SettingsPage() {
     { id: 'qwen', name: 'Alibaba / Qwen', desc: 'Qwen3, Qwen-Max', placeholder: 'sk-...' },
     { id: 'ai21', name: 'AI21 Labs', desc: 'Jamba 2', placeholder: 'sk-...' },
     { id: 'sambanova', name: 'SambaNova', desc: 'Llama, DeepSeek (fast)', placeholder: 'sk-...' },
+    { id: 'ollama', name: 'Ollama (Local / RunPod)', desc: 'Self-hosted: Gemma, Llama, Mistral. Enter Base URL instead of API key.', placeholder: 'https://your-host:11434/v1', inputType: 'text' as const },
   ];
 
   return (
@@ -206,7 +207,7 @@ export default function SettingsPage() {
                   </div>
                 </div>
                 <input
-                  type="password"
+                  type={(p as any).inputType || 'password'}
                   value={newKeys[p.id] || ''}
                   onChange={(e) => setNewKeys({ ...newKeys, [p.id]: e.target.value })}
                   placeholder={info?.set ? 'Enter new key to update...' : p.placeholder}

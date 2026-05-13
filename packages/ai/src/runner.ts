@@ -184,13 +184,25 @@ export class AgentRunner {
     const providerOptions: Record<string, any> = {};
     if (isGeminiThinking) {
       const gemBudget = this.config.thinkingBudget ?? 8000;
-      providerOptions.google = { thinkingConfig: { thinkingBudget: gemBudget } };
+      providerOptions.google = { thinkingConfig: { thinkingBudget: gemBudget, includeThoughts: true } };
     }
     if (isAnthropicThinking) {
       const budget = this.config.thinkingBudget ?? 4000;
       if (budget > 0) {
         providerOptions.anthropic = { thinking: { type: 'enabled', budgetTokens: budget } };
       }
+    }
+    // Zhipu GLM reasoning (glm-4.6, glm-5, glm-5.1). Uses OpenAI-compatible
+    // endpoint so provider options land on the `openai` key. Zhipu accepts
+    // `thinking: { type: "enabled" }` as a top-level body field.
+    const isGlmThinking = this.config.provider.provider === 'GLM'
+      && /glm-(4\.6|5|5\.1|4\.6-plus)/i.test(this.config.provider.model)
+      && (this.config.thinkingBudget ?? 0) > 0;
+    if (isGlmThinking) {
+      providerOptions.openai = {
+        ...(providerOptions.openai ?? {}),
+        thinking: { type: 'enabled' },
+      };
     }
     // MCP servers: only use Anthropic remote MCP for publicly accessible URLs.
     // Internal Docker URLs (e.g. http://playwright-mcp:3002) are handled by MCPClient instead.
@@ -370,18 +382,53 @@ export class AgentRunner {
     const toolsMap = this.buildToolsMap(toolResults, loopDetector, loopRef, abortSignal);
     const common = this.buildCommon(toolsMap, maxSteps);
 
+    // Wall-clock timeout guard: prevents runaway tool-loop executions that
+    // never finish (e.g. the 12-minute zombie we caught earlier). Default 5
+    // minutes, override via llmConfig.executionTimeoutMs.
+    const execTimeoutMs = (this.config as any).executionTimeoutMs ?? 5 * 60 * 1000;
+    const timeoutController = new AbortController();
+    const externalAbort = abortSignal;
+    const mergedSignal = (() => {
+      if (!externalAbort) return timeoutController.signal;
+      const merged = new AbortController();
+      const onAbort = () => merged.abort();
+      externalAbort.addEventListener('abort', onAbort, { once: true });
+      timeoutController.signal.addEventListener('abort', onAbort, { once: true });
+      return merged.signal;
+    })();
+    const timeoutHandle = setTimeout(() => {
+      // eslint-disable-next-line no-console
+      console.log(`[Runner] Execution timeout reached (${execTimeoutMs}ms), aborting`);
+      timeoutController.abort();
+    }, execTimeoutMs);
+
     // Use streamText when callbacks provided, generateText otherwise
     if (streamCallbacks?.onThinkingChunk || streamCallbacks?.onTextChunk) {
-      return this.runStream(input, common, toolResults, loopRef, abortSignal, streamCallbacks);
+      // Ollama: use direct SSE streaming to capture delta.reasoning (Gemma chain-of-thought)
+      // which @ai-sdk/openai silently drops because it's a non-standard field.
+      if (this.config.provider.provider === 'OLLAMA') {
+        try {
+          return await this.runStreamOllama(input, toolResults, loopRef, mergedSignal, streamCallbacks);
+        } finally {
+          clearTimeout(timeoutHandle);
+        }
+      }
+      try {
+        return await this.runStream(input, common, toolResults, loopRef, mergedSignal, streamCallbacks);
+      } finally {
+        clearTimeout(timeoutHandle);
+      }
     }
 
     let result: any;
     try {
       result = typeof input === 'string'
-        ? await generateText({ ...common, prompt: input, abortSignal } as any)
-        : await generateText({ ...common, messages: input as any, abortSignal } as any);
+        ? await generateText({ ...common, prompt: input, abortSignal: mergedSignal } as any)
+        : await generateText({ ...common, messages: input as any, abortSignal: mergedSignal } as any);
     } catch (err) {
-      // User-stop should propagate (called sites depend on the abort signature).
+      clearTimeout(timeoutHandle);
+      // Tool errors and tool-loop errors are already captured per-call into
+      // toolResults; re-throw user-stop so callers see the abort cleanly.
       if (err instanceof Error && err.message === 'Execution stopped by user') throw err;
 
       const classified = classifyProviderError(err, this.config.provider.provider || 'provider');
@@ -399,9 +446,13 @@ export class AgentRunner {
           retryAfterSeconds: classified.retryAfterSeconds,
         },
       };
+    } finally {
+      clearTimeout(timeoutHandle);
     }
 
-    const { thinking, cleanText } = this.extractThinking(result, result.text);
+    const { thinking: rawThinking, cleanText } = this.extractThinking(result, result.text);
+    // Dedupe thinking array: collapse adjacent duplicates and exact duplicates
+    const thinking = Array.from(new Set(rawThinking.filter(t => t && t.trim())));
     let text = cleanText;
 
     if (!text?.trim() && toolResults.length > 0) {
@@ -417,6 +468,330 @@ export class AgentRunner {
       toolCalls: toolResults,
       tokensUsed: { input: result.usage?.inputTokens ?? 0, output: result.usage?.outputTokens ?? 0 },
       iterations: result.steps?.length ?? 1,
+      loopDetected: loopRef.detected,
+    };
+  }
+
+  /**
+   * Direct SSE streaming for Ollama. Captures both delta.content (text) and
+   * delta.reasoning (Gemma chain-of-thought) which @ai-sdk/openai drops.
+   * Supports tool-calls + multi-iteration loop, mirroring Vercel AI SDK behaviour.
+   */
+  private async runStreamOllama(
+    input: string | UserMessage[],
+    toolResults: ToolResult[],
+    loopRef: { detected: boolean },
+    abortSignal?: AbortSignal,
+    callbacks?: StreamCallbacks,
+  ): Promise<RunResult> {
+    // OpenAI-compat path — works with Ollama (/v1), Google AI Studio
+    // (/v1beta/openai/), and any other OpenAI-compatible backend.
+    const baseUrl = (this.config.provider.baseUrl || 'http://localhost:11434/v1').replace(/\/$/, '');
+    const model = this.config.provider.model;
+    const apiKey = this.config.provider.apiKey || 'ollama';
+    const maxIterations = this.config.maxIterations ?? 50;
+
+    // Build Ollama native tools (same shape as OpenAI: type+function)
+    const oaiTools = (this.config.tools ?? []).map(td => {
+      const params = td.parameters?._def
+        ? zodToJsonSchema(td.parameters as any, { target: 'openApi3' })
+        : (td.parameters || { type: 'object', properties: {} });
+      return { type: 'function' as const, function: { name: td.name, description: td.description, parameters: params } };
+    });
+    const toolByName = new Map(this.config.tools?.map(t => [t.name, t]) ?? []);
+
+    // System prompt: vLLM chat template handles tool format hints automatically.
+    const systemPromptText = this.config.systemPrompt || '';
+    const messages: any[] = systemPromptText ? [{ role: 'system', content: systemPromptText }] : [];
+    if (typeof input === 'string') {
+      messages.push({ role: 'user', content: input });
+    } else {
+      for (const m of input as UserMessage[]) {
+        messages.push({ role: (m as any).role || 'user', content: (m as any).content });
+      }
+    }
+
+    let fullText = '';
+    const allThinking: string[] = [];
+    let iterations = 0;
+    let totalIn = 0;
+    let totalOut = 0;
+
+    const loopDetector = new ToolLoopDetector();
+    let disableToolsForRest = false;
+
+    for (let iter = 0; iter < maxIterations; iter++) {
+      if (abortSignal?.aborted) break;
+      iterations++;
+
+      const body: any = {
+        model,
+        messages,
+        stream: true,
+        temperature: this.config.temperature ?? 0.7,
+        max_tokens: this.config.maxTokens ?? 4096,
+      };
+      // Pass tools both inline in system prompt AND as tools= field, so vLLM
+      // applies its chat-template tool hints AND model has explicit instructions.
+      if (oaiTools.length > 0 && !disableToolsForRest) {
+        body.tools = oaiTools;
+        if (iter === 0) body.tool_choice = 'required';
+      }
+
+      const doFetch = () => fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify(body),
+        signal: abortSignal,
+      });
+
+      let res = await doFetch();
+
+      // 429 retry with exponential backoff (Google AI Studio RPM limits, etc.)
+      let retry429 = 0;
+      while (res.status === 429 && retry429 < 5 && !abortSignal?.aborted) {
+        const waitMs = Math.min(2000 * Math.pow(2, retry429), 30000) + Math.random() * 1500;
+        console.warn(`[Ollama] 429 rate limit, retry ${retry429 + 1}/5 in ${Math.round(waitMs)}ms`);
+        await new Promise(r => setTimeout(r, waitMs));
+        retry429++;
+        res = await doFetch();
+      }
+
+      if (!res.ok || !res.body) {
+        const errText = await res.text().catch(() => '');
+        if (res.status === 400 && /does not support tools|invalid tool call arguments/i.test(errText) && body.tools) {
+          console.warn(`[Ollama] tool error for ${model}, retrying without tools: ${errText.slice(0, 200)}`);
+          disableToolsForRest = true;
+          delete body.tools;
+          res = await fetch(`${baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify(body),
+            signal: abortSignal,
+          });
+          if (!res.ok || !res.body) {
+            const e2 = await res.text().catch(() => '');
+            throw new Error(`Ollama HTTP ${res.status} (no-tools retry): ${e2.slice(0, 300)}`);
+          }
+        } else {
+          throw new Error(`Ollama HTTP ${res.status}: ${errText.slice(0, 1500)}`);
+        }
+      }
+
+      // Parse SSE stream (OpenAI-compat — `data: {...}` per event)
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let iterText = '';
+      let iterReasoning = '';
+      const pendingToolCalls: Array<{ id: string; name: string; argsStr: string; argsObj?: any }> = [];
+      let finishReason: string | null = null;
+      let inThoughtBlock = false; // Models stream thinking inline as <think>/<thought> tags
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (abortSignal?.aborted) { try { reader.cancel(); } catch {} break; }
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop() ?? '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data:')) continue;
+          const payload = trimmed.slice(5).trim();
+          if (payload === '[DONE]') continue;
+          let chunk: any;
+          try { chunk = JSON.parse(payload); } catch { continue; }
+          const choice = chunk?.choices?.[0];
+          if (!choice) continue;
+          const delta = choice.delta || {};
+          // Both Ollama and Google stream chain-of-thought in `delta.reasoning`
+          if (typeof delta.reasoning === 'string' && delta.reasoning.length > 0) {
+            iterReasoning += delta.reasoning;
+            callbacks?.onThinkingChunk?.(delta.reasoning);
+          }
+          if (typeof delta.content === 'string' && delta.content.length > 0) {
+            // Strip <think>/<thought> blocks and route to onThinkingChunk.
+            // Qwen 3.5 uses <think>, Gemma 4 uses <thought>.
+            let rest = delta.content;
+            while (rest.length > 0) {
+              if (inThoughtBlock) {
+                // Look for either closing tag
+                const endThink = rest.indexOf('</think>');
+                const endThought = rest.indexOf('</thought>');
+                let endIdx = -1;
+                let tagLen = 0;
+                if (endThink >= 0 && (endThought < 0 || endThink <= endThought)) { endIdx = endThink; tagLen = '</think>'.length; }
+                else if (endThought >= 0) { endIdx = endThought; tagLen = '</thought>'.length; }
+                if (endIdx >= 0) {
+                  const part = rest.slice(0, endIdx);
+                  if (part) { iterReasoning += part; callbacks?.onThinkingChunk?.(part); }
+                  inThoughtBlock = false;
+                  rest = rest.slice(endIdx + tagLen);
+                } else {
+                  if (rest) { iterReasoning += rest; callbacks?.onThinkingChunk?.(rest); }
+                  rest = '';
+                }
+              } else {
+                // Look for either opening tag
+                const startThink = rest.indexOf('<think>');
+                const startThought = rest.indexOf('<thought>');
+                let startIdx = -1;
+                let tagLen = 0;
+                if (startThink >= 0 && (startThought < 0 || startThink <= startThought)) { startIdx = startThink; tagLen = '<think>'.length; }
+                else if (startThought >= 0) { startIdx = startThought; tagLen = '<thought>'.length; }
+                if (startIdx >= 0) {
+                  const before = rest.slice(0, startIdx);
+                  if (before) { iterText += before; callbacks?.onTextChunk?.(before); }
+                  inThoughtBlock = true;
+                  rest = rest.slice(startIdx + tagLen);
+                } else {
+                  iterText += rest;
+                  callbacks?.onTextChunk?.(rest);
+                  rest = '';
+                }
+              }
+            }
+          }
+          if (Array.isArray(delta.tool_calls)) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index ?? 0;
+              if (!pendingToolCalls[idx]) pendingToolCalls[idx] = { id: tc.id || `call_${idx}`, name: '', argsStr: '' };
+              if (tc.id) pendingToolCalls[idx].id = tc.id;
+              if (tc.function?.name) pendingToolCalls[idx].name += tc.function.name;
+              if (tc.function?.arguments) pendingToolCalls[idx].argsStr += tc.function.arguments;
+            }
+          }
+          if (choice.finish_reason) finishReason = choice.finish_reason;
+          if (chunk.usage) {
+            totalIn += chunk.usage.prompt_tokens ?? 0;
+            totalOut += chunk.usage.completion_tokens ?? 0;
+          }
+        }
+      }
+
+      if (iterReasoning.trim()) allThinking.push(iterReasoning.trim());
+
+      // Fallback parser: if vLLM didn't extract tool_calls but content has <tool_call>
+      // blocks, parse them ourselves. Supports both formats:
+      //   1. Hermes JSON: <tool_call>{"name":"...","arguments":{...}}</tool_call>
+      //   2. Qwen XML:    <tool_call><function=NAME><parameter=P>V</parameter></function></tool_call>
+      if (pendingToolCalls.length === 0 && iterText.includes('<tool_call>')) {
+        const tcBlocks = iterText.match(/<tool_call>[\s\S]*?<\/tool_call>/g) || [];
+        for (const block of tcBlocks) {
+          const inner = block.replace(/<\/?tool_call>/g, '').trim();
+          // Try hermes JSON first
+          let parsed = false;
+          const jsonStart = inner.indexOf('{');
+          const jsonEnd = inner.lastIndexOf('}');
+          if (jsonStart >= 0 && jsonEnd > jsonStart) {
+            try {
+              const obj = JSON.parse(inner.slice(jsonStart, jsonEnd + 1));
+              if (obj.name) {
+                const args = obj.arguments || obj.parameters || {};
+                pendingToolCalls.push({
+                  id: `call_${pendingToolCalls.length}`,
+                  name: obj.name,
+                  argsStr: JSON.stringify(args),
+                  argsObj: typeof args === 'object' ? args : undefined,
+                });
+                parsed = true;
+              }
+            } catch {}
+          }
+          // Fallback: Qwen XML format
+          if (!parsed) {
+            const fnMatch = inner.match(/<function=([^>]+)>/);
+            if (!fnMatch) continue;
+            const fnName = fnMatch[1].trim();
+            const args: Record<string, any> = {};
+            const paramRegex = /<parameter=([^>]+)>([\s\S]*?)<\/parameter>/g;
+            let pm: RegExpExecArray | null;
+            while ((pm = paramRegex.exec(inner)) !== null) {
+              const pname = pm[1].trim();
+              let pval: any = pm[2].trim();
+              if (/^-?\d+$/.test(pval)) pval = parseInt(pval, 10);
+              else if (/^-?\d+\.\d+$/.test(pval)) pval = parseFloat(pval);
+              else if (pval === 'true') pval = true;
+              else if (pval === 'false') pval = false;
+              else if ((pval.startsWith('{') && pval.endsWith('}')) || (pval.startsWith('[') && pval.endsWith(']'))) {
+                try { pval = JSON.parse(pval); } catch {}
+              }
+              args[pname] = pval;
+            }
+            pendingToolCalls.push({
+              id: `call_${pendingToolCalls.length}`,
+              name: fnName,
+              argsStr: JSON.stringify(args),
+              argsObj: args,
+            });
+          }
+        }
+        iterText = iterText.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').replace(/<\/?think>/g, '').trim();
+      }
+
+      fullText += iterText;
+
+      const validToolCalls = pendingToolCalls.filter(tc => tc && tc.name);
+      if (validToolCalls.length === 0 || finishReason === 'stop') {
+        break;
+      }
+
+      // Append assistant message with tool_calls
+      messages.push({
+        role: 'assistant',
+        content: iterText || null,
+        tool_calls: validToolCalls.map(tc => ({ id: tc.id, type: 'function', function: { name: tc.name, arguments: tc.argsStr || '{}' } })),
+      });
+
+      // Execute each tool call and append tool messages
+      for (const tc of validToolCalls) {
+        let parsedArgs: any = (tc as any).argsObj ?? {};
+        if (!Object.keys(parsedArgs).length) {
+          try { parsedArgs = tc.argsStr ? JSON.parse(tc.argsStr) : {}; } catch { parsedArgs = {}; }
+        }
+        const td = toolByName.get(tc.name);
+        let toolOutput: any;
+        if (!td) {
+          toolOutput = { error: `Unknown tool: ${tc.name}` };
+          toolResults.push({ toolName: tc.name, input: parsedArgs, output: null, durationMs: 0, error: toolOutput.error });
+        } else if (loopDetector.check(tc.name, parsedArgs)) {
+          loopRef.detected = true;
+          toolOutput = { error: `Loop detected: "${tc.name}" called repeatedly`, loop_detected: true };
+          toolResults.push({ toolName: tc.name, input: parsedArgs, output: null, durationMs: 0, error: toolOutput.error });
+        } else {
+          const start = Date.now();
+          try {
+            toolOutput = await td.execute(parsedArgs);
+            toolResults.push({ toolName: tc.name, input: parsedArgs, output: toolOutput, durationMs: Date.now() - start });
+          } catch (err) {
+            const error = err instanceof Error ? err.message : String(err);
+            toolOutput = { error };
+            toolResults.push({ toolName: tc.name, input: parsedArgs, output: null, durationMs: Date.now() - start, error });
+          }
+        }
+        messages.push({
+          role: 'tool',
+          tool_call_id: tc.id,
+          content: typeof toolOutput === 'string' ? toolOutput : JSON.stringify(toolOutput),
+        });
+      }
+    }
+
+    let text = fullText;
+    if (!text?.trim() && toolResults.length > 0) {
+      const errors = toolResults.filter(t => t.error);
+      if (errors.length > 0) {
+        text = `I encountered issues while processing your request. ${errors.map(e => `Tool "${e.toolName}" failed: ${e.error}`).join('. ')}.`;
+      }
+    }
+
+    return {
+      text,
+      thinking: allThinking,
+      toolCalls: toolResults,
+      tokensUsed: { input: totalIn, output: totalOut },
+      iterations,
       loopDetected: loopRef.detected,
     };
   }
@@ -490,7 +865,7 @@ export class AgentRunner {
           thinkBuffer += chunk;
         }
       } else if (part.type === 'text-delta') {
-        const delta = (part as any).textDelta ?? '';
+        const delta = (part as any).textDelta ?? (part as any).text ?? '';
         if (!delta) continue;
 
         // Handle <think>...</think> blocks inline (DeepSeek etc.)
