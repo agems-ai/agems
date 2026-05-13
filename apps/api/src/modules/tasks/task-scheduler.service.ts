@@ -12,6 +12,7 @@ import {
   DEFAULT_LOCK_TTL_MS,
 } from './task-claim';
 import { applyCuratorTick } from '../skills/skill-curator';
+import { findRecentSpikes } from '../budgets/spike-alerts';
 
 @Injectable()
 export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
@@ -27,6 +28,10 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   private reviewTickCounter = 0;
   /** Curator tick counter — runs skill state machine once a day by default */
   private curatorTickCounter = 0;
+  /** Spike-alert tick counter — checks recent cost spikes per org hourly */
+  private spikeTickCounter = 0;
+  /** Most recent spike timestamp per org, to skip alerts we've already fired */
+  private readonly lastSpikeAlertAt = new Map<string, Date>();
   /** Track last agent comment timestamp per task to prevent ping-pong */
   private readonly lastAgentCommentAt = new Map<string, number>();
   /** Stable owner id for DB-level task locks. Lets multiple scheduler
@@ -162,6 +167,15 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
         } catch (err) {
           this.logger.error(`Curator tick failed: ${err}`);
         }
+      }
+
+      // Spike-alert cycle: scan each org for recent cost anomalies.
+      this.spikeTickCounter++;
+      const spikeIntervalSec = parseInt(await this.settings.get('spike_alert_interval') || '3600');
+      const spikeEveryNTicks = Math.max(1, Math.round((spikeIntervalSec * 1000) / intervalMs));
+      if (this.spikeTickCounter >= spikeEveryNTicks) {
+        this.spikeTickCounter = 0;
+        await this.runSpikeAlertScan().catch(err => this.logger.error(`Spike scan failed: ${err}`));
       }
     } catch (err) {
       this.logger.error(`Tick error: ${err}`);
@@ -561,6 +575,25 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   // ══════════════════════════════════════════════════════════
   // REVIEW CYCLE ENGINE
   // ══════════════════════════════════════════════════════════
+
+  /** Per-org spike detection. Emits `budget.spike-detected` for each new
+   *  spike since the last tick. Notifier picks it up and pings admins. */
+  private async runSpikeAlertScan() {
+    const now = new Date();
+    const orgs = await this.prisma.organization.findMany({ select: { id: true } });
+    for (const { id: orgId } of orgs) {
+      try {
+        const since = this.lastSpikeAlertAt.get(orgId);
+        const spikes = await findRecentSpikes(this.prisma as any, { orgId, now, options: { since } });
+        for (const spike of spikes) {
+          this.events.emit('budget.spike-detected', { orgId, ...spike });
+        }
+        this.lastSpikeAlertAt.set(orgId, now);
+      } catch (err) {
+        this.logger.warn(`Spike scan failed for org ${orgId}: ${err}`);
+      }
+    }
+  }
 
   /** Run review cycle: find agents with actionable work and trigger review execution */
   private async runReviewCycle() {
