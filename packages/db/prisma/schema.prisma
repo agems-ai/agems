@@ -229,10 +229,25 @@ model Skill {
   entryPoint   String    @map("entry_point")
   configSchema Json?     @map("config_schema")
   agents       AgentSkill[]
+
+  // Curator lifecycle (Hermes-style).
+  state       SkillState @default(ACTIVE)
+  lastUsedAt  DateTime?  @map("last_used_at")
+  archivedAt  DateTime?  @map("archived_at")
+  authorType  ActorType  @default(HUMAN) @map("author_type")
+  authorId    String?    @map("author_id")
+
   createdAt    DateTime  @default(now()) @map("created_at")
 
   @@unique([orgId, slug])
+  @@index([state, lastUsedAt])
   @@map("skills")
+}
+
+enum SkillState {
+  ACTIVE
+  STALE
+  ARCHIVED
 }
 
 enum SkillType {
