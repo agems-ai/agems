@@ -11,6 +11,7 @@ import {
   claimablePredicate,
   DEFAULT_LOCK_TTL_MS,
 } from './task-claim';
+import { applyCuratorTick } from '../skills/skill-curator';
 
 @Injectable()
 export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
@@ -24,6 +25,8 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly failureCounters = new Map<string, number>();
   /** Review cycle counter — triggers review every N ticks */
   private reviewTickCounter = 0;
+  /** Curator tick counter — runs skill state machine once a day by default */
+  private curatorTickCounter = 0;
   /** Track last agent comment timestamp per task to prevent ping-pong */
   private readonly lastAgentCommentAt = new Map<string, number>();
   /** Stable owner id for DB-level task locks. Lets multiple scheduler
@@ -140,6 +143,25 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
         this.reviewTickCounter = 0;
         this.logger.log(`Review cycle starting (every ${reviewEveryNTicks} ticks / ${reviewIntervalSec}s)`);
         await this.runReviewCycle();
+      }
+
+      // Curator cycle: agent-authored skills go STALE / ARCHIVED if unused.
+      // Default cadence: daily. Setting `skill_curator_interval` in seconds.
+      this.curatorTickCounter++;
+      const curatorIntervalSec = parseInt(await this.settings.get('skill_curator_interval') || '86400');
+      const curatorEveryNTicks = Math.max(1, Math.round((curatorIntervalSec * 1000) / intervalMs));
+      if (this.curatorTickCounter >= curatorEveryNTicks) {
+        this.curatorTickCounter = 0;
+        try {
+          const result = await applyCuratorTick(this.prisma as any);
+          if (result.movedToStale > 0 || result.movedToArchived > 0) {
+            this.logger.log(
+              `Curator: scanned ${result.scanned} skills, ${result.movedToStale} → STALE, ${result.movedToArchived} → ARCHIVED`,
+            );
+          }
+        } catch (err) {
+          this.logger.error(`Curator tick failed: ${err}`);
+        }
       }
     } catch (err) {
       this.logger.error(`Tick error: ${err}`);

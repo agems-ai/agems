@@ -209,3 +209,108 @@ describe('DEFAULT_CURATOR_CONFIG', () => {
     assert.equal(DEFAULT_CURATOR_CONFIG.archiveAfterDays, 90);
   });
 });
+
+// ── applyCuratorTick (integration with fake Prisma client) ─────
+
+import { applyCuratorTick, type CuratorClient } from './skill-curator';
+
+function makeFakeClient(rows: (SkillForCurator & { orgId?: string })[]): CuratorClient & { _rows: typeof rows } {
+  return {
+    _rows: rows,
+    skill: {
+      async findMany({ where }: any) {
+        return rows.filter(r => {
+          if (where?.authorType && r.authorType !== where.authorType) return false;
+          if (where?.state?.in && !where.state.in.includes(r.state)) return false;
+          if (where?.orgId && (r as any).orgId !== where.orgId) return false;
+          return true;
+        }) as SkillForCurator[];
+      },
+      async updateMany({ where, data }: any) {
+        let count = 0;
+        for (const row of rows) {
+          if (where.id.in.includes(row.id)) {
+            Object.assign(row, data);
+            count++;
+          }
+        }
+        return { count };
+      },
+    },
+  };
+}
+
+describe('applyCuratorTick', () => {
+  it('returns zero-counts when nothing transitions', async () => {
+    const rows = [skill({ id: 'fresh', state: 'ACTIVE', lastUsedAt: daysAgo(5) })];
+    const client = makeFakeClient(rows);
+    const result = await applyCuratorTick(client, { now });
+    assert.equal(result.scanned, 1);
+    assert.equal(result.movedToStale, 0);
+    assert.equal(result.movedToArchived, 0);
+  });
+
+  it('moves eligible skills to STALE and ARCHIVED in one tick', async () => {
+    const rows = [
+      skill({ id: 'fresh', state: 'ACTIVE', lastUsedAt: daysAgo(5) }),
+      skill({ id: 'stale-now', state: 'ACTIVE', lastUsedAt: daysAgo(40) }),
+      skill({ id: 'archive-now', state: 'STALE', lastUsedAt: daysAgo(120) }),
+    ];
+    const client = makeFakeClient(rows);
+    const result = await applyCuratorTick(client, { now });
+    assert.equal(result.scanned, 3);
+    assert.equal(result.movedToStale, 1);
+    assert.equal(result.movedToArchived, 1);
+
+    const byId = Object.fromEntries(rows.map(r => [r.id, r.state]));
+    assert.equal(byId['fresh'], 'ACTIVE');
+    assert.equal(byId['stale-now'], 'STALE');
+    assert.equal(byId['archive-now'], 'ARCHIVED');
+  });
+
+  it('sets archivedAt timestamp when archiving', async () => {
+    const rows = [skill({ id: 'archive-me', state: 'STALE', lastUsedAt: daysAgo(120) })];
+    const client = makeFakeClient(rows);
+    await applyCuratorTick(client, { now });
+    assert.equal(rows[0].archivedAt?.getTime(), now.getTime());
+  });
+
+  it('filters by orgId when provided (admin scoped runs)', async () => {
+    const rows = [
+      { ...skill({ id: 'a', state: 'ACTIVE', lastUsedAt: daysAgo(40) }), orgId: 'org-1' },
+      { ...skill({ id: 'b', state: 'ACTIVE', lastUsedAt: daysAgo(40) }), orgId: 'org-2' },
+    ];
+    const client = makeFakeClient(rows);
+    const result = await applyCuratorTick(client, { now, orgId: 'org-1' });
+    assert.equal(result.scanned, 1);
+    assert.equal(rows[0].state, 'STALE');
+    assert.equal(rows[1].state, 'ACTIVE'); // untouched — different org
+  });
+
+  it('respects the candidate filter (only AGENT, only ACTIVE/STALE)', async () => {
+    const rows = [
+      // Eligible
+      skill({ id: 'agent-active', state: 'ACTIVE', authorType: 'AGENT', lastUsedAt: daysAgo(40) }),
+      // Filtered by authorType
+      skill({ id: 'human-active', state: 'ACTIVE', authorType: 'HUMAN', lastUsedAt: daysAgo(40) }),
+      // Filtered by state — already archived
+      skill({ id: 'agent-archived', state: 'ARCHIVED', authorType: 'AGENT', lastUsedAt: daysAgo(40) }),
+    ];
+    const client = makeFakeClient(rows);
+    const result = await applyCuratorTick(client, { now });
+    // findMany sees only the agent-active row (1)
+    assert.equal(result.scanned, 1);
+    assert.equal(result.movedToStale, 1);
+    assert.equal(rows[1].state, 'ACTIVE'); // human-active untouched
+    assert.equal(rows[2].state, 'ARCHIVED'); // already-archived untouched
+  });
+
+  it('is idempotent — running twice produces no new transitions on the second pass', async () => {
+    const rows = [skill({ id: 'a', state: 'ACTIVE', lastUsedAt: daysAgo(40) })];
+    const client = makeFakeClient(rows);
+    const first = await applyCuratorTick(client, { now });
+    const second = await applyCuratorTick(client, { now });
+    assert.equal(first.movedToStale, 1);
+    assert.equal(second.movedToStale, 0);
+  });
+});

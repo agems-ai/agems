@@ -1653,10 +1653,10 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
 
     // ── Skill loader tool ──
     if (agent.skills?.length) {
-      const skillMap = new Map<string, string>();
+      const skillMap = new Map<string, { id: string; content: string }>();
       for (const as of agent.skills) {
         if (as.enabled !== false && as.skill?.name && as.skill?.content) {
-          skillMap.set(as.skill.name, as.skill.content);
+          skillMap.set(as.skill.name, { id: as.skill.id, content: as.skill.content });
         }
       }
       if (skillMap.size > 0) {
@@ -1667,11 +1667,17 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
             skillName: z.string().describe('Name of the skill to load'),
           }),
           execute: async (params: { skillName: string }) => {
-            const content = skillMap.get(params.skillName);
-            if (!content) {
+            const hit = skillMap.get(params.skillName);
+            if (!hit) {
               return { error: `Skill "${params.skillName}" not found. Available: ${Array.from(skillMap.keys()).join(', ')}` };
             }
-            return { skill: params.skillName, content };
+            // Touch lastUsedAt so the curator doesn't STALE skills the agent
+            // actually uses. Fire-and-forget — never block the agent on this.
+            this.prisma.skill.update({
+              where: { id: hit.id },
+              data: { lastUsedAt: new Date() },
+            }).catch(() => {});
+            return { skill: params.skillName, content: hit.content };
           },
         });
       }

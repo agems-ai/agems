@@ -131,3 +131,88 @@ export function bucketByTargetState(transitions: SkillTransition[]): {
   }
   return { toStale, toArchived };
 }
+
+/** Minimal Prisma client surface used by applyCuratorTick. */
+export interface CuratorClient {
+  skill: {
+    findMany(args: {
+      where?: Record<string, unknown>;
+      select?: Record<string, unknown>;
+    }): Promise<SkillForCurator[]>;
+    updateMany(args: {
+      where: { id: { in: string[] } };
+      data: Record<string, unknown>;
+    }): Promise<{ count: number }>;
+  };
+}
+
+export interface CuratorTickResult {
+  scanned: number;
+  movedToStale: number;
+  movedToArchived: number;
+  transitions: SkillTransition[];
+}
+
+/**
+ * Apply one curator pass against a Prisma client. Scans candidate skills
+ * (authorType=AGENT, state ∈ {ACTIVE, STALE}), computes transitions,
+ * batches updates by target state.
+ *
+ * Returns counts so a cron caller can log "X stale, Y archived" without
+ * walking the transitions array.
+ *
+ * Scoped by orgId when provided — otherwise scans every org's agent
+ * skills (admin-cron mode).
+ */
+export async function applyCuratorTick(
+  client: CuratorClient,
+  options: { orgId?: string; now?: Date; config?: CuratorConfig } = {},
+): Promise<CuratorTickResult> {
+  const now = options.now ?? new Date();
+  const config = options.config ?? DEFAULT_CURATOR_CONFIG;
+
+  const where: Record<string, unknown> = {
+    authorType: 'AGENT',
+    state: { in: ['ACTIVE', 'STALE'] },
+  };
+  if (options.orgId) where.orgId = options.orgId;
+
+  const candidates = await client.skill.findMany({
+    where,
+    select: {
+      id: true,
+      state: true,
+      lastUsedAt: true,
+      createdAt: true,
+      archivedAt: true,
+      authorType: true,
+    },
+  });
+
+  const transitions = computeStateTransitions(candidates, now, config);
+  if (transitions.length === 0) {
+    return { scanned: candidates.length, movedToStale: 0, movedToArchived: 0, transitions: [] };
+  }
+
+  const { toStale, toArchived } = bucketByTargetState(transitions);
+
+  if (toStale.length > 0) {
+    await client.skill.updateMany({
+      where: { id: { in: toStale } },
+      data: { state: 'STALE' },
+    });
+  }
+  if (toArchived.length > 0) {
+    await client.skill.updateMany({
+      where: { id: { in: toArchived } },
+      data: { state: 'ARCHIVED', archivedAt: now },
+    });
+  }
+
+  return {
+    scanned: candidates.length,
+    movedToStale: toStale.length,
+    movedToArchived: toArchived.length,
+    transitions,
+  };
+}
