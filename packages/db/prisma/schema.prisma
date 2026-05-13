@@ -36,6 +36,7 @@ model Organization {
   projects     Project[]
   labels       Label[]
   plugins      Plugin[]
+  taskTriggers TaskTrigger[]
 
   @@map("organizations")
 }
@@ -538,6 +539,7 @@ model Task {
   attachments TaskAttachment[]
   workProducts TaskWorkProduct[]
   readStates  TaskReadState[]
+  triggers    TaskTrigger[]
   metadata    Json?
   createdAt   DateTime     @default(now()) @map("created_at")
   updatedAt   DateTime     @updatedAt @map("updated_at")
@@ -588,6 +590,50 @@ enum TaskType {
   ONE_TIME
   RECURRING
   CONTINUOUS
+}
+
+// ═══════════════════════════════════════════════════
+// TASK TRIGGERS — external events that fire a task
+// ═══════════════════════════════════════════════════
+
+model TaskTrigger {
+  id     String       @id @default(uuid())
+  orgId  String       @map("org_id")
+  org    Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  taskId String       @map("task_id")
+  task   Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  slug   String       @unique
+
+  kind   TriggerKind  @default(WEBHOOK)
+
+  authKind        TriggerAuthKind @default(HMAC) @map("auth_kind")
+  authSecretEnc   String?         @map("auth_secret_enc")
+  signatureHeader String?         @map("signature_header")
+
+  enabled      Boolean   @default(true)
+  lastFiredAt  DateTime? @map("last_fired_at")
+  firingCount  Int       @default(0) @map("firing_count")
+
+  metadata Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([orgId])
+  @@index([taskId])
+  @@map("task_triggers")
+}
+
+enum TriggerKind {
+  WEBHOOK
+  GMAIL
+  N8N
+}
+
+enum TriggerAuthKind {
+  HMAC
+  BEARER
+  NONE
 }
 
 // ═══════════════════════════════════════════════════
