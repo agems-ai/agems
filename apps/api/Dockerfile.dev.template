@@ -1,0 +1,32 @@
+# Dev-only image: keeps source code, dev dependencies, and tools
+FROM node:20-alpine
+
+RUN corepack enable && corepack prepare pnpm@10.30.3 --activate
+RUN apk add --no-cache git openssh-client curl grep findutils poppler-utils chromium ffmpeg \
+    && ln -s /usr/bin/chromium-browser /usr/local/bin/chromium 2>/dev/null || true
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV CHROMIUM_PATH=/usr/bin/chromium-browser
+
+WORKDIR /app
+
+# 1. Copy dependency manifests (cached layer — only rebuilds when deps change)
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/web/package.json apps/web/
+COPY packages/ai/package.json packages/ai/
+COPY packages/db/package.json packages/db/
+COPY packages/shared/package.json packages/shared/
+COPY packages/adapters/package.json packages/adapters/
+COPY packages/plugins/package.json packages/plugins/
+
+# 2. Install ALL dependencies (including devDependencies)
+RUN pnpm install --frozen-lockfile
+
+# 3. Copy Prisma schema and generate client
+COPY packages/db/prisma ./packages/db/prisma
+RUN pnpm db:generate
+
+# Source code will be mounted via docker-compose volume
+WORKDIR /app/apps/api
+EXPOSE 3001
+CMD ["pnpm", "dev"]
