@@ -345,6 +345,43 @@ class ApiClient {
     return this.fetch(`/agents/${agentId}/skills/${skillId}`, { method: 'DELETE' });
   }
 
+  // Repositories
+  getRepos() {
+    return this.fetch<any>('/repos');
+  }
+
+  createRepo(data: any) {
+    return this.fetch('/repos', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  getRepo(id: string) {
+    return this.fetch<any>(`/repos/${id}`);
+  }
+
+  updateRepo(id: string, data: any) {
+    return this.fetch(`/repos/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+  }
+
+  deleteRepo(id: string) {
+    return this.fetch(`/repos/${id}`, { method: 'DELETE' });
+  }
+
+  syncRepo(id: string) {
+    return this.fetch<any>(`/repos/${id}/sync`, { method: 'POST' });
+  }
+
+  getRepoProgress(id: string) {
+    return this.fetch<{ stage: string; percent: number } | null>(`/repos/${id}/progress`);
+  }
+
+  assignRepoToAgent(agentId: string, repoId: string) {
+    return this.fetch(`/agents/${agentId}/repos`, { method: 'POST', body: JSON.stringify({ repoId }) });
+  }
+
+  removeRepoFromAgent(agentId: string, repoId: string) {
+    return this.fetch(`/agents/${agentId}/repos/${repoId}`, { method: 'DELETE' });
+  }
+
   // Meetings
   getMeetings(params?: Record<string, string>) {
     const query = params ? '?' + new URLSearchParams(params).toString() : '';

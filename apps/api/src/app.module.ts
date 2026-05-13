@@ -31,6 +31,7 @@ import { AdaptersModule } from './modules/adapters/adapters.module';
 import { PluginsModule } from './modules/plugins/plugins.module';
 import { EvalsModule } from './modules/evals/evals.module';
 import { WorktreesModule } from './modules/worktrees/worktrees.module';
+import { ReposModule } from './modules/repos/repos.module';
 
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -79,6 +80,7 @@ import { HealthController } from './health.controller';
     PluginsModule,
     EvalsModule,
     WorktreesModule,
+    ReposModule,
   ],
   controllers: [HealthController],
   providers: [

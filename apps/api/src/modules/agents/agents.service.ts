@@ -123,6 +123,7 @@ export class AgentsService {
         positions: { select: { title: true }, take: 1 },
         skills: { include: { skill: true } },
         tools: { include: { tool: true } },
+        repositories: { include: { repo: true } },
         responsibilities: true,
         parentAgent: { select: { id: true, name: true, slug: true } },
         childAgents: { select: { id: true, name: true, slug: true, status: true } },

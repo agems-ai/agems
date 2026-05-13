@@ -31,6 +31,7 @@ import {
   FolderKanban,
   DollarSign,
   Inbox,
+  GitBranch,
 } from 'lucide-react';
 import CommandPalette from '@/components/CommandPalette';
 import ThemeToggle from '@/components/ThemeToggle';
@@ -52,6 +53,7 @@ const navItems = [
   // AI core
   { href: '/skills', label: 'Skills', icon: Sparkles },
   { href: '/tools', label: 'Tools', icon: Wrench },
+  { href: '/repos', label: 'Repos', icon: GitBranch },
   { href: '/catalog', label: 'Catalog', icon: Store },
   // Resources
   { href: '/budgets', label: 'Budgets', icon: DollarSign },
