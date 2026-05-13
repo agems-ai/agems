@@ -17,6 +17,7 @@ import { join, resolve } from 'path';
 import { decryptJson } from '../../common/crypto.util';
 import { RedisLockService } from '../../common/redis-lock.service';
 import { BrowserService } from './browser.service';
+import { buildExecutionAttribution } from './cost-attribution';
 
 @Injectable()
 export class RuntimeService {
@@ -1307,6 +1308,10 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
         (tc: any) => tc.output?.approval_required === true,
       );
 
+      // Per-execution cost attribution: write provider/model/in-out tokens
+      // so analytics can slice spend by model without separate aggregation.
+      const attribution = buildExecutionAttribution(agent, result.tokensUsed);
+
       if (needsApproval) {
         await this.prisma.agentExecution.update({
           where: { id: execution.id },
@@ -1316,6 +1321,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
             toolCalls: result.toolCalls as any,
             tokensUsed: result.tokensUsed.input + result.tokensUsed.output,
             costUsd: this.estimateCost(agent.llmProvider, result.tokensUsed),
+            ...attribution,
             endedAt: new Date(),
           },
         });
@@ -1335,6 +1341,7 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
           toolCalls: result.toolCalls as any,
           tokensUsed: result.tokensUsed.input + result.tokensUsed.output,
           costUsd: this.estimateCost(agent.llmProvider, result.tokensUsed),
+          ...attribution,
           endedAt: new Date(),
         },
       });

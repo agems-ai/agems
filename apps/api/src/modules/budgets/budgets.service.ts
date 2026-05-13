@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../config/prisma.service';
+import { buildForecast } from './cost-forecast';
 
 @Injectable()
 export class BudgetsService {
@@ -376,7 +377,16 @@ export class BudgetsService {
     const totalCost = executions.reduce((s, e) => s + (e.costUsd ?? 0), 0);
     const totalTokens = executions.reduce((s, e) => s + (e.tokensUsed ?? 0), 0);
 
-    return { timeline, agentBreakdown, totalCost, totalTokens, totalExecutions: executions.length, period, days };
+    // Burn-rate forecast. Open-source build has no org-wide cap (PlatformBudget
+    // is a managed-platform feature), so monthlyLimitUsd is null — forecast
+    // still returns avgDailyBurn / recentDailyBurn / trend / spikes.
+    const forecast = buildForecast({
+      timeline: timeline.map(b => ({ date: b.date, cost: b.cost })),
+      monthlyLimitUsd: null,
+      alreadySpentUsd: 0,
+    });
+
+    return { timeline, agentBreakdown, totalCost, totalTokens, totalExecutions: executions.length, period, days, forecast };
   }
 
   async getIncidents(

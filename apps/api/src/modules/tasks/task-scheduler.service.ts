@@ -4,6 +4,13 @@ import { PrismaService } from '../../config/prisma.service';
 import { RuntimeService } from '../runtime/runtime.service';
 import { CommsService } from '../comms/comms.service';
 import { SettingsService } from '../settings/settings.service';
+import {
+  buildLockOwnerId,
+  tryClaimTask,
+  releaseTaskLock,
+  claimablePredicate,
+  DEFAULT_LOCK_TTL_MS,
+} from './task-claim';
 
 @Injectable()
 export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
@@ -19,6 +26,9 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
   private reviewTickCounter = 0;
   /** Track last agent comment timestamp per task to prevent ping-pong */
   private readonly lastAgentCommentAt = new Map<string, number>();
+  /** Stable owner id for DB-level task locks. Lets multiple scheduler
+   *  instances (across processes / hosts) coexist without double-executing. */
+  private readonly lockOwnerId = buildLockOwnerId();
 
   /** Returns true if an agent is currently running a task. Auto-clears stale flags older than RUNNING_AGENT_TTL_MS so a stuck flag never blocks scheduling forever. */
   private isAgentRunning(agentId: string): boolean {
@@ -1018,28 +1028,48 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
       }).catch(() => {});
     } finally {
       this.runningAgents.delete(agentId);
+      // Release the DB-level claim. Safe even if no lock was held.
+      await releaseTaskLock(this.prisma as any, { taskId: task.id, ownerId: this.lockOwnerId }).catch(
+        err => this.logger.warn(`Failed to release lock for task ${task.id}: ${err}`),
+      );
     }
   }
 
-  /** Pickup PENDING tasks assigned to agents that haven't been executed yet */
+  /** Pickup PENDING tasks assigned to agents that haven't been executed yet.
+   *  Uses DB-level atomic claim (Task.lockedBy/lockedUntil) so two scheduler
+   *  instances never run the same task. */
   private async pickupPendingAgentTasks() {
     try {
-      const pendingTasks = await this.prisma.task.findMany({
+      const now = new Date();
+      const candidates = await this.prisma.task.findMany({
         where: {
           assigneeType: 'AGENT',
-          status: 'PENDING',
+          ...claimablePredicate(now),
         },
+        select: { id: true, assigneeId: true },
         orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
         take: 10,
       });
 
-      for (const task of pendingTasks) {
-        if (!this.isAgentRunning(task.assigneeId)) {
-          // Don't await — let tasks run concurrently for different agents
-          this.executeAgentTask(task).catch(err =>
-            this.logger.error(`Failed to pickup task ${task.id}: ${err}`),
-          );
+      for (const { id: taskId, assigneeId } of candidates) {
+        if (this.isAgentRunning(assigneeId)) continue;
+        const claimed = await tryClaimTask(this.prisma as any, {
+          taskId,
+          ownerId: this.lockOwnerId,
+          now,
+          ttlMs: DEFAULT_LOCK_TTL_MS,
+        });
+        if (!claimed) continue;
+
+        const task = await this.prisma.task.findUnique({ where: { id: taskId } });
+        if (!task) {
+          await releaseTaskLock(this.prisma as any, { taskId, ownerId: this.lockOwnerId }).catch(() => {});
+          continue;
         }
+
+        this.executeAgentTask(task).catch(err =>
+          this.logger.error(`Failed to pickup task ${taskId}: ${err}`),
+        );
       }
 
       // Self-sufficiency fallback: run every tick regardless of queue depth.

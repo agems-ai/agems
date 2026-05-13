@@ -510,6 +510,13 @@ model Task {
   result      Json?
   deadline    DateTime?
   completedAt DateTime?    @map("completed_at")
+
+  // Atomic checkout — prevents two scheduler ticks (across processes) from
+  // claiming the same PENDING task. lockedUntil is a TTL: a crashed worker's
+  // row reclaims itself automatically. Cleared back to NULL on completion.
+  lockedBy    String?   @map("locked_by")
+  lockedUntil DateTime? @map("locked_until")
+
   meetingTasks MeetingTask[]
   comments    TaskComment[]
   labels      TaskLabel[]
@@ -524,6 +531,7 @@ model Task {
   @@index([creatorType, creatorId])
   @@index([projectId])
   @@index([goalId])
+  @@index([status, lockedBy, lockedUntil])
   @@map("tasks")
 }
 
@@ -736,12 +744,22 @@ model AgentExecution {
   toolCalls   Json?           @map("tool_calls") // Array of { tool, input, output }
   tokensUsed  Int?            @map("tokens_used")
   costUsd     Float?          @map("cost_usd")
+
+  // Per-execution cost attribution. Nullable because non-LLM executions
+  // (blocked-by-budget, no-key, approval-resume) never call a model.
+  provider          String? @map("provider")
+  model             String? @map("model")
+  inputTokens       Int?    @map("input_tokens")
+  outputTokens      Int?    @map("output_tokens")
+  cachedInputTokens Int?    @map("cached_input_tokens")
+
   error       String?
   startedAt   DateTime        @default(now()) @map("started_at")
   endedAt     DateTime?       @map("ended_at")
 
   @@index([agentId, status])
   @@index([startedAt])
+  @@index([provider, model])
   @@map("agent_executions")
 }
 
