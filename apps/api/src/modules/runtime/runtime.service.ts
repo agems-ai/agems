@@ -18,6 +18,7 @@ import { decryptJson } from '../../common/crypto.util';
 import { RedisLockService } from '../../common/redis-lock.service';
 import { BrowserService } from './browser.service';
 import { buildExecutionAttribution } from './cost-attribution';
+import { rankMemories } from './memory-search';
 
 @Injectable()
 export class RuntimeService {
@@ -1770,32 +1771,81 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
 
       tools.push({
         name: 'memory_read',
-        description: 'Read your persistent memory entries. Use to recall knowledge from past conversations. Filter by type: KNOWLEDGE (learned facts), CONTEXT (situational), FILE (saved files), CONVERSATION (past chats).',
+        description: 'Read your persistent memory entries. Use to recall knowledge from past conversations. Filter by type: KNOWLEDGE (learned facts), CONTEXT (situational), FILE (saved files), CONVERSATION (past chats). When `search` is given, entries are RANKED by relevance (token match + phrase bonus + recency) instead of plain newest-first.',
         parameters: z.object({
           type: z.string().optional().describe('Memory type filter: KNOWLEDGE, CONTEXT, FILE, CONVERSATION (default: all)'),
-          search: z.string().optional().describe('Search term to filter memories by content'),
+          search: z.string().optional().describe('Search term — switches output to relevance ranking'),
           limit: z.number().optional().describe('Max entries to return (default 20)'),
         }),
         execute: async (params: { type?: string; search?: string; limit?: number }) => {
           const where: any = { agentId };
           if (params.type) where.type = params.type;
+          const limit = params.limit ?? 20;
+
+          if (params.search?.trim()) {
+            const candidates = await this.prisma.agentMemory.findMany({
+              where,
+              orderBy: { createdAt: 'desc' },
+              take: Math.max(limit * 5, 100),
+            });
+            const ranked = rankMemories(candidates, params.search, { topK: limit });
+            const results = ranked.map(({ entry, score, matchedTokens }) => ({
+              id: entry.id,
+              type: (entry as any).type,
+              content: entry.content.substring(0, 5000),
+              metadata: (entry as any).metadata,
+              createdAt: entry.createdAt,
+              score,
+              matchedTokens,
+            }));
+            return { count: results.length, memories: results };
+          }
+
           const memories = await this.prisma.agentMemory.findMany({
             where,
             orderBy: { createdAt: 'desc' },
-            take: params.limit ?? 20,
+            take: limit,
           });
-          let results = memories.map(m => ({
+          const results = memories.map(m => ({
             id: m.id,
             type: m.type,
             content: m.content.substring(0, 5000),
             metadata: m.metadata,
             createdAt: m.createdAt,
           }));
-          if (params.search) {
-            const q = params.search.toLowerCase();
-            results = results.filter(r => r.content.toLowerCase().includes(q));
-          }
           return { count: results.length, memories: results };
+        },
+      });
+
+      tools.push({
+        name: 'memory_search',
+        description: 'Search your persistent memory by relevance to a natural-language query. Returns the top-K entries ranked by token overlap + phrase bonus + recency. Use this when you need to RECALL a specific fact rather than browse recent memory.',
+        parameters: z.object({
+          query: z.string().describe('Natural-language query — what fact / event / instruction are you trying to recall'),
+          type: z.string().optional().describe('Optional memory type filter: KNOWLEDGE, CONTEXT, FILE, CONVERSATION'),
+          topK: z.number().optional().describe('Max results to return (default 10, max 50)'),
+        }),
+        execute: async (params: { query: string; type?: string; topK?: number }) => {
+          const where: any = { agentId };
+          if (params.type) where.type = params.type;
+          const topK = Math.min(Math.max(params.topK ?? 10, 1), 50);
+
+          const candidates = await this.prisma.agentMemory.findMany({
+            where,
+            orderBy: { createdAt: 'desc' },
+            take: 500,
+          });
+          const ranked = rankMemories(candidates, params.query, { topK });
+          const results = ranked.map(({ entry, score, matchedTokens }) => ({
+            id: entry.id,
+            type: (entry as any).type,
+            content: entry.content.substring(0, 5000),
+            metadata: (entry as any).metadata,
+            createdAt: entry.createdAt,
+            score,
+            matchedTokens,
+          }));
+          return { count: results.length, query: params.query, memories: results };
         },
       });
 
@@ -5299,6 +5349,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
 
     // Memory — persistent knowledge store
     add('memory_read', 'Read persistent memory entries', 'Memory');
+    add('memory_search', 'Recall memory by relevance to a query', 'Memory');
     add('memory_write', 'Save to persistent memory', 'Memory');
     add('memory_delete', 'Delete memory entry', 'Memory');
 
