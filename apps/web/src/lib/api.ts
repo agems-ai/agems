@@ -927,6 +927,64 @@ class ApiClient {
     return this.fetch<any>(`/agents/${agentId}/cost-stats?period=${period}&days=${days}`);
   }
 
+  // Platform Budget (org-wide limits with priority over agent limits)
+  getPlatformBudget() {
+    return this.fetch<{
+      budget: {
+        id: string;
+        orgId: string;
+        hourlyLimitUsd: number | null;
+        dailyLimitUsd: number | null;
+        monthlyLimitUsd: number | null;
+        currentSpendUsd: number;
+        periodStart: string;
+        periodEnd: string;
+        softAlertPercent: number;
+        hardStopEnabled: boolean;
+        hardStopTriggered: boolean;
+        alertSent: boolean;
+      } | null;
+      breakdown: {
+        hourly: { spend: number; limit: number | null };
+        daily: { spend: number; limit: number | null };
+        monthly: { spend: number; limit: number | null; periodStart: string | null; periodEnd: string | null };
+        hardStopTriggered: boolean;
+        softAlertPercent: number;
+      };
+    }>('/platform-budget');
+  }
+
+  getPlatformBudgetBreakdown() {
+    return this.fetch<{
+      hourly: { spend: number; limit: number | null };
+      daily: { spend: number; limit: number | null };
+      monthly: { spend: number; limit: number | null; periodStart: string | null; periodEnd: string | null };
+      hardStopTriggered: boolean;
+      softAlertPercent: number;
+    }>('/platform-budget/breakdown');
+  }
+
+  upsertPlatformBudget(data: {
+    hourlyLimitUsd?: number | null;
+    dailyLimitUsd?: number | null;
+    monthlyLimitUsd?: number | null;
+    softAlertPercent?: number;
+    hardStopEnabled?: boolean;
+    periodStart?: string;
+    periodEnd?: string;
+  }) {
+    return this.fetch('/platform-budget', { method: 'PUT', body: JSON.stringify(data) });
+  }
+
+  resetPlatformBudget(body?: { periodStart?: string; periodEnd?: string }) {
+    return this.fetch('/platform-budget/reset', { method: 'POST', body: JSON.stringify(body || {}) });
+  }
+
+  getPlatformBudgetIncidents(params?: { page?: string; pageSize?: string }) {
+    const query = params ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
+    return this.fetch<any>(`/platform-budget/incidents${query}`);
+  }
+
   // Approvals
   getApprovals(params?: Record<string, string>) {
     const query = params ? '?' + new URLSearchParams(params).toString() : '';

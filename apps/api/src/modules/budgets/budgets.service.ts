@@ -14,6 +14,8 @@ export class BudgetsService {
     input: {
       agentId: string;
       monthlyLimitUsd: number;
+      dailyLimitUsd?: number | null;
+      hourlyLimitUsd?: number | null;
       periodStart?: string;
       periodEnd?: string;
       softAlertPercent?: number;
@@ -40,6 +42,8 @@ export class BudgetsService {
       data: {
         agentId: input.agentId,
         monthlyLimitUsd: input.monthlyLimitUsd,
+        dailyLimitUsd: input.dailyLimitUsd ?? null,
+        hourlyLimitUsd: input.hourlyLimitUsd ?? null,
         currentSpendUsd: 0,
         periodStart,
         periodEnd,
@@ -101,6 +105,8 @@ export class BudgetsService {
     id: string,
     input: {
       monthlyLimitUsd?: number;
+      dailyLimitUsd?: number | null;
+      hourlyLimitUsd?: number | null;
       softAlertPercent?: number;
       hardStopEnabled?: boolean;
       metadata?: any;
@@ -114,6 +120,8 @@ export class BudgetsService {
       where: { id },
       data: {
         ...(input.monthlyLimitUsd !== undefined && { monthlyLimitUsd: input.monthlyLimitUsd }),
+        ...(input.dailyLimitUsd !== undefined && { dailyLimitUsd: input.dailyLimitUsd }),
+        ...(input.hourlyLimitUsd !== undefined && { hourlyLimitUsd: input.hourlyLimitUsd }),
         ...(input.softAlertPercent !== undefined && { softAlertPercent: input.softAlertPercent }),
         ...(input.hardStopEnabled !== undefined && { hardStopEnabled: input.hardStopEnabled }),
         ...(input.metadata !== undefined && { metadata: input.metadata as any }),
@@ -377,13 +385,13 @@ export class BudgetsService {
     const totalCost = executions.reduce((s, e) => s + (e.costUsd ?? 0), 0);
     const totalTokens = executions.reduce((s, e) => s + (e.tokensUsed ?? 0), 0);
 
-    // Burn-rate forecast. Open-source build has no org-wide cap (PlatformBudget
-    // is a managed-platform feature), so monthlyLimitUsd is null — forecast
-    // still returns avgDailyBurn / recentDailyBurn / trend / spikes.
+    // Burn-rate forecast against the platform budget (the org-wide cap).
+    // Per-agent forecasts are caller's job — they have the AgentBudget row.
+    const platformBudget = await this.prisma.platformBudget.findUnique({ where: { orgId } });
     const forecast = buildForecast({
       timeline: timeline.map(b => ({ date: b.date, cost: b.cost })),
-      monthlyLimitUsd: null,
-      alreadySpentUsd: 0,
+      monthlyLimitUsd: platformBudget?.monthlyLimitUsd ?? null,
+      alreadySpentUsd: platformBudget?.currentSpendUsd ?? 0,
     });
 
     return { timeline, agentBreakdown, totalCost, totalTokens, totalExecutions: executions.length, period, days, forecast };

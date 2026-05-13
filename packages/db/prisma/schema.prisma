@@ -38,6 +38,7 @@ model Organization {
   plugins      Plugin[]
   repositories Repository[]
   taskTriggers TaskTrigger[]
+  platformBudget PlatformBudget?
 
   @@map("organizations")
 }
@@ -1268,8 +1269,12 @@ model AgentBudget {
   agentId String @map("agent_id")
   agent   Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
 
-  // Monthly budget (USD)
+  // Limits (USD). All nullable — NULL means "no limit at this window".
   monthlyLimitUsd Float  @map("monthly_limit_usd")
+  dailyLimitUsd   Float? @map("daily_limit_usd")
+  hourlyLimitUsd  Float? @map("hourly_limit_usd")
+
+  // Monthly counter (daily/hourly are derived from agent_executions on-the-fly)
   currentSpendUsd Float  @default(0) @map("current_spend_usd")
   periodStart     DateTime @map("period_start")
   periodEnd       DateTime @map("period_end")
@@ -1310,6 +1315,62 @@ enum BudgetIncidentType {
   HARD_STOP
   BUDGET_RESET
   MANUAL_OVERRIDE
+}
+
+// ═══════════════════════════════════════════════════
+// PLATFORM BUDGET — org-wide cap, takes priority over per-agent limits
+// ═══════════════════════════════════════════════════
+
+model PlatformBudget {
+  id    String       @id @default(uuid())
+  orgId String       @unique @map("org_id")
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // Limits (USD). All nullable — NULL means "no platform-wide limit at this window".
+  hourlyLimitUsd  Float? @map("hourly_limit_usd")
+  dailyLimitUsd   Float? @map("daily_limit_usd")
+  monthlyLimitUsd Float? @map("monthly_limit_usd")
+
+  // Monthly counter (daily/hourly derived on-the-fly from agent_executions)
+  currentSpendUsd Float    @default(0) @map("current_spend_usd")
+  periodStart     DateTime @map("period_start")
+  periodEnd       DateTime @map("period_end")
+
+  // Alerts & hard stop
+  softAlertPercent  Int     @default(80) @map("soft_alert_percent")
+  hardStopEnabled   Boolean @default(true) @map("hard_stop_enabled")
+  alertSent         Boolean @default(false) @map("alert_sent")
+  hardStopTriggered Boolean @default(false) @map("hard_stop_triggered")
+
+  incidents PlatformBudgetIncident[]
+  metadata  Json?
+  createdAt DateTime                 @default(now()) @map("created_at")
+  updatedAt DateTime                 @updatedAt @map("updated_at")
+
+  @@index([orgId])
+  @@map("platform_budgets")
+}
+
+model PlatformBudgetIncident {
+  id               String         @id @default(uuid())
+  platformBudgetId String         @map("platform_budget_id")
+  platformBudget   PlatformBudget @relation(fields: [platformBudgetId], references: [id], onDelete: Cascade)
+
+  type      BudgetIncidentType
+  scope     BudgetScope // HOURLY | DAILY | MONTHLY
+  message   String             @db.Text
+  spendUsd  Float              @map("spend_usd")
+  limitUsd  Float              @map("limit_usd")
+  createdAt DateTime           @default(now()) @map("created_at")
+
+  @@index([platformBudgetId])
+  @@map("platform_budget_incidents")
+}
+
+enum BudgetScope {
+  HOURLY
+  DAILY
+  MONTHLY
 }
 
 // ═══════════════════════════════════════════════════
