@@ -18,6 +18,7 @@ import { decryptJson } from '../../common/crypto.util';
 import { RedisLockService } from '../../common/redis-lock.service';
 import { BrowserService } from './browser.service';
 import { buildExecutionAttribution } from './cost-attribution';
+import { PlatformBudgetsService } from '../budgets/platform-budgets.service';
 import { rankMemories } from './memory-search';
 
 @Injectable()
@@ -96,6 +97,7 @@ export class RuntimeService {
     private prisma: PrismaService,
     private agentsService: AgentsService,
     private settings: SettingsService,
+    private platformBudgets: PlatformBudgetsService,
     private n8n: N8nService,
     private comms: CommsService,
     private events: EventEmitter2,
@@ -1036,6 +1038,19 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
         return { text: noKeyMessage, toolCalls: [], tokensUsed: 0, costUsd: 0, waitingForApproval: false, thinking: [] as string[], iterations: 0, loopDetected: false, executionId: execution.id };
       }
 
+      // ═══════════════════════════════════════════════════
+      // PLATFORM BUDGET GATE — org-wide cap, higher priority than per-agent
+      // ═══════════════════════════════════════════════════
+      const platformCheck = await this.platformBudgets.checkLimit(agent.orgId);
+      if (platformCheck.blocked) {
+        this.logger.warn(`Agent ${agent.name} blocked by platform budget: ${platformCheck.reason}`);
+        await this.prisma.agentExecution.update({
+          where: { id: execution.id },
+          data: { status: 'COMPLETED', output: { text: platformCheck.reason }, endedAt: new Date() },
+        });
+        return { text: platformCheck.reason!, toolCalls: [], tokensUsed: 0, costUsd: 0, waitingForApproval: false, thinking: [] as string[], iterations: 0, loopDetected: false, executionId: execution.id };
+      }
+
       // Check budget limits before execution (hourly + daily)
       const agentLlmConfig = (agent.llmConfig as any) || {};
       const settingsService = this.settings;
@@ -1327,6 +1342,15 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
           },
         });
 
+        try {
+          const __cost = this.estimateCost(agent.llmProvider, result.tokensUsed);
+          if (__cost > 0) {
+            await this.platformBudgets.recordSpend(agent.orgId, __cost, `${agent.name} execution`);
+          }
+        } catch (err) {
+          this.logger.error(`Platform budget recordSpend failed: ${(err as Error).message}`);
+        }
+
         return { executionId: execution.id, ...result, waitingForApproval: true };
       }
 
@@ -1346,6 +1370,16 @@ Respond as ${currentAgent.name}. Be concise and professional. Write in the same 
           endedAt: new Date(),
         },
       });
+
+      // Post-execution: increment platform monthly spend counter (drives soft-alert/hard-stop)
+      try {
+        const __cost = this.estimateCost(agent.llmProvider, result.tokensUsed);
+        if (__cost > 0) {
+          await this.platformBudgets.recordSpend(agent.orgId, __cost, `${agent.name} execution`);
+        }
+      } catch (err) {
+        this.logger.error(`Platform budget recordSpend failed: ${(err as Error).message}`);
+      }
 
       this.events.emit('audit.create', {
         actorType: 'AGENT',

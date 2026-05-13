@@ -15,6 +15,8 @@ export class BudgetsController {
     @Body() body: {
       agentId: string;
       monthlyLimitUsd: number;
+      dailyLimitUsd?: number | null;
+      hourlyLimitUsd?: number | null;
       periodStart?: string;
       periodEnd?: string;
       softAlertPercent?: number;
@@ -59,6 +61,8 @@ export class BudgetsController {
     @Param('id') id: string,
     @Body() body: {
       monthlyLimitUsd?: number;
+      dailyLimitUsd?: number | null;
+      hourlyLimitUsd?: number | null;
       softAlertPercent?: number;
       hardStopEnabled?: boolean;
       metadata?: any;

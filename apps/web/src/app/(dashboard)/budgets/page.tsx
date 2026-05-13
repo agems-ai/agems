@@ -13,13 +13,255 @@ function spendColor(percent: number): string {
   return 'var(--success)';
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Platform Budget Card (org-wide limits, higher priority than agent limits)
+// ──────────────────────────────────────────────────────────────────────────
+
+function PlatformBudgetCard() {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [form, setForm] = useState<{
+    hourlyLimitUsd: string;
+    dailyLimitUsd: string;
+    monthlyLimitUsd: string;
+    softAlertPercent: number;
+    hardStopEnabled: boolean;
+  }>({ hourlyLimitUsd: '', dailyLimitUsd: '', monthlyLimitUsd: '', softAlertPercent: 80, hardStopEnabled: true });
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await api.getPlatformBudget();
+      setData(res);
+      setForm({
+        hourlyLimitUsd: res.budget?.hourlyLimitUsd != null ? String(res.budget.hourlyLimitUsd) : '',
+        dailyLimitUsd: res.budget?.dailyLimitUsd != null ? String(res.budget.dailyLimitUsd) : '',
+        monthlyLimitUsd: res.budget?.monthlyLimitUsd != null ? String(res.budget.monthlyLimitUsd) : '',
+        softAlertPercent: res.budget?.softAlertPercent ?? 80,
+        hardStopEnabled: res.budget?.hardStopEnabled ?? true,
+      });
+    } catch {
+      // silent
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const save = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      const toNum = (s: string) => (s === '' ? null : parseFloat(s));
+      await api.upsertPlatformBudget({
+        hourlyLimitUsd: toNum(form.hourlyLimitUsd),
+        dailyLimitUsd: toNum(form.dailyLimitUsd),
+        monthlyLimitUsd: toNum(form.monthlyLimitUsd),
+        softAlertPercent: form.softAlertPercent,
+        hardStopEnabled: form.hardStopEnabled,
+      });
+      setEditing(false);
+      await load();
+    } catch (e: any) {
+      setError(e.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reset = async () => {
+    if (!confirm('Reset platform monthly spend to 0?')) return;
+    try {
+      await api.resetPlatformBudget();
+      await load();
+    } catch (e: any) {
+      alert(e.message || 'Failed to reset');
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="mb-6 p-6 bg-[var(--card)] border border-[var(--border)] rounded-xl">
+        <p className="text-sm text-[var(--muted)]">Loading platform budget…</p>
+      </div>
+    );
+  }
+
+  const bd = data?.breakdown;
+  const windows = [
+    { key: 'hourly',  label: 'Hourly',  spend: bd?.hourly?.spend ?? 0,  limit: bd?.hourly?.limit  ?? null, tone: 'bg-blue-500/10 text-blue-400 border-blue-500/30' },
+    { key: 'daily',   label: 'Daily',   spend: bd?.daily?.spend ?? 0,   limit: bd?.daily?.limit   ?? null, tone: 'bg-purple-500/10 text-purple-400 border-purple-500/30' },
+    { key: 'monthly', label: 'Monthly', spend: bd?.monthly?.spend ?? 0, limit: bd?.monthly?.limit ?? null, tone: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
+  ];
+
+  return (
+    <div className="mb-6 bg-[var(--card)] border-2 border-[var(--accent)]/40 rounded-2xl p-5 md:p-6">
+      <div className="flex items-start justify-between gap-4 mb-4 flex-wrap">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="px-2 py-0.5 rounded-md bg-[var(--accent)]/20 text-[var(--accent)] text-xs font-semibold uppercase tracking-wide">
+              Platform
+            </span>
+            <h2 className="text-xl font-bold">Organization Budget</h2>
+            {data?.breakdown?.hardStopTriggered && (
+              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-500/20 text-red-400 border border-red-500/30">
+                HARD STOP
+              </span>
+            )}
+          </div>
+          <p className="text-sm text-[var(--muted)] mt-1">
+            Applies to all agents. <span className="font-medium">Higher priority than per-agent limits</span> — if exceeded, every agent in the org is blocked.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          {!editing && (
+            <>
+              <button
+                onClick={() => setEditing(true)}
+                className="px-3 py-1.5 rounded-lg border border-[var(--border)] hover:bg-[var(--card-hover)] text-sm transition-colors"
+              >
+                {data?.budget ? 'Edit Limits' : 'Set Limits'}
+              </button>
+              {data?.budget && (
+                <button
+                  onClick={reset}
+                  className="px-3 py-1.5 rounded-lg border border-[var(--border)] hover:bg-[var(--card-hover)] text-sm transition-colors"
+                >
+                  Reset Monthly
+                </button>
+              )}
+            </>
+          )}
+          {editing && (
+            <>
+              <button
+                onClick={() => { setEditing(false); load(); }}
+                className="px-3 py-1.5 rounded-lg border border-[var(--border)] hover:bg-[var(--card-hover)] text-sm transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={save}
+                disabled={saving}
+                className="px-3 py-1.5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-sm font-medium transition-colors disabled:opacity-50"
+              >
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {error && (
+        <div className="mb-3 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">{error}</div>
+      )}
+
+      {!editing ? (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {windows.map((w) => {
+            const hasLimit = w.limit !== null && w.limit > 0;
+            const pct = hasLimit ? (w.spend / (w.limit as number)) * 100 : 0;
+            return (
+              <div key={w.key} className={`p-4 rounded-xl border ${w.tone}`}>
+                <div className="flex items-baseline justify-between mb-1">
+                  <span className="text-xs font-semibold uppercase tracking-wide">{w.label}</span>
+                  {hasLimit ? (
+                    <span className="text-xs opacity-80">{pct.toFixed(0)}%</span>
+                  ) : (
+                    <span className="text-xs opacity-60">no limit</span>
+                  )}
+                </div>
+                <div className="text-lg font-bold">
+                  {formatUsd(w.spend)}
+                  {hasLimit && <span className="text-sm font-normal opacity-70"> / {formatUsd(w.limit as number)}</span>}
+                </div>
+                {hasLimit && (
+                  <div className="w-full h-1.5 rounded-full bg-black/20 overflow-hidden mt-2">
+                    <div
+                      className="h-full rounded-full transition-all duration-300"
+                      style={{ width: `${Math.min(pct, 100)}%`, backgroundColor: spendColor(pct) }}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+            {[
+              { k: 'hourlyLimitUsd',  label: 'Hourly Limit (USD)',  step: '0.1', placeholder: 'e.g. 2.00' },
+              { k: 'dailyLimitUsd',   label: 'Daily Limit (USD)',   step: '1',   placeholder: 'e.g. 50' },
+              { k: 'monthlyLimitUsd', label: 'Monthly Limit (USD)', step: '10',  placeholder: 'e.g. 1000' },
+            ].map((f) => (
+              <div key={f.k}>
+                <label className="block text-xs font-medium mb-1 text-[var(--muted)]">{f.label}</label>
+                <input
+                  type="number"
+                  min="0"
+                  step={f.step}
+                  placeholder={f.placeholder}
+                  value={(form as any)[f.k]}
+                  onChange={(e) => setForm({ ...form, [f.k]: e.target.value } as any)}
+                  className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
+                />
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-[var(--muted)] mb-3">Leave empty to remove the cap for that window.</p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium mb-1">Soft Alert Threshold: {form.softAlertPercent}%</label>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={form.softAlertPercent}
+                onChange={(e) => setForm({ ...form, softAlertPercent: parseInt(e.target.value) })}
+                className="w-full accent-[var(--accent)]"
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Hard Stop</p>
+                <p className="text-xs text-[var(--muted)]">Pause all agents when monthly limit exceeded</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setForm({ ...form, hardStopEnabled: !form.hardStopEnabled })}
+                className={`relative w-11 h-6 rounded-full transition-colors ${
+                  form.hardStopEnabled ? 'bg-[var(--accent)]' : 'bg-[var(--border)]'
+                }`}
+              >
+                <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${
+                  form.hardStopEnabled ? 'translate-x-5' : 'translate-x-0'
+                }`} />
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Main page
+// ──────────────────────────────────────────────────────────────────────────
+
 export default function BudgetsPage() {
   const [budgets, setBudgets] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState<any>(null);
   const [modalMode, setModalMode] = useState<'create' | 'edit' | null>(null);
   const [selectedBudget, setSelectedBudget] = useState<any>(null);
-  const [form, setForm] = useState({ agentId: '', monthlyLimitUsd: 100, dailyLimitUsd: 3, hourlyLimitUsd: 0.5, softAlertPercent: 80, hardStopEnabled: true });
+  const [form, setForm] = useState({ agentId: '', monthlyLimitUsd: 4, dailyLimitUsd: '', hourlyLimitUsd: '', softAlertPercent: 80, hardStopEnabled: true });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [agents, setAgents] = useState<any[]>([]);
@@ -48,21 +290,23 @@ export default function BudgetsPage() {
   useEffect(() => { loadData(); }, []);
 
   const openCreate = () => {
-    setForm({ agentId: '', monthlyLimitUsd: 100, dailyLimitUsd: 3, hourlyLimitUsd: 0.5, softAlertPercent: 80, hardStopEnabled: true });
+    setForm({ agentId: '', monthlyLimitUsd: 4, dailyLimitUsd: '', hourlyLimitUsd: '', softAlertPercent: 80, hardStopEnabled: true });
     setSelectedBudget(null);
     setError('');
     setModalMode('create');
   };
 
   const openEdit = (budget: any) => {
-    // Get daily/hourly from agent's llmConfig
-    const agent = agentMap.get(budget.agentId);
-    const lc = (agent?.llmConfig || {}) as any;
     setForm({
       agentId: budget.agentId,
       monthlyLimitUsd: budget.monthlyLimitUsd,
-      dailyLimitUsd: lc.dailyBudgetUsd ?? 3,
-      hourlyLimitUsd: lc.hourlyBudgetUsd ?? 0.5,
+      // Prefer new agent_budgets columns; fall back to legacy llm_config
+      dailyLimitUsd: budget.dailyLimitUsd != null ? String(budget.dailyLimitUsd)
+        : (agentMap.get(budget.agentId)?.llmConfig?.dailyBudgetUsd != null
+          ? String(agentMap.get(budget.agentId).llmConfig.dailyBudgetUsd) : ''),
+      hourlyLimitUsd: budget.hourlyLimitUsd != null ? String(budget.hourlyLimitUsd)
+        : (agentMap.get(budget.agentId)?.llmConfig?.hourlyBudgetUsd != null
+          ? String(agentMap.get(budget.agentId).llmConfig.hourlyBudgetUsd) : ''),
       softAlertPercent: budget.softAlertPercent ?? 80,
       hardStopEnabled: budget.hardStopEnabled ?? true,
     });
@@ -77,9 +321,13 @@ export default function BudgetsPage() {
     setSaving(true);
     setError('');
     try {
+      const toNum = (s: string | number) =>
+        typeof s === 'number' ? (s > 0 ? s : null) : (s === '' ? null : parseFloat(s));
       const budgetPayload = {
         agentId: form.agentId,
         monthlyLimitUsd: form.monthlyLimitUsd,
+        dailyLimitUsd: toNum(form.dailyLimitUsd),
+        hourlyLimitUsd: toNum(form.hourlyLimitUsd),
         softAlertPercent: form.softAlertPercent,
         hardStopEnabled: form.hardStopEnabled,
       };
@@ -87,14 +335,6 @@ export default function BudgetsPage() {
         await api.createBudget(budgetPayload);
       } else if (modalMode === 'edit' && selectedBudget) {
         await api.updateBudget(selectedBudget.id, budgetPayload);
-      }
-      // Save daily/hourly limits to agent's llmConfig
-      if (form.agentId) {
-        try {
-          const agentData = await api.getAgent(form.agentId);
-          const llmConfig = { ...(agentData.llmConfig || {}), dailyBudgetUsd: form.dailyLimitUsd, hourlyBudgetUsd: form.hourlyLimitUsd };
-          await api.updateAgent(form.agentId, { llmConfig });
-        } catch { /* silent */ }
       }
       setModalMode(null);
       loadData();
@@ -141,21 +381,24 @@ export default function BudgetsPage() {
       <div className="flex items-center justify-between mb-6 md:mb-8 flex-wrap gap-3">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold">Budgets & Costs</h1>
-          <p className="text-[var(--muted)] mt-1 text-sm">Monitor and control agent spending</p>
+          <p className="text-[var(--muted)] mt-1 text-sm">Platform-wide cap + per-agent limits. Platform wins.</p>
         </div>
         <button
           onClick={openCreate}
           className="px-4 py-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] rounded-lg font-medium transition-colors text-sm"
         >
-          + New Budget
+          + New Agent Budget
         </button>
       </div>
 
-      {/* Summary Cards */}
+      {/* Platform Budget Card — top-priority cap on the whole org */}
+      <PlatformBudgetCard />
+
+      {/* Agent Summary Cards */}
       {summary && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <div className="p-5 bg-[var(--card)] border border-[var(--border)] rounded-xl">
-            <p className="text-xs text-[var(--muted)] uppercase tracking-wide mb-1">Total Monthly Limit</p>
+            <p className="text-xs text-[var(--muted)] uppercase tracking-wide mb-1">Total Monthly Limit (agents)</p>
             <p className="text-2xl font-bold">{formatUsd(summary.totalLimitUsd ?? summary.totalLimit ?? 0)}</p>
           </div>
           <div className="p-5 bg-[var(--card)] border border-[var(--border)] rounded-xl">
@@ -181,8 +424,8 @@ export default function BudgetsPage() {
       ) : budgets.length === 0 ? (
         <div className="text-center py-20 border border-dashed border-[var(--border)] rounded-xl">
           <p className="text-4xl mb-4">💰</p>
-          <p className="text-lg font-medium mb-2">No budgets configured</p>
-          <p className="text-[var(--muted)] mb-4">Set up spending limits for your agents</p>
+          <p className="text-lg font-medium mb-2">No per-agent budgets configured</p>
+          <p className="text-[var(--muted)] mb-4">Set up spending limits for individual agents</p>
           <button
             onClick={openCreate}
             className="px-4 py-2 bg-[var(--accent)] hover:bg-[var(--accent-hover)] rounded-lg font-medium transition-colors inline-block"
@@ -196,7 +439,7 @@ export default function BudgetsPage() {
           <div className="hidden md:grid grid-cols-12 gap-4 px-5 py-2 text-xs text-[var(--muted)] uppercase tracking-wide">
             <div className="col-span-2">Agent</div>
             <div className="col-span-3">Limits (hr / day / mo)</div>
-            <div className="col-span-3">Current Spend</div>
+            <div className="col-span-3">Monthly Spend</div>
             <div className="col-span-2">Alerts</div>
             <div className="col-span-2 text-right">Actions</div>
           </div>
@@ -205,6 +448,9 @@ export default function BudgetsPage() {
             const percent = budget.monthlyLimitUsd > 0 ? (budget.currentSpendUsd / budget.monthlyLimitUsd) * 100 : 0;
             const agent = agentMap.get(budget.agentId) || budget.agent;
             const agentName = agent?.name || budget.agentId;
+            // Prefer new agent_budgets cols; fall back to legacy llm_config
+            const h = budget.hourlyLimitUsd ?? (agent?.llmConfig as any)?.hourlyBudgetUsd ?? null;
+            const d = budget.dailyLimitUsd ?? (agent?.llmConfig as any)?.dailyBudgetUsd ?? null;
 
             return (
               <div key={budget.id}>
@@ -222,24 +468,17 @@ export default function BudgetsPage() {
 
                     {/* Limits: hourly / daily / monthly */}
                     <div className="col-span-3">
-                      {(() => {
-                        const lc = (agent?.llmConfig || {}) as any;
-                        const h = lc.hourlyBudgetUsd;
-                        const d = lc.dailyBudgetUsd;
-                        return (
-                          <div className="flex items-center gap-2 text-sm">
-                            <span className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 text-xs font-mono" title="Hourly">
-                              {h ? `$${h}/h` : '—'}
-                            </span>
-                            <span className="px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 text-xs font-mono" title="Daily">
-                              {d ? `$${d}/d` : '—'}
-                            </span>
-                            <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-xs font-mono" title="Monthly">
-                              {formatUsd(budget.monthlyLimitUsd)}/mo
-                            </span>
-                          </div>
-                        );
-                      })()}
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 text-xs font-mono" title="Hourly">
+                          {h != null ? `$${h}/h` : '—'}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-purple-500/10 text-purple-400 text-xs font-mono" title="Daily">
+                          {d != null ? `$${d}/d` : '—'}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-xs font-mono" title="Monthly">
+                          {formatUsd(budget.monthlyLimitUsd)}/mo
+                        </span>
+                      </div>
                     </div>
 
                     {/* Spend + Progress */}
@@ -262,7 +501,7 @@ export default function BudgetsPage() {
                     {/* Alert Status */}
                     <div className="col-span-2">
                       <div className="flex flex-wrap gap-1">
-                        {budget.softAlertSent && (
+                        {budget.alertSent && (
                           <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-500/20 text-yellow-400">
                             Soft Alert
                           </span>
@@ -272,7 +511,7 @@ export default function BudgetsPage() {
                             Hard Stop
                           </span>
                         )}
-                        {!budget.softAlertSent && !budget.hardStopTriggered && (
+                        {!budget.alertSent && !budget.hardStopTriggered && (
                           <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/20 text-emerald-400">
                             OK
                           </span>
@@ -318,7 +557,7 @@ export default function BudgetsPage() {
                       <p className="text-sm text-[var(--muted)]">No incidents recorded</p>
                     ) : (
                       <div className="space-y-2 max-h-64 overflow-y-auto">
-                        {incidents.map((inc, idx) => (
+                        {incidents.map((inc: any, idx: number) => (
                           <div key={inc.id || idx} className="flex items-start gap-3 p-3 rounded-lg bg-[var(--bg)] border border-[var(--border)]">
                             <span className={`mt-0.5 px-2 py-0.5 rounded-full text-xs font-medium ${
                               inc.type === 'HARD_STOP' ? 'bg-red-500/20 text-red-400'
@@ -330,7 +569,7 @@ export default function BudgetsPage() {
                             <div className="flex-1 min-w-0">
                               <p className="text-sm">{inc.message}</p>
                               <div className="flex gap-4 mt-1 text-xs text-[var(--muted)]">
-                                {inc.amountUsd != null && <span>Amount: {formatUsd(inc.amountUsd)}</span>}
+                                {inc.spendUsd != null && <span>Spend: {formatUsd(inc.spendUsd)}</span>}
                                 {inc.limitUsd != null && <span>Limit: {formatUsd(inc.limitUsd)}</span>}
                               </div>
                             </div>
@@ -354,7 +593,7 @@ export default function BudgetsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setModalMode(null)}>
           <div className="bg-[var(--card)] border border-[var(--border)] rounded-2xl w-full max-w-md p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-xl font-bold mb-5">
-              {modalMode === 'create' ? 'Create Budget' : 'Edit Budget'}
+              {modalMode === 'create' ? 'Create Agent Budget' : 'Edit Agent Budget'}
             </h2>
 
             {error && (
@@ -389,7 +628,7 @@ export default function BudgetsPage() {
                     min="0"
                     step="0.1"
                     value={form.hourlyLimitUsd}
-                    onChange={(e) => setForm({ ...form, hourlyLimitUsd: parseFloat(e.target.value) || 0 })}
+                    onChange={(e) => setForm({ ...form, hourlyLimitUsd: e.target.value })}
                     className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
                     placeholder="0.50"
                   />
@@ -401,7 +640,7 @@ export default function BudgetsPage() {
                     min="0"
                     step="0.5"
                     value={form.dailyLimitUsd}
-                    onChange={(e) => setForm({ ...form, dailyLimitUsd: parseFloat(e.target.value) || 0 })}
+                    onChange={(e) => setForm({ ...form, dailyLimitUsd: e.target.value })}
                     className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm"
                     placeholder="3.00"
                   />
@@ -419,7 +658,7 @@ export default function BudgetsPage() {
                   />
                 </div>
               </div>
-              <p className="text-xs text-[var(--muted)] -mt-2">Hourly and daily limits prevent overspending in short bursts. 0 = no limit.</p>
+              <p className="text-xs text-[var(--muted)] -mt-2">Empty = no limit for that window. Platform cap still applies on top.</p>
 
               {/* Soft Alert Percent */}
               <div>
@@ -445,7 +684,7 @@ export default function BudgetsPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm font-medium">Hard Stop</p>
-                  <p className="text-xs text-[var(--muted)]">Block agent when budget is exceeded</p>
+                  <p className="text-xs text-[var(--muted)]">Block agent when monthly budget is exceeded</p>
                 </div>
                 <button
                   type="button"
