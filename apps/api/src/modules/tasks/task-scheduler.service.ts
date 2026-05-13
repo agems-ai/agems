@@ -13,6 +13,7 @@ import {
 } from './task-claim';
 import { applyCuratorTick } from '../skills/skill-curator';
 import { findRecentSpikes } from '../budgets/spike-alerts';
+import { parseSchedule, isOneShotDue, isIntervalDue } from './schedule-grammar';
 
 @Injectable()
 export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
@@ -1204,7 +1205,8 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Check RECURRING tasks with COMPLETED status — reset to PENDING if cron matches */
+  /** Check RECURRING tasks with COMPLETED status — reset to PENDING if the
+   *  schedule fires now. Supports four grammars via parseSchedule. */
   private async checkRecurringTasks() {
     try {
       const recurringTasks = await this.prisma.task.findMany({
@@ -1218,7 +1220,7 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
       const now = new Date();
 
       for (const task of recurringTasks) {
-        if (this.cronMatches(task.cronExpression!, now)) {
+        if (this.scheduleFires(task.cronExpression!, task.completedAt, now)) {
           await this.prisma.task.update({
             where: { id: task.id },
             data: { status: 'PENDING', completedAt: null },
@@ -1286,6 +1288,23 @@ export class TaskSchedulerService implements OnModuleInit, OnModuleDestroy {
       },
     });
     return channel.id;
+  }
+
+  /** Dispatch schedule check across the four grammars supported by
+   *  parseSchedule. Returns true when the task should be re-queued NOW. */
+  private scheduleFires(expression: string, lastCompletedAt: Date | null, now: Date): boolean {
+    const parsed = parseSchedule(expression, now);
+    switch (parsed.kind) {
+      case 'cron':
+        return this.cronMatches(parsed.expression, now);
+      case 'interval':
+        return isIntervalDue(parsed, lastCompletedAt, now);
+      case 'one-shot':
+        return !lastCompletedAt && isOneShotDue(parsed, now);
+      case 'error':
+        this.logger.warn(`Task schedule "${expression}" is invalid: ${parsed.reason}`);
+        return false;
+    }
   }
 
   private cronMatches(expression: string, date: Date): boolean {
