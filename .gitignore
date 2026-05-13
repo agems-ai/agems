@@ -1,11 +1,58 @@
+# Dependencies
 node_modules/
+
+# Build outputs
 dist/
 .next/
 .turbo/
-*.log
+
+# Environment variables and secrets
 .env
 .env.local
 .env.*.local
-.DS_Store
+
+# Logs and diagnostics
+*.log
 coverage/
+
+# User-generated content and uploads
 apps/web/public/uploads/
+data/repos/
+
+# Local Development
+apps/api/Dockerfile.dev
+docker-compose.override.yml
+
+# IDEs
+.idea
+.vscode
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.TemporaryItems
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+Icon?
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.stackdump
+*.lnk
+
+# Linux / Debian
+*~
+.nfs*
+.Trash-*
+.directory
+.fuse_hidden*
