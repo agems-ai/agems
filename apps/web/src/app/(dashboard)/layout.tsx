@@ -32,6 +32,7 @@ import {
   DollarSign,
   Inbox,
   GitBranch,
+  Webhook,
 } from 'lucide-react';
 import CommandPalette from '@/components/CommandPalette';
 import ThemeToggle from '@/components/ThemeToggle';
@@ -44,6 +45,7 @@ const navItems = [
   // Work
   { href: '/goals', label: 'Goals', icon: Target },
   { href: '/tasks', label: 'Tasks', icon: ListChecks },
+  { href: '/triggers', label: 'Triggers', icon: Webhook },
   { href: '/inbox', label: 'Inbox', icon: Inbox },
   // Communication
   { href: '/comms', label: 'Comms', icon: MessageSquare },

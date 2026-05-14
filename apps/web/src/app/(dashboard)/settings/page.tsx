@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { api } from '@/lib/api';
 
 export default function SettingsPage() {
@@ -8,7 +9,7 @@ export default function SettingsPage() {
 
   // LLM Keys
   const [llmKeys, setLlmKeys] = useState<Record<string, { set: boolean; masked: string }>>({});
-  const [newKeys, setNewKeys] = useState<Record<string, string>>({ openai: '', anthropic: '', google: '', deepseek: '', mistral: '', minimax: '', glm: '', xai: '', cohere: '', perplexity: '', together: '', fireworks: '', groq: '', moonshot: '', qwen: '', ai21: '', sambanova: '', ollama: '' });
+  const [newKeys, setNewKeys] = useState<Record<string, string>>({ openai: '', anthropic: '', google: '', deepseek: '', mistral: '', minimax: '', glm: '', xai: '', cohere: '', perplexity: '', together: '', fireworks: '', groq: '', moonshot: '', qwen: '', ai21: '', sambanova: '' });
   const [savingKeys, setSavingKeys] = useState(false);
   const [keysSaved, setKeysSaved] = useState(false);
 
@@ -25,7 +26,10 @@ export default function SettingsPage() {
     execution_timeout: '300',
     default_hourly_budget_usd: '0.5',
     task_review_daily_budget_usd: '5.0',
+    default_monthly_budget_usd: '',
     cross_channel_messages: '10',
+    admin_tg_bot_token: '',
+    admin_tg_chat_id: '',
   });
   const [savingPlatform, setSavingPlatform] = useState(false);
   const [platformSaved, setPlatformSaved] = useState(false);
@@ -91,7 +95,10 @@ export default function SettingsPage() {
         execution_timeout: s.execution_timeout || '300',
         default_hourly_budget_usd: s.default_hourly_budget_usd || '0.5',
         task_review_daily_budget_usd: s.task_review_daily_budget_usd || '5.0',
+        default_monthly_budget_usd: s.default_monthly_budget_usd || '',
         cross_channel_messages: s.cross_channel_messages || '10',
+        admin_tg_bot_token: s.admin_tg_bot_token || '',
+        admin_tg_chat_id: s.admin_tg_chat_id || '',
       });
     }).catch(() => {});
     api.getN8nSettings().then((c) => {
@@ -169,7 +176,15 @@ export default function SettingsPage() {
 
   return (
     <div className="p-4 md:p-8 max-w-4xl mx-auto">
-      <h1 className="text-2xl md:text-3xl font-bold mb-1">Settings</h1>
+      <div className="flex items-start justify-between mb-1 gap-4">
+        <h1 className="text-2xl md:text-3xl font-bold">Settings</h1>
+        <Link
+          href="/settings/billing"
+          className="px-4 py-2 rounded-lg bg-[var(--card)] border border-[var(--border)] hover:border-[var(--accent)] text-sm transition-colors whitespace-nowrap"
+        >
+          Billing & Plan →
+        </Link>
+      </div>
       <p className="text-[var(--muted)] mb-6 text-sm">Platform configuration and API keys</p>
 
       <div className="flex gap-1 mb-6 bg-[var(--card)] p-1 rounded-lg border border-[var(--border)] w-fit overflow-x-auto max-w-full">
@@ -321,20 +336,67 @@ export default function SettingsPage() {
                   onChange={(e) => setPlatformForm({ ...platformForm, execution_timeout: e.target.value })}
                   className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]" />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-sm font-medium mb-1">Hourly Budget (USD)</label>
+                  <label className="block text-sm font-medium mb-1">Default Hourly Budget (USD)</label>
                   <input type="number" step="0.1" min="0" value={platformForm.default_hourly_budget_usd}
                     onChange={(e) => setPlatformForm({ ...platformForm, default_hourly_budget_usd: e.target.value })}
                     className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]" />
-                  <p className="text-xs text-[var(--muted)] mt-1">Default per agent per hour. 0 = no limit.</p>
+                  <p className="text-xs text-[var(--muted)] mt-1">Fallback per agent/hour. 0 = no limit.</p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Daily Budget (USD)</label>
+                  <label className="block text-sm font-medium mb-1">Default Daily Budget (USD)</label>
                   <input type="number" step="0.5" min="0" value={platformForm.task_review_daily_budget_usd}
                     onChange={(e) => setPlatformForm({ ...platformForm, task_review_daily_budget_usd: e.target.value })}
                     className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]" />
-                  <p className="text-xs text-[var(--muted)] mt-1">Default per agent per day. 0 = no limit.</p>
+                  <p className="text-xs text-[var(--muted)] mt-1">Fallback per agent/day. 0 = no limit.</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Default Monthly Budget (USD)</label>
+                  <input type="number" step="1" min="0" value={platformForm.default_monthly_budget_usd}
+                    onChange={(e) => setPlatformForm({ ...platformForm, default_monthly_budget_usd: e.target.value })}
+                    placeholder="e.g. 100"
+                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)]" />
+                  <p className="text-xs text-[var(--muted)] mt-1">Fallback per agent/month (calendar). Empty = no limit.</p>
+                </div>
+              </div>
+
+              {/* Platform Budget shortcut card — quick access to /budgets */}
+              <div className="mt-4 p-4 rounded-lg border-2 border-[var(--accent)]/30 bg-[var(--accent)]/5">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold mb-1">Platform-wide Budget Cap</p>
+                    <p className="text-xs text-[var(--muted)]">
+                      Hard hourly / daily / monthly limit for the whole org. When exceeded, <span className="font-medium">all agents</span> are blocked — higher priority than the per-agent limits above.
+                    </p>
+                  </div>
+                  <a href="/budgets" className="shrink-0 px-3 py-1.5 rounded-lg bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white text-sm font-medium transition">
+                    Configure Platform Budget →
+                  </a>
+                </div>
+              </div>
+
+              {/* Budget Alerts (Telegram admin notifications) */}
+              <div className="mt-4 p-4 rounded-lg border border-[var(--border)] bg-[var(--bg)]">
+                <p className="text-sm font-semibold mb-1">Budget Alerts (Telegram)</p>
+                <p className="text-xs text-[var(--muted)] mb-3">
+                  Get a Telegram message when a soft alert fires (80%) or when a budget hits its hard stop. Leave empty to disable.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium mb-1 text-[var(--muted)]">Admin Bot Token</label>
+                    <input type="password" autoComplete="new-password"
+                      placeholder="123456:ABC..." value={platformForm.admin_tg_bot_token}
+                      onChange={(e) => setPlatformForm({ ...platformForm, admin_tg_bot_token: e.target.value })}
+                      className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1 text-[var(--muted)]">Admin Chat ID</label>
+                    <input type="text"
+                      placeholder="e.g. 936873508" value={platformForm.admin_tg_chat_id}
+                      onChange={(e) => setPlatformForm({ ...platformForm, admin_tg_chat_id: e.target.value })}
+                      className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] text-sm" />
+                  </div>
                 </div>
               </div>
               <div>
@@ -353,6 +415,9 @@ export default function SettingsPage() {
             </button>
             {platformSaved && <span className="text-green-500 text-sm">Saved!</span>}
           </div>
+
+          {/* MCP server token — paired with /api/mcp/v1 endpoint */}
+          <McpTokenCard />
         </div>
       )}
 
@@ -926,6 +991,116 @@ docker compose pull && docker compose up -d`}
         </div>
       )}
 
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// MCP Token — exposes AGEMS as an MCP source over POST /api/mcp/v1
+// External Claude Code / Cursor / Codex sessions authenticate with
+// "Authorization: Bearer <token>". Token is org-scoped — anyone with
+// it sees only this org's channels / tasks / agents.
+// ─────────────────────────────────────────────────────────────────
+function McpTokenCard() {
+  const [current, setCurrent] = useState<string>('');
+  const [draft, setDraft] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const s = await api.getSettings();
+        setCurrent(s.mcp_token || '');
+        setDraft(s.mcp_token || '');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  function generate() {
+    // 32 hex chars = 128 bits entropy; produced client-side just for UX.
+    const arr = new Uint8Array(16);
+    crypto.getRandomValues(arr);
+    const hex = Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
+    setDraft(hex);
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      await api.updateSettings({ mcp_token: draft });
+      setCurrent(draft);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function clear() {
+    if (!confirm('Revoke MCP token? External sessions will lose access immediately.')) return;
+    setSaving(true);
+    try {
+      await api.updateSettings({ mcp_token: '' });
+      setCurrent('');
+      setDraft('');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function copy() {
+    navigator.clipboard.writeText(current);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  if (loading) return null;
+
+  return (
+    <div className="mt-6 bg-[var(--card)] border border-[var(--border)] rounded-xl p-5">
+      <h3 className="font-semibold mb-1">MCP Server Token</h3>
+      <p className="text-xs text-[var(--muted)] mb-3">
+        External Claude Code / Cursor / Codex can connect to this AGEMS as an MCP source.
+        Endpoint: <code>POST /api/mcp/v1</code> with header <code>Authorization: Bearer &lt;token&gt;</code>.
+      </p>
+
+      {current ? (
+        <div className="flex gap-2 items-center mb-3">
+          <code className="flex-1 px-3 py-2 rounded bg-[var(--bg)] border border-[var(--border)] text-xs font-mono break-all">
+            {current.slice(0, 8)}{'…'.repeat(2)}{current.slice(-4)}
+          </code>
+          <button onClick={copy} className="px-3 py-2 text-xs rounded border border-[var(--border)] hover:bg-[var(--hover)]">
+            {copied ? 'Copied!' : 'Copy'}
+          </button>
+        </div>
+      ) : (
+        <div className="text-xs text-[var(--muted)] mb-3">No token set — MCP endpoint will reject requests.</div>
+      )}
+
+      <div className="flex gap-2 items-center">
+        <input
+          type="text"
+          placeholder="Paste or generate a token"
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          className="flex-1 px-3 py-2 rounded border border-[var(--border)] bg-[var(--bg)] text-sm font-mono"
+        />
+        <button onClick={generate} className="px-3 py-2 text-sm rounded border border-[var(--border)] hover:bg-[var(--hover)]">Generate</button>
+        <button
+          onClick={save}
+          disabled={saving || draft === current}
+          className="px-4 py-2 text-sm rounded bg-[var(--accent)] text-white disabled:opacity-50"
+        >
+          {saving ? 'Saving…' : current ? 'Rotate' : 'Save'}
+        </button>
+        {current && (
+          <button onClick={clear} disabled={saving} className="px-3 py-2 text-sm rounded border border-rose-500/40 text-rose-400 hover:bg-rose-500/10">
+            Revoke
+          </button>
+        )}
+      </div>
     </div>
   );
 }

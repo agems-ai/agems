@@ -50,6 +50,12 @@ class ApiClient {
 
     if (!res.ok) {
       const error = await res.json().catch(() => ({ message: res.statusText }));
+      // Surface a friendly message for rate-limit / throttler responses —
+      // the raw exception name ("ThrottlerException: Too Many Requests") is
+      // noisy and unhelpful to end users.
+      if (res.status === 429) {
+        throw new Error('Too many attempts — please wait a minute and try again.');
+      }
       throw new Error(error.message || `API Error: ${res.status}`);
     }
 
@@ -73,6 +79,20 @@ class ApiClient {
 
   getProfile() {
     return this.fetch<any>('/auth/profile');
+  }
+
+  forgotPassword(email: string) {
+    return this.fetch<{ ok: true }>('/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  resetPassword(token: string, password: string) {
+    return this.fetch<{ ok: true }>('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token, password }),
+    });
   }
 
   switchOrg(orgId: string) {
@@ -343,43 +363,6 @@ class ApiClient {
 
   removeSkillFromAgent(agentId: string, skillId: string) {
     return this.fetch(`/agents/${agentId}/skills/${skillId}`, { method: 'DELETE' });
-  }
-
-  // Repositories
-  getRepos() {
-    return this.fetch<any>('/repos');
-  }
-
-  createRepo(data: any) {
-    return this.fetch('/repos', { method: 'POST', body: JSON.stringify(data) });
-  }
-
-  getRepo(id: string) {
-    return this.fetch<any>(`/repos/${id}`);
-  }
-
-  updateRepo(id: string, data: any) {
-    return this.fetch(`/repos/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
-  }
-
-  deleteRepo(id: string) {
-    return this.fetch(`/repos/${id}`, { method: 'DELETE' });
-  }
-
-  syncRepo(id: string) {
-    return this.fetch<any>(`/repos/${id}/sync`, { method: 'POST' });
-  }
-
-  getRepoProgress(id: string) {
-    return this.fetch<{ stage: string; percent: number } | null>(`/repos/${id}/progress`);
-  }
-
-  assignRepoToAgent(agentId: string, repoId: string) {
-    return this.fetch(`/agents/${agentId}/repos`, { method: 'POST', body: JSON.stringify({ repoId }) });
-  }
-
-  removeRepoFromAgent(agentId: string, repoId: string) {
-    return this.fetch(`/agents/${agentId}/repos/${repoId}`, { method: 'DELETE' });
   }
 
   // Meetings
@@ -985,6 +968,56 @@ class ApiClient {
     return this.fetch<any>(`/platform-budget/incidents${query}`);
   }
 
+  // Repos (added by PR #24 — fills the API methods the page already uses)
+  getRepos() {
+    return this.fetch<any[]>('/repos');
+  }
+  getRepoProgress(id: string) {
+    return this.fetch<any>(`/repos/${id}/progress`);
+  }
+  createRepo(data: any) {
+    return this.fetch<any>('/repos', { method: 'POST', body: JSON.stringify(data) });
+  }
+  updateRepo(id: string, data: any) {
+    return this.fetch<any>(`/repos/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+  }
+  syncRepo(id: string) {
+    return this.fetch<any>(`/repos/${id}/sync`, { method: 'POST' });
+  }
+  deleteRepo(id: string) {
+    return this.fetch<any>(`/repos/${id}`, { method: 'DELETE' });
+  }
+  assignRepoToAgent(agentId: string, repoId: string) {
+    return this.fetch<any>(`/agents/${agentId}/repos`, { method: 'POST', body: JSON.stringify({ repoId }) });
+  }
+  removeRepoFromAgent(agentId: string, repoId: string) {
+    return this.fetch<any>(`/agents/${agentId}/repos/${repoId}`, { method: 'DELETE' });
+  }
+
+  // Task Triggers (webhook-fired tasks)
+  listTriggers(taskId?: string) {
+    const query = taskId ? `?taskId=${encodeURIComponent(taskId)}` : '';
+    return this.fetch<any[]>(`/triggers${query}`);
+  }
+
+  createTrigger(data: {
+    taskId: string;
+    kind?: 'WEBHOOK' | 'GMAIL' | 'N8N';
+    authKind?: 'HMAC' | 'BEARER' | 'NONE';
+    signatureHeader?: string;
+    metadata?: Record<string, unknown>;
+  }) {
+    return this.fetch<any>('/triggers', { method: 'POST', body: JSON.stringify(data) });
+  }
+
+  setTriggerEnabled(id: string, enabled: boolean) {
+    return this.fetch<any>(`/triggers/${id}/enabled`, { method: 'PATCH', body: JSON.stringify({ enabled }) });
+  }
+
+  deleteTrigger(id: string) {
+    return this.fetch<any>(`/triggers/${id}`, { method: 'DELETE' });
+  }
+
   // Approvals
   getApprovals(params?: Record<string, string>) {
     const query = params ? '?' + new URLSearchParams(params).toString() : '';
@@ -1136,6 +1169,512 @@ class ApiClient {
   // Admin
   getAdminStats() {
     return this.fetch<any>('/admin/stats');
+  }
+
+  // ─── Billing / Credits ────────────────────────────────────────────
+  getBillingBalance() {
+    return this.fetch<BillingBalance>('/billing/balance');
+  }
+
+  getBillingPlans() {
+    return this.fetch<BillingPlan[]>('/billing/plans');
+  }
+
+  getBillingLedger(params?: { limit?: number; cursor?: string; type?: string }) {
+    const query = params ? '?' + new URLSearchParams(params as any).toString() : '';
+    return this.fetch<{ entries: BillingLedgerEntry[]; nextCursor: string | null }>(`/billing/ledger${query}`);
+  }
+
+  getBillingUsageByAgent() {
+    return this.fetch<Array<{ agentId: string; calls: number; creditsSpent: number; rawCostUsd: number; tokensIn: number; tokensOut: number }>>('/billing/usage-by-agent');
+  }
+
+  setBillingByok(enabled: boolean) {
+    return this.fetch<BillingBalance>('/billing/byok', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    });
+  }
+
+  setBillingOverage(enabled: boolean, capUsd: number | null) {
+    return this.fetch<BillingBalance>('/billing/overage', {
+      method: 'POST',
+      body: JSON.stringify({ enabled, capUsd }),
+    });
+  }
+
+  getAvailableModels() {
+    return this.fetch<AvailableModelsResponse>('/billing/available-models');
+  }
+
+  // ─── Admin: Platform Models ───────────────────────────────────────
+  adminListPlatformModels() {
+    return this.fetch<PlatformModel[]>('/admin/platform-models');
+  }
+
+  adminCreatePlatformModel(input: Partial<PlatformModel>) {
+    return this.fetch<PlatformModel>('/admin/platform-models', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+
+  adminUpdatePlatformModel(id: string, input: Partial<PlatformModel>) {
+    return this.fetch<PlatformModel>(`/admin/platform-models/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    });
+  }
+
+  adminGrantCredits(orgId: string, amountUsd: number, note?: string) {
+    return this.fetch<unknown>(`/admin/tenants/${orgId}/grant-credits`, {
+      method: 'POST',
+      body: JSON.stringify({ amountUsd, note }),
+    });
+  }
+
+  createStripeTopUp(
+    amountUsd: number,
+    autoReload?: { thresholdUsd: number; targetUsd: number },
+  ) {
+    return this.fetch<{ url: string }>('/stripe/top-up', {
+      method: 'POST',
+      body: JSON.stringify({
+        token: this.getToken(),
+        amountUsd,
+        ...(autoReload && {
+          autoReload: true,
+          autoReloadThresholdUsd: autoReload.thresholdUsd,
+          autoReloadTargetUsd: autoReload.targetUsd,
+        }),
+      }),
+    });
+  }
+
+  stripeSetupCard() {
+    return this.fetch<{ url: string }>('/stripe/setup-card', {
+      method: 'POST',
+      body: JSON.stringify({ token: this.getToken() }),
+    });
+  }
+
+  setAutoTopUp(enabled: boolean, thresholdUsd?: number, amountUsd?: number) {
+    return this.fetch<BillingBalance>('/billing/auto-topup', {
+      method: 'POST',
+      body: JSON.stringify({ enabled, thresholdUsd, amountUsd }),
+    });
+  }
+
+  clearSavedCard() {
+    return this.fetch<BillingBalance>('/billing/clear-card', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  }
+
+  adminDeletePlatformModel(id: string) {
+    return this.fetch<{ success: boolean }>(`/admin/platform-models/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  adminGetPlatformLlmKeys() {
+    return this.fetch<Record<string, { set: boolean; masked: string }>>('/admin/llm-keys');
+  }
+
+  adminSetPlatformLlmKeys(keys: Record<string, string>) {
+    return this.fetch<Record<string, { set: boolean; masked: string }>>('/admin/llm-keys', {
+      method: 'POST',
+      body: JSON.stringify(keys),
+    });
+  }
+
+  // ─── Admin: Tenants & Users ───────────────────────────────────────
+  adminListTenants(params: { page?: number; limit?: number; plan?: string; status?: string; search?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.plan) qs.set('plan', params.plan);
+    if (params.status) qs.set('status', params.status);
+    if (params.search) qs.set('search', params.search);
+    const q = qs.toString();
+    return this.fetch<{ data: AdminTenantSummary[]; total: number }>(`/admin/tenants${q ? '?' + q : ''}`);
+  }
+
+  adminSuspendTenant(id: string, reason: string) {
+    return this.fetch<{ success: boolean }>(`/admin/tenants/${id}/suspend`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  adminUnbanTenant(id: string) {
+    return this.fetch<{ success: boolean }>(`/admin/tenants/${id}/unban`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  }
+
+  adminListUsers(params: { page?: number; limit?: number; search?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.search) qs.set('search', params.search);
+    const q = qs.toString();
+    return this.fetch<{ data: AdminUserSummary[]; total: number; page: number; pageSize: number }>(`/admin/users${q ? '?' + q : ''}`);
+  }
+
+  adminBlockUser(id: string, reason: string) {
+    return this.fetch<{ success: boolean }>(`/admin/moderation/users/${id}/block`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  adminUnblockUser(id: string) {
+    return this.fetch<{ success: boolean }>(`/admin/moderation/users/${id}/unblock`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  }
+
+  async adminImpersonateUser(id: string, reason?: string) {
+    const result = await this.fetch<{ token: string; user: { id: string; name: string; email: string }; org: { id: string; name: string } }>(
+      `/admin/users/${id}/impersonate`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    );
+    if (typeof window !== 'undefined' && result.token) {
+      localStorage.setItem('agems_admin_token_backup', this.getToken() ?? '');
+      this.setToken(result.token);
+    }
+    return result;
+  }
+
+  adminRestoreSession() {
+    if (typeof window === 'undefined') return false;
+    const backup = localStorage.getItem('agems_admin_token_backup');
+    if (!backup) return false;
+    this.setToken(backup);
+    localStorage.removeItem('agems_admin_token_backup');
+    return true;
+  }
+
+  adminIsImpersonating() {
+    if (typeof window === 'undefined') return false;
+    return !!localStorage.getItem('agems_admin_token_backup');
+  }
+
+  // ─── Admin: Tenants extended ──────────────────────────────────────
+  adminGetTenant(id: string) {
+    return this.fetch<any>(`/admin/tenants/${id}`);
+  }
+
+  adminGetTenantUsage(id: string, days = 30) {
+    return this.fetch<any>(`/admin/tenants/${id}/usage?days=${days}`);
+  }
+
+  adminBanTenant(id: string, reason: string) {
+    return this.fetch<{ success: boolean }>(`/admin/tenants/${id}/ban`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  }
+
+  adminChangeTenantPlan(id: string, plan: string, reason: string) {
+    return this.fetch<{ success: boolean }>(`/admin/tenants/${id}/plan`, {
+      method: 'PATCH',
+      body: JSON.stringify({ plan, reason }),
+    });
+  }
+
+  adminDeleteTenant(id: string) {
+    return this.fetch<{ success: boolean }>(`/admin/tenants/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // ─── Admin: Agents (global) ───────────────────────────────────────
+  adminListAgents(params: { page?: number; limit?: number; search?: string; orgId?: string; status?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.search) qs.set('search', params.search);
+    if (params.orgId) qs.set('orgId', params.orgId);
+    if (params.status) qs.set('status', params.status);
+    const q = qs.toString();
+    return this.fetch<{ data: AdminAgentSummary[]; total: number; page: number; pageSize: number }>(`/admin/agents${q ? '?' + q : ''}`);
+  }
+
+  adminDeleteAgent(id: string, reason?: string) {
+    const q = reason ? `?reason=${encodeURIComponent(reason)}` : '';
+    return this.fetch<{ id: string; name: string; orgId: string; message: string }>(`/admin/agents/${id}${q}`, {
+      method: 'DELETE',
+    });
+  }
+
+  adminDeleteUser(id: string, reason?: string) {
+    const q = reason ? `?reason=${encodeURIComponent(reason)}` : '';
+    return this.fetch<{ id: string; email: string; message: string }>(`/admin/users/${id}${q}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // ─── Admin: Users extended ────────────────────────────────────────
+  adminResetUserPassword(id: string, password: string, reason?: string) {
+    return this.fetch<{ id: string; email: string; message: string }>(`/admin/users/${id}/password`, {
+      method: 'PATCH',
+      body: JSON.stringify({ password, reason }),
+    });
+  }
+
+  // ─── Admin: Billing ───────────────────────────────────────────────
+  adminGetBillingOverview() {
+    return this.fetch<AdminBillingOverview>('/admin/billing/overview');
+  }
+
+  adminGetPayments(params: { page?: number; limit?: number; orgId?: string; status?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.orgId) qs.set('orgId', params.orgId);
+    if (params.status) qs.set('status', params.status);
+    const q = qs.toString();
+    return this.fetch<{ data: AdminPayment[]; total: number }>(`/admin/billing/payments${q ? '?' + q : ''}`);
+  }
+
+  adminGetSubscriptions(params: { page?: number; limit?: number; status?: string } = {}) {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set('page', String(params.page));
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.status) qs.set('status', params.status);
+    const q = qs.toString();
+    return this.fetch<{ data: AdminSubscription[]; total: number }>(`/admin/billing/subscriptions${q ? '?' + q : ''}`);
+  }
+
+  adminRefundPayment(paymentId: string, amount?: number, reason?: string) {
+    return this.fetch<{ success: boolean; paymentId: string; refundedAmount?: number; error?: string }>('/admin/billing/refund', {
+      method: 'POST',
+      body: JSON.stringify({ paymentId, amount, reason }),
+    });
+  }
+
+  adminOverrideSubscription(orgId: string, body: { plan?: string; status?: string; expiresAt?: string }) {
+    return this.fetch<{ success: boolean }>(`/admin/billing/subscriptions/${orgId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  }
+
+  adminRevenueByPlan() {
+    return this.fetch<Array<{ plan: string; count: number; revenue: number }>>('/admin/billing/revenue-by-plan');
+  }
+
+  // ─── Admin: Feature Flags ─────────────────────────────────────────
+  adminGetFeatureFlags() {
+    return this.fetch<Array<{ key: string; enabled: boolean; description?: string; value?: any }>>('/admin/features');
+  }
+
+  adminSetFeatureFlag(key: string, body: { enabled?: boolean; value?: any; description?: string }) {
+    return this.fetch<any>(`/admin/features/${key}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  }
+
+  adminToggleFeatureFlag(key: string, enabled: boolean) {
+    return this.fetch<any>(`/admin/features/${key}/toggle`, {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    });
+  }
+
+  adminGetSystemConfig() {
+    return this.fetch<Record<string, any>>('/admin/features/config/system');
+  }
+
+  adminUpdateSystemConfig(body: Record<string, any>) {
+    return this.fetch<Record<string, any>>('/admin/features/config/system', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  }
+
+  // ─── Admin: Observability ─────────────────────────────────────────
+  adminGetSystemHealth() {
+    return this.fetch<AdminSystemHealth>('/admin/observability/health');
+  }
+
+  adminGetStuckExecutions(thresholdMinutes = 30) {
+    return this.fetch<Array<AdminStuckExecution>>(`/admin/observability/stuck-executions?thresholdMinutes=${thresholdMinutes}`);
+  }
+
+  adminCancelStuckExecution(id: string) {
+    return this.fetch<{ success: boolean }>(`/admin/observability/stuck-executions/${id}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  }
+
+  adminGetQueueStats() {
+    return this.fetch<Array<{ name: string; waiting: number; active: number; completed: number; failed: number; delayed: number }>>('/admin/observability/queue-stats');
+  }
+
+  adminGetPlatformMetrics(days = 7) {
+    return this.fetch<AdminPlatformMetrics>(`/admin/observability/metrics?days=${days}`);
+  }
+
+  // ─── Admin: Moderation ────────────────────────────────────────────
+  adminGetBlockedOrgs() {
+    return this.fetch<Array<{ id: string; name: string; slug: string; blockedAt: string; reason: string; severity?: string }>>('/admin/moderation/orgs/blocked');
+  }
+
+  adminGetBlockedUsers() {
+    return this.fetch<Array<{ id: string; name: string; email: string; blockedAt: string; reason: string }>>('/admin/moderation/users/blocked');
+  }
+
+  adminBlockOrg(id: string, reason: string, severity?: 'high' | 'critical') {
+    return this.fetch<{ success: boolean }>(`/admin/moderation/orgs/${id}/block`, {
+      method: 'POST',
+      body: JSON.stringify({ reason, severity }),
+    });
+  }
+
+  adminUnblockOrg(id: string) {
+    return this.fetch<{ success: boolean }>(`/admin/moderation/orgs/${id}/unblock`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  }
+
+  adminGetRateLimit(targetType: string, targetId: string) {
+    return this.fetch<any>(`/admin/moderation/rate-limit?targetType=${targetType}&targetId=${targetId}`);
+  }
+
+  adminSetRateLimit(body: {
+    targetType: 'org' | 'user';
+    targetId: string;
+    requestsPerMinute?: number;
+    requestsPerHour?: number;
+    requestsPerDay?: number;
+    agentExecutionsPerHour?: number;
+    durationMinutes?: number;
+  }) {
+    return this.fetch<{ success: boolean }>('/admin/moderation/rate-limit', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
+  adminDetectSuspiciousActivity(body: { orgId?: string; hours?: number } = {}) {
+    return this.fetch<any>('/admin/moderation/suspicious-activity/detect', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
+  adminGetModerationLog() {
+    return this.fetch<Array<{ id: string; targetType: string; targetId: string; action: string; reason: string; createdAt: string }>>('/admin/moderation/log');
+  }
+
+  // ─── Admin: Audit ─────────────────────────────────────────────────
+  adminGetAuditLog(params: { page?: number; limit?: number; adminId?: string; action?: string; targetType?: string; targetId?: string; from?: string; to?: string } = {}) {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => { if (v != null && v !== '') qs.set(k, String(v)); });
+    const q = qs.toString();
+    return this.fetch<{ data: AdminAuditEntry[]; total: number; page: number; pageSize: number }>(`/admin/audit${q ? '?' + q : ''}`);
+  }
+
+  adminGetAuditStats(adminId?: string, days = 30) {
+    const qs = new URLSearchParams();
+    if (adminId) qs.set('adminId', adminId);
+    qs.set('days', String(days));
+    return this.fetch<any>(`/admin/audit/stats?${qs.toString()}`);
+  }
+
+  // ─── Onboarding ───────────────────────────────────────────────────
+  getOnboardingStatus() {
+    return this.fetch<{ needsOnboarding: boolean; orgId: string; chatStatus?: 'pending' | 'in_progress' | 'completed' }>('/onboarding/status');
+  }
+
+  getOnboardingChat() {
+    return this.fetch<OnboardingChatResponse>('/onboarding/chat');
+  }
+
+  submitOnboardingAnswer(questionId: string, value: any) {
+    return this.fetch<OnboardingAnswerResponse>('/onboarding/chat/answer', {
+      method: 'POST',
+      body: JSON.stringify({ questionId, value }),
+    });
+  }
+
+  skipOnboardingQuestion(questionId: string) {
+    return this.fetch<OnboardingAnswerResponse>('/onboarding/chat/skip', {
+      method: 'POST',
+      body: JSON.stringify({ questionId }),
+    });
+  }
+
+  goBackOnboarding() {
+    return this.fetch<OnboardingChatResponse>('/onboarding/chat/back', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  }
+
+  completeOnboardingChat() {
+    return this.fetch<{ presetSlug: string; goalTitle: string; agentsCreated: number }>('/onboarding/chat/complete', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  }
+
+  sendOnboardingMessage(text: string) {
+    return this.fetch<{
+      reply: string | null;
+      done: boolean;
+      progress: { current: number; total: number; answered: number };
+      answers: Record<string, any>;
+      question: OnboardingQuestionShaped | null;
+    }>('/onboarding/chat/message', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    });
+  }
+
+  listOnboardingPresets() {
+    return this.fetch<OnboardingPreset[]>('/onboarding/presets');
+  }
+
+  launchOnboardingPreset(presetSlug: string, companyName?: string) {
+    return this.fetch<{
+      presetSlug: string;
+      orgId: string;
+      agentsCreated: number;
+      toolsCreated: number;
+      goalId: string;
+      taskId: string;
+      agents: Array<{ templateSlug: string; id: string; name?: string }>;
+      firstGoal: { id: string; title: string };
+      firstTask: { id: string; title: string; assigneeId: string };
+    }>('/onboarding/launch', {
+      method: 'POST',
+      body: JSON.stringify({ presetSlug, companyName }),
+    });
+  }
+
+  /** Starts a Stripe Checkout session and returns the redirect URL. */
+  async startCheckout(plan: 'STARTER' | 'PRO' | 'BUSINESS' | 'BYOK_PRO'): Promise<{ url: string }> {
+    const token = this.getToken();
+    const res = await fetch(`${API_URL}/api/stripe/checkout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan, token }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || `Checkout failed: ${res.status}`);
+    }
+    return res.json();
   }
 
   // Projects
@@ -1353,6 +1892,249 @@ class ApiClient {
   removeWorktree(id: string) {
     return this.fetch(`/worktrees/${id}`, { method: 'DELETE' });
   }
+}
+
+// ─── Billing types (mirror apps/api BillingService shapes) ──────────
+
+export type BillingTier = 'FREE' | 'STARTER' | 'PRO' | 'BUSINESS' | 'ENTERPRISE';
+
+export interface BillingBalance {
+  orgId: string;
+  tier: BillingTier;
+  creditsIncluded: number;   // USD
+  creditsUsed: number;        // USD
+  creditsBonus: number;       // USD
+  creditsAvailable: number;   // USD (included − used + bonus)
+  percentUsed: number;        // 0..1
+  periodStart: string;
+  periodEnd: string;
+  trialEndsAt: string | null;
+  trialExpired: boolean;
+  byokEnabled: boolean;
+  hardStopped: boolean;
+  pausedReason: string | null;
+  overageEnabled: boolean;
+  overageSpentUsd: number;
+  overageCapUsd: number | null;
+  autoTopUpEnabled?: boolean;
+  autoTopUpThresholdUsd?: number | null;
+  autoTopUpAmountUsd?: number | null;
+  stripePaymentMethodId?: string | null;
+}
+
+export interface BillingPlan {
+  tier: BillingTier;
+  label: string;
+  tagline: string;
+  priceUsdPerMonth: number | null;
+  creditsIncludedUsd: number;
+  maxAgents: number | null;
+  byokAllowed: boolean;
+  allowedModelTiers: Array<'economy' | 'standard' | 'premium'>;
+  overageAllowed: boolean;
+  stripePriceId: string | null;
+}
+
+export interface AdminTenantSummary {
+  id: string;
+  name: string;
+  slug: string;
+  plan: string;
+  status: 'ACTIVE' | 'SUSPENDED' | 'BANNED' | 'DELETED';
+  createdAt: string;
+  owner: { id: string; name: string; email: string };
+  stats: { members: number; agents: number; channels: number; tasks: number; totalSpent: number };
+}
+
+export interface AdminUserSummary {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  avatarUrl: string | null;
+  createdAt: string;
+  blocked: boolean;
+  memberships: Array<{ role: string; org: { id: string; name: string; slug: string } }>;
+}
+
+export interface PlatformModel {
+  id: string;
+  provider: string;
+  model: string;
+  displayName: string | null;
+  tier: 'economy' | 'standard' | 'premium';
+  enabled: boolean;
+  sortOrder: number;
+  notes: string | null;
+  inputPer1M?: number;
+  outputPer1M?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AvailableModel {
+  provider: string;
+  model: string;
+  displayName: string;
+  tier: 'economy' | 'standard' | 'premium';
+  keySource: 'org' | 'platform' | 'env' | null;
+  inputPer1M: number;
+  outputPer1M: number;
+  inputPer1MCharged: number;
+  outputPer1MCharged: number;
+  notes: string | null;
+}
+
+export interface AvailableModelsResponse {
+  plan: BillingTier;
+  byokEnabled: boolean;
+  markup: number;
+  models: AvailableModel[];
+}
+
+export interface BillingLedgerEntry {
+  id: string;
+  type: 'DEBIT_LLM' | 'DEBIT_TOOL' | 'CREDIT_GRANT' | 'CREDIT_REFUND' | 'CREDIT_RESET' | 'CREDIT_TOPUP' | 'TIER_CHANGE';
+  agentId: string | null;
+  executionId: string | null;
+  provider: string | null;
+  model: string | null;
+  tokensInput: number | null;
+  tokensOutput: number | null;
+  costRawUsd: string | null;
+  markupMultiplier: string | null;
+  creditsDelta: string;        // signed, Decimal serialized as string
+  creditBucket: string | null;
+  note: string | null;
+  createdAt: string;
+}
+
+export interface OnboardingPreset {
+  slug: string;
+  label: string;
+  description: string;
+  icon: string;
+  agentCount: number;
+  agents: Array<{ name: string; slug: string; position: string; department: string; avatar: string }>;
+  firstGoal: string;
+  firstTask: string;
+}
+
+export interface OnboardingQuestionShaped {
+  id: string;
+  prompt: string;
+  helper?: string;
+  type: 'text' | 'textarea' | 'choice' | 'multichoice' | 'choice-with-other';
+  options?: Array<{ value: string; label: string; icon?: string; hint?: string; custom?: boolean }>;
+  placeholder?: string;
+  required: boolean;
+}
+
+export interface OnboardingChatResponse {
+  status: 'pending' | 'in_progress' | 'completed';
+  answers: Record<string, any>;
+  question?: OnboardingQuestionShaped;
+  progress: { current: number; total: number; answered?: number };
+  history?: Array<{ role: 'alex' | 'user'; text: string; ts: string }>;
+}
+
+export interface OnboardingAnswerResponse {
+  ack?: string;
+  next?: OnboardingQuestionShaped;
+  done: boolean;
+  progress: { current: number; total: number; answered: number };
+}
+
+// ─── Admin types ──────────────────────────────────────────────────
+
+export interface AdminBillingOverview {
+  totalRevenue: number;
+  mrr: number;
+  arr: number;
+  activeSubscriptions: number;
+  failedPayments: number;
+  refunds: number;
+  churnRate: number;
+  avgRevenuePerUser: number;
+}
+
+export interface AdminPayment {
+  id: string;
+  orgId: string | null;
+  orgName: string;
+  email: string;
+  amount: number;
+  currency: string;
+  status: string;
+  product: string;
+  createdAt: string;
+  metadata: Record<string, unknown> | null;
+}
+
+export interface AdminSubscription {
+  id: string;
+  orgId: string;
+  orgName: string;
+  plan: string;
+  status: string;
+  currentPeriodStart: string;
+  currentPeriodEnd: string;
+}
+
+export interface AdminSystemHealth {
+  status: 'healthy' | 'degraded' | 'critical';
+  uptime: number;
+  timestamp: string;
+  checks: {
+    database: { status: 'up' | 'down' | 'slow'; latencyMs?: number; error?: string };
+    redis: { status: 'up' | 'down' | 'slow'; latencyMs?: number; error?: string };
+    agents: { total: number; active: number; paused: number; error: number; failedExecutions: number; pendingApprovals: number };
+    executions: { running: number; queued: number; stuck: number; completedLast24h: number; failedLast24h: number; avgDurationMs: number };
+    storage: { usedMb: number; availableMb: number; percentUsed: number; uploadsCount: number };
+  };
+}
+
+export interface AdminStuckExecution {
+  id: string;
+  agentId: string;
+  agentName: string;
+  orgId: string;
+  startedAt: string;
+  durationMs: number;
+}
+
+export interface AdminPlatformMetrics {
+  period: { start: string; end: string };
+  agents: { created: number; active: number; failed: number };
+  executions: { total: number; avgDuration: number; successRate: number };
+  revenue: { total: number; mrr: number };
+  users: { new: number; total: number };
+}
+
+export interface AdminAgentSummary {
+  id: string;
+  name: string;
+  slug: string;
+  status: string;
+  provider: string | null;
+  model: string | null;
+  createdAt: string;
+  updatedAt: string;
+  org: { id: string; name: string; slug: string; plan: string };
+  _count: { executions: number; skills: number; tools: number };
+}
+
+export interface AdminAuditEntry {
+  id: string;
+  adminId: string;
+  adminName?: string;
+  adminEmail?: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  reason: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
 }
 
 export const api = new ApiClient();

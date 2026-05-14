@@ -29,6 +29,8 @@ export default function SkillsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({ name: '', slug: '', description: '' });
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  // Curator state filter — ACTIVE / STALE / ARCHIVED / all
+  const [stateFilter, setStateFilter] = useState<'ALL' | 'ACTIVE' | 'STALE' | 'ARCHIVED'>('ACTIVE');
   const [importing, setImporting] = useState(false);
   const [showCatalog, setShowCatalog] = useState(false);
   const [catalogItems, setCatalogItems] = useState<any[]>([]);
@@ -256,8 +258,25 @@ export default function SkillsPage() {
           <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-[var(--accent)] text-white rounded-lg">+ Add Skill</button>
         </div>
       ) : (
+        <>
+          {/* State filter — curator lifecycle */}
+          <div className="flex gap-1 mb-4 bg-[var(--card)] p-1 rounded-lg border border-[var(--border)] w-fit">
+            {(['ACTIVE', 'STALE', 'ARCHIVED', 'ALL'] as const).map((s) => {
+              const count = s === 'ALL' ? skills.length : skills.filter((sk) => (sk.state ?? 'ACTIVE') === s).length;
+              return (
+                <button
+                  key={s}
+                  onClick={() => setStateFilter(s)}
+                  className={`px-3 py-1.5 text-xs rounded transition ${stateFilter === s ? 'bg-[var(--accent)] text-white' : 'text-[var(--muted)] hover:bg-[var(--hover)]'}`}
+                >
+                  {s} ({count})
+                </button>
+              );
+            })}
+          </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {skills.map((skill) => (
+          {skills.filter((sk) => stateFilter === 'ALL' || (sk.state ?? 'ACTIVE') === stateFilter).map((skill) => (
             <div key={skill.id} className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-5 hover:border-[var(--accent)]/30 transition">
               <div className="flex items-start justify-between mb-3">
                 <div className="flex-1 min-w-0">
@@ -270,6 +289,16 @@ export default function SkillsPage() {
                       {skill.type}
                     </span>
                     <span className="text-[10px] px-2 py-0.5 rounded bg-[var(--hover)] text-[var(--muted)]">v{skill.version}</span>
+                    {skill.state && skill.state !== 'ACTIVE' && (
+                      <span className={`text-[10px] px-2 py-0.5 rounded font-medium ${skill.state === 'STALE' ? 'bg-amber-500/15 text-amber-400' : 'bg-zinc-500/20 text-zinc-400'}`}>
+                        {skill.state}
+                      </span>
+                    )}
+                    {skill.authorType === 'AGENT' && (
+                      <span className="text-[10px] px-2 py-0.5 rounded font-medium bg-purple-500/15 text-purple-300" title="Authored by an agent — eligible for curator state transitions">
+                        AGENT
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -285,6 +314,20 @@ export default function SkillsPage() {
                   className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-[var(--border)] hover:bg-[var(--hover)]">
                   <Pencil size={12} /> Edit
                 </button>
+                {(skill.state === 'STALE' || skill.state === 'ARCHIVED') && (
+                  <button
+                    onClick={async () => {
+                      try {
+                        const updated: any = await api.updateSkill(skill.id, { state: 'ACTIVE' });
+                        setSkills((prev) => prev.map((s) => s.id === skill.id ? { ...s, ...updated, state: 'ACTIVE' } : s));
+                      } catch (e: any) { alert('Reactivate failed: ' + (e?.message ?? e)); }
+                    }}
+                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
+                    title="Move back to ACTIVE — agents will see it again"
+                  >
+                    ↻ Reactivate
+                  </button>
+                )}
                 {isAdmin && (deleteConfirm === skill.id ? (
                   <div className="flex gap-1 ml-auto">
                     <button onClick={() => handleDelete(skill.id)}
@@ -302,6 +345,7 @@ export default function SkillsPage() {
             </div>
           ))}
         </div>
+        </>
       )}
 
       {/* ── Editor modal ── */}

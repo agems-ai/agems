@@ -394,6 +394,13 @@ export default function BudgetsPage() {
       {/* Platform Budget Card — top-priority cap on the whole org */}
       <PlatformBudgetCard />
 
+      {/* Burn-rate forecast — sourced from cost-forecast.ts */}
+      <BurnRateCard />
+
+      {/* Cost breakdown by provider × model */}
+      <ModelBreakdownCard />
+
+
       {/* Agent Summary Cards */}
       {summary && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -721,6 +728,165 @@ export default function BudgetsPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Burn-rate forecast card — surfaces `forecast` block on
+// getOrgCostStats response (cost-forecast.ts).
+// ─────────────────────────────────────────────────────────────────
+function BurnRateCard() {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r: any = await api.getOrgCostStats('daily', 30);
+        setData(r);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  if (loading) return null;
+  const f = data?.forecast;
+  if (!f) return null;
+
+  const trendColor =
+    f.trend === 'rising' ? 'text-rose-400' :
+    f.trend === 'falling' ? 'text-emerald-400' :
+    'text-zinc-400';
+  const trendArrow = f.trend === 'rising' ? '↑' : f.trend === 'falling' ? '↓' : '→';
+  const dteColor =
+    f.daysToExhaust == null ? 'text-zinc-400' :
+    f.daysToExhaust <= 3 ? 'text-rose-400' :
+    f.daysToExhaust <= 7 ? 'text-amber-400' :
+    'text-emerald-400';
+
+  return (
+    <div className="mb-6 p-5 bg-[var(--card)] border border-[var(--border)] rounded-xl">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-semibold">Burn Rate Forecast</h3>
+        <span className="text-xs text-[var(--muted)]">last 30d</span>
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+        <div>
+          <p className="text-xs text-[var(--muted)] uppercase tracking-wide mb-1">Recent daily burn</p>
+          <p className="text-xl font-bold">{formatUsd(f.recentDailyBurn ?? 0)}</p>
+          <p className="text-[10px] text-[var(--muted)]">trailing 7d avg</p>
+        </div>
+        <div>
+          <p className="text-xs text-[var(--muted)] uppercase tracking-wide mb-1">Avg daily burn</p>
+          <p className="text-xl font-bold">{formatUsd(f.avgDailyBurn ?? 0)}</p>
+          <p className="text-[10px] text-[var(--muted)]">30d mean</p>
+        </div>
+        <div>
+          <p className="text-xs text-[var(--muted)] uppercase tracking-wide mb-1">Trend</p>
+          <p className={`text-xl font-bold ${trendColor}`}>
+            {trendArrow} {f.trend}
+          </p>
+          <p className="text-[10px] text-[var(--muted)]">
+            {Number.isFinite(f.trendDeltaPercent) ? `${f.trendDeltaPercent > 0 ? '+' : ''}${f.trendDeltaPercent.toFixed(1)}% wk-over-wk` : 'not enough history'}
+          </p>
+        </div>
+        <div>
+          <p className="text-xs text-[var(--muted)] uppercase tracking-wide mb-1">Runway</p>
+          <p className={`text-xl font-bold ${dteColor}`}>
+            {f.daysToExhaust == null ? '—' : f.daysToExhaust === 0 ? 'OVER' : `${f.daysToExhaust}d`}
+          </p>
+          <p className="text-[10px] text-[var(--muted)]">
+            {f.exhaustDate ? `until ${f.exhaustDate}` : 'no platform cap set'}
+          </p>
+        </div>
+      </div>
+
+      {f.spikes && f.spikes.length > 0 && (
+        <div className="pt-3 border-t border-[var(--border)]">
+          <p className="text-xs text-[var(--muted)] uppercase tracking-wide mb-2">Recent spikes ({f.spikes.length})</p>
+          <div className="flex flex-wrap gap-2">
+            {f.spikes.slice(-5).map((s: any, i: number) => (
+              <span
+                key={i}
+                className={`text-xs px-2 py-1 rounded ${s.multiplier >= 10 ? 'bg-rose-500/15 text-rose-300' : s.multiplier >= 5 ? 'bg-amber-500/15 text-amber-300' : 'bg-blue-500/15 text-blue-300'}`}
+              >
+                {s.date}: {formatUsd(s.cost)} <span className="opacity-70">({s.multiplier.toFixed(1)}× median)</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Cost breakdown by (provider, model) — uses new columns added in
+// commit 2591b49 (per-execution cost attribution). Rows with NULL
+// provider bucket into "unknown" (pre-attribution history).
+// ─────────────────────────────────────────────────────────────────
+function ModelBreakdownCard() {
+  const [data, setData] = useState<any[] | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r: any = await api.getOrgCostStats('daily', 30);
+        setData(r?.modelBreakdown ?? []);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  if (loading || !data || data.length === 0) return null;
+  const totalCost = data.reduce((sum, m) => sum + (m.cost ?? 0), 0);
+
+  return (
+    <div className="mb-6 p-5 bg-[var(--card)] border border-[var(--border)] rounded-xl">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-semibold">Cost by Model</h3>
+        <span className="text-xs text-[var(--muted)]">last 30d · total {formatUsd(totalCost)}</span>
+      </div>
+      <table className="w-full text-sm">
+        <thead className="text-xs text-[var(--muted)] uppercase tracking-wide">
+          <tr>
+            <th className="text-left font-medium pb-2">Provider · Model</th>
+            <th className="text-right font-medium pb-2">Spend</th>
+            <th className="text-right font-medium pb-2">Share</th>
+            <th className="text-right font-medium pb-2">In tokens</th>
+            <th className="text-right font-medium pb-2">Out tokens</th>
+            <th className="text-right font-medium pb-2">Cached</th>
+            <th className="text-right font-medium pb-2">Calls</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.slice(0, 12).map((m: any, i: number) => {
+            const pct = totalCost > 0 ? (m.cost / totalCost) * 100 : 0;
+            return (
+              <tr key={i} className="border-t border-[var(--border)]">
+                <td className="py-2">
+                  <span className="text-xs text-[var(--muted)]">{m.provider}</span>
+                  <span className="mx-1 text-[var(--muted)]">·</span>
+                  <span className="font-mono text-xs">{m.model}</span>
+                </td>
+                <td className="text-right">{formatUsd(m.cost ?? 0)}</td>
+                <td className="text-right text-xs text-[var(--muted)]">{pct.toFixed(1)}%</td>
+                <td className="text-right text-xs">{(m.inputTokens ?? 0).toLocaleString()}</td>
+                <td className="text-right text-xs">{(m.outputTokens ?? 0).toLocaleString()}</td>
+                <td className="text-right text-xs text-emerald-400">
+                  {m.cachedInputTokens > 0 ? (m.cachedInputTokens).toLocaleString() : '—'}
+                </td>
+                <td className="text-right text-xs">{m.executions}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

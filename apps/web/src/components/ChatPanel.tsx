@@ -8,6 +8,7 @@ import {
   ChevronDown, ChevronRight, Wrench, Cpu, Clock, Zap, BookOpen, Brain,
 } from 'lucide-react';
 import ApprovalCard from '@/components/ApprovalCard';
+import { A2uiRenderer } from '@/components/A2uiRenderer';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -562,6 +563,28 @@ export default function ChatPanel({
           </div>
         </div>
       );
+    }
+
+    // UI_BLOCK messages — A2UI surface emitted by an agent.
+    // Body is a JSON object { rootId, components[], dataModel? } that the
+    // renderer dispatches against the six-type whitelist.
+    if (msg.contentType === 'UI_BLOCK') {
+      let surface: any = null;
+      try {
+        surface = typeof msg.content === 'string' ? JSON.parse(msg.content) : msg.content;
+      } catch { /* fall through to plain text */ }
+      if (surface && Array.isArray(surface.components) && typeof surface.rootId === 'string') {
+        return (
+          <div key={msg.id || i} className="flex justify-start gap-2">
+            <Avatar name={senderInfo.name} avatar={senderInfo.avatar} size={28} />
+            <div className="max-w-[80%]">
+              <div className="text-xs opacity-70 mb-1">{senderInfo.name}{senderInfo.role ? <span className="ml-1 opacity-60">· {senderInfo.role}</span> : ''}</div>
+              <A2uiRenderer surface={surface} />
+            </div>
+          </div>
+        );
+      }
+      // Fall through: treat malformed UI_BLOCK as plain text.
     }
 
     // FILE messages
