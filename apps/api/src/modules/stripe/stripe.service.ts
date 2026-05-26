@@ -106,8 +106,16 @@ export class StripeService {
 
       // Retrieve full subscription from Stripe
       const stripeSub = await this.stripe!.subscriptions.retrieve(subId);
-      const priceId = stripeSub.items.data[0]?.price?.id;
+      const firstItem = stripeSub.items.data[0];
+      const priceId = firstItem?.price?.id;
       const planInfo = priceId ? PRICE_TO_PLAN[priceId] : null;
+
+      // Stripe API ≥ 2025-03 moved current_period_* from subscription onto subscription items.
+      // Read from item, fall back to legacy top-level field for older API versions.
+      const periodStartTs = (firstItem as any)?.current_period_start ?? (stripeSub as any).current_period_start;
+      const periodEndTs = (firstItem as any)?.current_period_end ?? (stripeSub as any).current_period_end;
+      const currentPeriodStart = new Date(periodStartTs * 1000);
+      const currentPeriodEnd = new Date(periodEndTs * 1000);
 
       await this.prisma.subscription.upsert({
         where: { orgId },
@@ -119,8 +127,8 @@ export class StripeService {
           plan: planInfo?.plan || targetPlan,
           hoursPerMonth: planInfo?.hours || 0,
           status: 'active',
-          currentPeriodStart: new Date((stripeSub as any).current_period_start * 1000),
-          currentPeriodEnd: new Date((stripeSub as any).current_period_end * 1000),
+          currentPeriodStart,
+          currentPeriodEnd,
         },
         update: {
           stripeSubscriptionId: subId,
@@ -129,8 +137,8 @@ export class StripeService {
           plan: planInfo?.plan || targetPlan,
           hoursPerMonth: planInfo?.hours || 0,
           status: 'active',
-          currentPeriodStart: new Date((stripeSub as any).current_period_start * 1000),
-          currentPeriodEnd: new Date((stripeSub as any).current_period_end * 1000),
+          currentPeriodStart,
+          currentPeriodEnd,
           canceledAt: null,
         },
       });
@@ -173,13 +181,18 @@ export class StripeService {
     });
     if (!record) return;
 
-    const priceId = sub.items.data[0]?.price?.id;
+    const firstItem = sub.items.data[0];
+    const priceId = firstItem?.price?.id;
     const planInfo = priceId ? PRICE_TO_PLAN[priceId] : null;
 
     const status = sub.status === 'active' ? 'active'
       : sub.status === 'canceled' ? 'canceled'
       : sub.status === 'past_due' ? 'past_due'
       : sub.status;
+
+    // See handleCheckoutCompleted: Stripe API ≥ 2025-03 moved current_period_* to items.
+    const periodStartTs = (firstItem as any)?.current_period_start ?? (sub as any).current_period_start;
+    const periodEndTs = (firstItem as any)?.current_period_end ?? (sub as any).current_period_end;
 
     await this.prisma.subscription.update({
       where: { stripeSubscriptionId: sub.id },
@@ -188,8 +201,8 @@ export class StripeService {
         stripePriceId: priceId || undefined,
         plan: planInfo?.plan || record.plan,
         hoursPerMonth: planInfo?.hours ?? record.hoursPerMonth,
-        currentPeriodStart: new Date((sub as any).current_period_start * 1000),
-        currentPeriodEnd: new Date((sub as any).current_period_end * 1000),
+        currentPeriodStart: new Date(periodStartTs * 1000),
+        currentPeriodEnd: new Date(periodEndTs * 1000),
         canceledAt: sub.canceled_at ? new Date(sub.canceled_at * 1000) : null,
       },
     });
