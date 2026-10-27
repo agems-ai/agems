@@ -1,6 +1,9 @@
 // Types
 export * from './types';
 
+// Safe process/network helpers
+export * from './safe-spawn';
+
 // Base
 export { BaseAdapter } from './base-adapter';
 

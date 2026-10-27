@@ -1,5 +1,5 @@
-import { spawn } from 'child_process';
 import { BaseAdapter } from '../base-adapter';
+import { spawnCli, checkCliVersion, safePromptArg } from '../safe-spawn';
 import { AdapterResult, CursorConfig } from '../types';
 
 /**
@@ -20,21 +20,7 @@ export class CursorAdapter extends BaseAdapter {
   }
 
   async checkAvailability(): Promise<{ available: boolean; version?: string; error?: string }> {
-    return new Promise((resolve) => {
-      const proc = spawn('cursor', ['--version'], { shell: true });
-      let output = '';
-      proc.stdout.on('data', (data) => { output += data.toString(); });
-      proc.on('close', (code) => {
-        if (code === 0) {
-          resolve({ available: true, version: output.trim() });
-        } else {
-          resolve({ available: false, error: 'Cursor CLI not found. Install Cursor IDE from cursor.com' });
-        }
-      });
-      proc.on('error', () => {
-        resolve({ available: false, error: 'Cursor CLI not installed' });
-      });
-    });
+    return checkCliVersion('cursor', 'Cursor CLI not found. Install Cursor IDE from cursor.com');
   }
 
   async execute(input: {
@@ -59,12 +45,11 @@ export class CursorAdapter extends BaseAdapter {
       if (input.context) {
         fullPrompt = `Context:\n${input.context}\n\nTask:\n${fullPrompt}`;
       }
-      args.push(fullPrompt);
+      args.push(safePromptArg(fullPrompt));
 
-      const proc = spawn('cursor', args, {
+      const proc = spawnCli('cursor', args, {
         cwd: this.config.workspacePath || this.config.workingDir || process.cwd(),
-        env: { ...process.env, ...this.config.env },
-        shell: true,
+        env: this.config.env,
         signal: abort.signal,
       });
 

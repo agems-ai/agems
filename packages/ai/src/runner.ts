@@ -160,6 +160,30 @@ class ToolLoopDetector {
 }
 
 /**
+ * Claude 4.6 and newer (Opus/Sonnet/Haiku/Fable/Mythos) think in adaptive mode: `budget_tokens` and
+ * non-default temperature/top_p are rejected with a 400 on Sonnet 5.5, Opus 5.5 and most of that family.
+ * Older Claude models (Sonnet 4.5, Haiku 4.5, Opus 4.1, 3.x) still take `enabled` with a budget.
+ */
+export function isAdaptiveClaudeModel(model: string): boolean {
+  const m = /claude-(?:opus|sonnet|haiku|fable|mythos)-(\d+)(?:[-.](\d+))?/i.exec(model || '');
+  if (!m) return false;
+  const major = Number(m[1]);
+  const minor = m[2] !== undefined && m[2].length <= 2 ? Number(m[2]) : 0; // "-20250929" is a date, not a minor version
+  return major > 4 || (major === 4 && minor >= 6);
+}
+
+/**
+ * Output cap for one model call. ai@6 reads `maxOutputTokens` (the old `maxTokens` key was ignored, so no
+ * call had a cap). Reasoning tokens count toward this cap on most providers, so the thinking allowance is
+ * added on top of the answer budget; the anthropic provider adds `budgetTokens` itself in `enabled` mode.
+ */
+export function outputTokenCap(answerTokens: number, reasoningHeadroom: number): number {
+  const answer = Number.isFinite(answerTokens) && answerTokens > 0 ? Math.floor(answerTokens) : 4096;
+  const headroom = Number.isFinite(reasoningHeadroom) && reasoningHeadroom > 0 ? Math.floor(reasoningHeadroom) : 0;
+  return answer + headroom;
+}
+
+/**
  * AgentRunner -- executes an agent task using the LLM with tool loop.
  * 1. Send message to LLM
  * 2. If LLM calls tool -> execute tool -> feed result back -> loop
@@ -178,19 +202,32 @@ export class AgentRunner {
     const isGeminiThinking = this.config.provider.provider === 'GOOGLE'
       && /gemini-3/i.test(this.config.provider.model);
     const isAnthropicFormat = this.config.provider.provider === 'ANTHROPIC' || this.config.provider.apiFormat === 'anthropic';
+    const isAdaptiveClaude = isAnthropicFormat && isAdaptiveClaudeModel(this.config.provider.model);
     const isAnthropicThinking = isAnthropicFormat
-      && (/opus|sonnet|MiniMax/i.test(this.config.provider.model));
+      && (isAdaptiveClaude || /opus|sonnet|MiniMax/i.test(this.config.provider.model));
 
     const providerOptions: Record<string, any> = {};
+    let reasoningHeadroom = Math.max(0, this.config.thinkingBudget ?? 4000);
     if (isGeminiThinking) {
       const gemBudget = this.config.thinkingBudget ?? 8000;
       providerOptions.google = { thinkingConfig: { thinkingBudget: gemBudget, includeThoughts: true } };
+      reasoningHeadroom = Math.max(0, gemBudget);
     }
     if (isAnthropicThinking) {
       const budget = this.config.thinkingBudget ?? 4000;
-      if (budget > 0) {
+      if (isAdaptiveClaude) {
+        // budget_tokens is a 400 on these models; adaptive is also their default when thinking is omitted.
+        if (budget > 0) providerOptions.anthropic = { thinking: { type: 'adaptive' } };
+      } else if (budget > 0) {
         providerOptions.anthropic = { thinking: { type: 'enabled', budgetTokens: budget } };
+        reasoningHeadroom = 0; // the anthropic provider adds budgetTokens to max_tokens itself
       }
+    }
+    // DeepSeek: "deepseek-flash" thinks by default, while the old default "deepseek-chat" is the same model with
+    // thinking off (verified 2026-10-27). Keep deepseek-flash non-thinking (cost, latency, no reasoning_content
+    // round trip); deepseek-reasoner and deepseek-v4-* keep DeepSeek's own default.
+    if (this.config.provider.provider === 'DEEPSEEK' && /^deepseek-flash$/i.test(this.config.provider.model)) {
+      providerOptions.deepseek = { thinking: { type: 'disabled' } };
     }
     // Zhipu GLM reasoning (glm-4.6, glm-5, glm-5.1). Uses OpenAI-compatible
     // endpoint so provider options land on the `openai` key. Zhipu accepts
@@ -245,7 +282,7 @@ export class AgentRunner {
       system,
       tools: toolsMap,
       stopWhen: stepCountIs(maxSteps),
-      maxTokens: this.config.maxTokens ?? 4096,
+      maxOutputTokens: outputTokenCap(this.config.maxTokens ?? 4096, reasoningHeadroom),
       ...(isAnthropicThinking ? {} : { temperature: this.config.temperature ?? 0.7 }),
       ...(Object.keys(providerOptions).length > 0 && { providerOptions }),
       repairToolCall: async ({ toolCall, error }: any) => {

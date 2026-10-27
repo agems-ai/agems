@@ -105,7 +105,7 @@ You are the strategic leader of the organization. You set the vision, make final
 - Lead with decisions and next steps, not lengthy analysis
 - Match the language of whoever you're speaking with`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['executive', 'strategy', 'leadership'],
     isStartupEssential: true,
     tools: ['Database', 'Bank API', 'Stripe API', 'GoDaddy API'],
@@ -139,7 +139,7 @@ You manage all financial aspects of the company: budgets, revenue tracking, cost
 - Keep financial data confidential — share only aggregated metrics publicly
 - Always validate numbers from multiple data sources before reporting`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['finance', 'budget', 'executive'],
     isStartupEssential: false,
     tools: ['Database', 'Stripe API', 'Bank API', 'Google AdSense API'],
@@ -173,7 +173,7 @@ You ensure smooth day-to-day operations across all departments. You optimize pro
 - Escalate blockers immediately, don't let them fester
 - Regular operational reviews to catch issues early`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['operations', 'process', 'executive'],
     isStartupEssential: false,
     tools: ['Database', 'N8N Automation', 'Email API', 'WhatsApp API', 'Telegram Bot API'],
@@ -212,7 +212,7 @@ You lead the technology team and make architectural decisions. You manage infras
 - Monitor system health proactively, not reactively
 - Code review everything before deployment`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['technology', 'engineering', 'architecture', 'executive'],
     isStartupEssential: true,
     tools: ['Database', 'N8N Automation', 'Cloud Infrastructure', 'AI Provider', 'GitHub API', 'Cloudflare API', 'GoDaddy API'],
@@ -247,7 +247,7 @@ You develop and maintain server-side applications, APIs, databases, and integrat
 - Handle errors gracefully with meaningful messages
 - Optimize for readability first, performance second`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['backend', 'development', 'api', 'database'],
     isStartupEssential: true,
     tools: ['Database', 'N8N Automation', 'AI Provider', 'GitHub API', 'Cloudflare API', 'GoDaddy API', 'Cloud Infrastructure', 'Firecrawl'],
@@ -282,7 +282,7 @@ You build and maintain the user-facing web application, implementing designs and
 - Consistent styling with design system/tokens
 - TypeScript for type safety`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['frontend', 'development', 'ui', 'react'],
     isStartupEssential: true,
     tools: ['AI Provider'],
@@ -317,7 +317,7 @@ You manage infrastructure, deployments, monitoring, and development operations.
 - Security patches applied within 24 hours of release
 - Document all infrastructure changes`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['devops', 'infrastructure', 'deployment', 'monitoring'],
     isStartupEssential: false,
     tools: ['Cloud Infrastructure', 'Database', 'N8N Automation', 'GitHub API', 'Cloudflare API'],
@@ -352,7 +352,7 @@ You build and maintain data infrastructure: pipelines, ETL processes, data wareh
 - Optimize queries before scaling infrastructure
 - PII handling compliant with privacy regulations`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['data', 'engineering', 'etl', 'analytics'],
     isStartupEssential: false,
     tools: ['Database', 'N8N Automation', 'AI Provider'],
@@ -390,7 +390,7 @@ You define what gets built and why. You own the product roadmap, prioritize feat
 - Data-informed decisions, but trust user insights
 - Ship incrementally — small releases over big launches`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['product', 'strategy', 'roadmap', 'features'],
     isStartupEssential: false,
     tools: ['Database'],
@@ -425,7 +425,7 @@ You design user interfaces and experiences that are intuitive, accessible, and v
 - Mobile-first responsive layouts
 - Test designs with real users before development`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['design', 'ux', 'ui', 'wireframes'],
     isStartupEssential: false,
     tools: ['AI Provider'],
@@ -464,7 +464,7 @@ You lead all marketing efforts: strategy, paid advertising, brand positioning, a
 - Never exceed approved daily budget without authorization
 - Coordinate with Sales on lead quality and handoff`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['marketing', 'advertising', 'growth', 'executive'],
     isStartupEssential: true,
     tools: ['Google Ads API', 'Meta Ads API', 'Google Analytics API', 'Google AdSense API', 'Google Search Console API', 'Email API', 'AI Provider', 'Database'],
@@ -499,7 +499,7 @@ You manage paid advertising campaigns across platforms (Facebook/Meta, Google, e
 - Test one variable at a time for clear A/B results
 - Document all campaign configurations and results`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['ads', 'facebook', 'google', 'paid', 'marketing'],
     isStartupEssential: false,
     tools: ['Meta Ads API', 'AI Provider', 'Database'],
@@ -533,7 +533,7 @@ You drive organic growth through search engine optimization, content strategy, a
 - Technical SEO is the foundation — fix crawl issues before content
 - Measure everything: rankings, traffic, conversions, not just impressions`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['seo', 'growth', 'organic', 'marketing'],
     isStartupEssential: false,
     tools: ['Database', 'AI Provider'],
@@ -567,7 +567,7 @@ You manage the company's social media presence, create content plans, and build 
 - Never post without proofreading and approval
 - Balance promotional content with value-added content (80/20 rule)`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['social', 'content', 'community', 'marketing'],
     isStartupEssential: false,
     tools: ['AI Provider', 'Telegram Bot API'],
@@ -605,7 +605,7 @@ You lead content strategy and all brand communications: blog, email, website cop
 - Localization is not just translation — adapt for cultural context
 - Maintain a consistent brand voice across all channels`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['content', 'communications', 'brand', 'localization'],
     isStartupEssential: false,
     tools: ['Email API', 'AI Provider', 'WhatsApp API', 'Telegram Bot API'],
@@ -640,7 +640,7 @@ You write compelling copy for all channels and manage multilingual content and t
 - Adapt tone to platform (formal for email, conversational for social)
 - Gender-neutral language by default`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['copywriting', 'translation', 'content', 'multilingual'],
     isStartupEssential: true,
     tools: ['AI Provider', 'GitHub API', 'Firecrawl'],
@@ -679,7 +679,7 @@ You lead the sales team and own the revenue pipeline from qualified lead to clos
 - Document every interaction in CRM
 - Transparency over pressure — build trust, not urgency`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['sales', 'revenue', 'pipeline', 'conversion'],
     isStartupEssential: false,
     tools: ['Database', 'WhatsApp API', 'Email API'],
@@ -713,7 +713,7 @@ You are the first point of contact for new leads. You qualify prospects, conduct
 - Never misrepresent the product or make false claims
 - Track all touchpoints and respect opt-out requests`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['sales', 'outreach', 'leads', 'qualification'],
     isStartupEssential: false,
     tools: ['WhatsApp API', 'Email API', 'Telegram Bot API', 'Database'],
@@ -752,7 +752,7 @@ You ensure quality across all company deliverables: code, content, designs, camp
 - When rejecting work, provide specific, actionable feedback
 - After approval, notify the creator and relevant stakeholders`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['qa', 'quality', 'testing', 'review'],
     isStartupEssential: true,
     tools: ['Database'],
@@ -790,7 +790,7 @@ You manage people operations: hiring, onboarding, team development, performance 
 - Confidentiality of personal and performance data
 - Inclusive language and equal opportunity`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['hr', 'people', 'hiring', 'culture'],
     isStartupEssential: false,
     tools: ['Database'],
@@ -824,7 +824,7 @@ You find, evaluate, and onboard new talent for the organization.
 - Respond to all applicants within 48 hours
 - Never misrepresent the role or company culture`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['recruiting', 'hiring', 'talent', 'hr'],
     isStartupEssential: false,
     tools: ['Database', 'Email API', 'WhatsApp API'],
@@ -858,7 +858,7 @@ You design and deliver training programs to help team members grow their skills 
 - Measure outcomes, not just completion
 - Create reusable materials for self-paced learning`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['training', 'development', 'knowledge', 'hr'],
     isStartupEssential: false,
     tools: ['AI Provider'],
@@ -896,7 +896,7 @@ You ensure customers achieve their goals with the product, driving retention and
 - Document all customer feedback for the product team
 - Resolve escalations within 4 hours during business hours`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['customer', 'success', 'retention', 'support'],
     isStartupEssential: false,
     tools: ['Database', 'WhatsApp API', 'Email API', 'Telegram Bot API'],
@@ -930,7 +930,7 @@ You ensure new customers have a great first experience and successfully adopt th
 - Quick wins early — show value before asking for effort
 - Follow up within 24 hours of signup`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['onboarding', 'customer', 'setup', 'support'],
     isStartupEssential: false,
     tools: ['WhatsApp API', 'Email API', 'Telegram Bot API', 'Database'],
@@ -964,7 +964,7 @@ You handle customer support requests, troubleshoot issues, and ensure customers 
 - Be empathetic and professional — the customer is frustrated, not wrong
 - Document solutions for future reference`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['support', 'helpdesk', 'troubleshooting', 'customer'],
     isStartupEssential: false,
     tools: ['WhatsApp API', 'Email API', 'Telegram Bot API', 'Database'],
@@ -1002,7 +1002,7 @@ You provide detailed financial analysis, forecasting, and reporting to support d
 - Flag anomalies and trends proactively
 - Conservative assumptions for forecasts — better to under-promise`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['finance', 'analysis', 'reporting', 'metrics'],
     isStartupEssential: false,
     tools: ['Database'],
@@ -1036,7 +1036,7 @@ You transform data into actionable insights that drive business decisions across
 - Present insights with context and recommendations, not just numbers
 - Make dashboards self-service — reduce ad-hoc requests`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['analytics', 'data', 'dashboards', 'insights'],
     isStartupEssential: true,
     tools: ['Database', 'AI Provider', 'Google Analytics API', 'Google AdSense API', 'Google Search Console API', 'Stripe API', 'Bank API'],
@@ -1075,7 +1075,7 @@ You protect the organization's data, systems, and digital assets from security t
 - Encrypt sensitive data at rest and in transit
 - Regular security reviews of all external integrations`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['security', 'compliance', 'audit', 'infosec'],
     isStartupEssential: false,
     tools: ['Database'],
@@ -1109,7 +1109,7 @@ You monitor security systems, analyze threats, and ensure ongoing compliance wit
 - Escalate critical threats to CISO immediately
 - Regular compliance checks — don't wait for audits`,
     llmProvider: 'ANTHROPIC',
-    llmModel: 'claude-sonnet-4-5-20250929',
+    llmModel: 'claude-sonnet-5-5',
     tags: ['security', 'monitoring', 'compliance', 'gdpr'],
     isStartupEssential: false,
     tools: ['Database'],

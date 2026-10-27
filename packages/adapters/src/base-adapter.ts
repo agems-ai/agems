@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import { AdapterConfig, AdapterResult, AdapterRunStatus, AdapterEvents } from './types';
+import { validateAdapterConfig } from './safe-spawn';
 
 /**
  * Base class for all external agent adapters.
@@ -13,6 +14,8 @@ export abstract class BaseAdapter extends EventEmitter {
 
   constructor(config: AdapterConfig) {
     super();
+    // Reject unsafe values (model names, env, paths) before anything can run.
+    validateAdapterConfig(config || {});
     this.config = {
       timeoutMs: 30 * 60 * 1000, // 30 minutes default
       ...config,

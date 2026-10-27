@@ -6,6 +6,15 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 
+/**
+ * Voice models. The key travels in the x-goog-api-key header, never in the URL (URLs end up in logs).
+ * STT: gemini-3.5-flash-lite is the cheapest current model that transcribes short voice notes
+ * (~$0.001/min at $0.30/1M audio tokens vs ~$0.005/min for gemini-3.5-transcribe); replaces gemini-2.0-flash.
+ * TTS: gemini-3.8-flash-lite-tts ($6/1M audio tokens) replaces gemini-2.5-flash-preview-tts ($10).
+ */
+const GEMINI_STT_MODEL = 'gemini-3.5-flash-lite';
+const GEMINI_TTS_MODEL = 'gemini-3.8-flash-lite-tts';
+
 @Injectable()
 export class TelegramMediaService {
   private readonly logger = new Logger(TelegramMediaService.name);
@@ -19,7 +28,7 @@ export class TelegramMediaService {
     return key;
   }
 
-  /** Transcribe audio using Gemini Flash */
+  /** Transcribe audio using Gemini Flash-Lite */
   async transcribeAudio(audioBuffer: Buffer, mimeType = 'audio/ogg'): Promise<string> {
     const apiKey = await this.getGeminiKey();
     const audioB64 = audioBuffer.toString('base64');
@@ -33,10 +42,10 @@ export class TelegramMediaService {
       }],
     };
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_STT_MODEL}:generateContent`;
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(30000),
     });
@@ -75,10 +84,10 @@ export class TelegramMediaService {
       },
     };
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_TTS_MODEL}:generateContent`;
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(60000),
     });

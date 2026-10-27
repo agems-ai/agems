@@ -2521,7 +2521,7 @@ WORKFLOW: search_catalog → check_existing → import or create → assign skil
           systemPrompt: z.string().describe('Instructions for the agent'),
           mission: z.string().optional().describe('Brief role description'),
           llmProvider: z.string().optional().describe('ANTHROPIC, OPENAI, GOOGLE, DEEPSEEK, MISTRAL, MINIMAX, GLM, XAI, COHERE, PERPLEXITY, TOGETHER, FIREWORKS, GROQ, MOONSHOT, QWEN, AI21, SAMBANOVA'),
-          llmModel: z.string().optional().describe('e.g. deepseek-chat, claude-sonnet-4-5, gpt-4o'),
+          llmModel: z.string().optional().describe('e.g. deepseek-flash, claude-sonnet-5-5, gemini-3.8-flash'),
           type: z.string().optional().describe('AUTONOMOUS (default), ASSISTANT, REACTIVE'),
           values: z.array(z.string()).optional().describe('Agent values, e.g. ["quality", "speed"]'),
         }).optional().describe('Agent data (for create action)'),
@@ -2627,7 +2627,7 @@ WORKFLOW: search_catalog → check_existing → import or create → assign skil
             const availableProviders = availableKeys.map(k => k.key.replace('llm_key_', '').toUpperCase());
             // Use creator's provider as default (guaranteed to have a key)
             const safeProvider = availableProviders.includes(c.llmProvider?.toUpperCase()) ? c.llmProvider : agent.llmProvider;
-            const safeModel = safeProvider === agent.llmProvider ? (c.llmModel || agent.llmModel) : (c.llmModel || 'deepseek-chat');
+            const safeModel = safeProvider === agent.llmProvider ? (c.llmModel || agent.llmModel) : (c.llmModel || 'deepseek-flash');
             const newAgent = await this.prisma.agent.create({
               data: {
                 orgId: agent.orgId,
@@ -4272,7 +4272,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
           // Add text prompt
           parts.push({ text: params.prompt });
 
-          const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`;
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
           const body = {
             contents: [{ parts }],
             generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
@@ -4280,7 +4280,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
 
           const res = await fetch(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiApiKey },
             body: JSON.stringify(body),
             signal: AbortSignal.timeout(120000),
           });
@@ -5662,7 +5662,7 @@ Example code for number widget: const r = await query("TOOL_ID", "SELECT COUNT(*
           headers['x-api-key'] = authConfig.apiKey;
           headers['anthropic-version'] = '2023-06-01';
         } else if (baseUrl.includes('googleapis') || baseUrl.includes('generativelanguage')) {
-          url += (url.includes('?') ? '&' : '?') + `key=${authConfig.apiKey}`;
+          headers['x-goog-api-key'] = authConfig.apiKey; // not ?key=: URLs end up in logs and error messages
         } else if (baseUrl.includes('sendgrid')) {
           headers['Authorization'] = `Bearer ${authConfig.apiKey}`;
         } else {

@@ -1,5 +1,5 @@
-import { spawn } from 'child_process';
 import { BaseAdapter } from '../base-adapter';
+import { spawnCli, checkCliVersion, safePromptArg, safeOptionValue } from '../safe-spawn';
 import { AdapterResult, GeminiCliConfig } from '../types';
 
 /**
@@ -20,21 +20,7 @@ export class GeminiCliAdapter extends BaseAdapter {
   }
 
   async checkAvailability(): Promise<{ available: boolean; version?: string; error?: string }> {
-    return new Promise((resolve) => {
-      const proc = spawn('gemini', ['--version'], { shell: true });
-      let output = '';
-      proc.stdout.on('data', (data) => { output += data.toString(); });
-      proc.on('close', (code) => {
-        if (code === 0) {
-          resolve({ available: true, version: output.trim() });
-        } else {
-          resolve({ available: false, error: 'Gemini CLI not found. Install: npm install -g @google/gemini-cli' });
-        }
-      });
-      proc.on('error', () => {
-        resolve({ available: false, error: 'Gemini CLI not installed' });
-      });
-    });
+    return checkCliVersion('gemini', 'Gemini CLI not found. Install: npm install -g @google/gemini-cli');
   }
 
   async execute(input: {
@@ -52,7 +38,7 @@ export class GeminiCliAdapter extends BaseAdapter {
       const args: string[] = [];
 
       if (this.config.model) {
-        args.push('--model', this.config.model);
+        args.push('--model', safeOptionValue(this.config.model, 'model'));
       }
 
       if (this.config.sandbox) {
@@ -63,12 +49,11 @@ export class GeminiCliAdapter extends BaseAdapter {
       if (input.context) {
         fullPrompt = `Context:\n${input.context}\n\nTask:\n${fullPrompt}`;
       }
-      args.push(fullPrompt);
+      args.push(safePromptArg(fullPrompt));
 
-      const proc = spawn('gemini', args, {
+      const proc = spawnCli('gemini', args, {
         cwd: this.config.workingDir || process.cwd(),
-        env: { ...process.env, ...this.config.env },
-        shell: true,
+        env: this.config.env,
         signal: abort.signal,
       });
 
