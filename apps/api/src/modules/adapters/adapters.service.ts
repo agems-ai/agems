@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ServiceUnavailableException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from '../../config/prisma.service';
 
@@ -17,7 +17,39 @@ const ADAPTER_META: Array<{ type: AdapterType; name: string; description: string
   { type: 'PROCESS', name: 'Process', description: 'Generic shell command adapter - Run any CLI tool or script as an agent' },
 ];
 
-const DANGEROUS_ADAPTERS = new Set<AdapterType>(['HTTP', 'PROCESS']);
+/**
+ * Adapters that take a URL or a command from config. They are never executed from these endpoints:
+ * HTTP/OPENCLAW would let a caller make the API host call internal addresses, PROCESS runs a command.
+ */
+const DANGEROUS_ADAPTERS = new Set<AdapterType>(['HTTP', 'PROCESS', 'OPENCLAW']);
+
+/** Emails of platform operators (PLATFORM_ADMIN_EMAILS, comma separated). Org ADMIN is not enough: every signup is ADMIN of its own org. */
+export function platformAdminEmails(list: string | undefined = process.env.PLATFORM_ADMIN_EMAILS): string[] {
+  return (list || '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/** External adapters run agent CLIs on the API host, so they are off unless ADAPTERS_ENABLED=true. */
+export function adaptersEnabled(flag: string | undefined = process.env.ADAPTERS_ENABLED): boolean {
+  return (flag || '').trim().toLowerCase() === 'true';
+}
+
+function assertPromptInput(prompt: unknown, context: unknown) {
+  if (typeof prompt !== 'string' || !prompt.trim()) throw new BadRequestException('prompt is required');
+  if (context !== undefined && context !== null && typeof context !== 'string') throw new BadRequestException('context must be a string');
+}
+
+/** Runs an adapter; invalid input (AdapterConfigError) is a 400, not a 500. */
+async function runAdapter(adapter: any, input: Record<string, unknown>) {
+  try {
+    return await adapter.execute(input);
+  } catch (err: any) {
+    if (err?.name === 'AdapterConfigError') throw new BadRequestException(err.message);
+    throw err;
+  }
+}
 
 @Injectable()
 export class AdaptersService {
@@ -30,10 +62,28 @@ export class AdaptersService {
     return ADAPTER_META;
   }
 
+  /**
+   * Access to anything that starts a process or calls out: the feature flag must be on and the caller must be a
+   * platform admin (PLATFORM_ADMIN_EMAILS). Checked on every availability and execute call.
+   */
+  async assertAccess(userId: string | undefined): Promise<void> {
+    if (!adaptersEnabled()) {
+      throw new ForbiddenException('External adapters are disabled on this server');
+    }
+    const allowList = platformAdminEmails();
+    if (!userId || allowList.length === 0) {
+      throw new ForbiddenException('Only a platform admin can use external adapters');
+    }
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+    if (!user?.email || !allowList.includes(user.email.trim().toLowerCase())) {
+      throw new ForbiddenException('Only a platform admin can use external adapters');
+    }
+  }
+
   private getAdapterType(type: string): AdapterType {
     const adapterType = type as AdapterType;
     if (!ADAPTER_META.some((item) => item.type === adapterType)) {
-      throw new BadRequestException(`Unknown adapter type: ${type}`);
+      throw new BadRequestException('Unknown adapter type');
     }
     return adapterType;
   }
@@ -42,39 +92,6 @@ export class AdaptersService {
     if (DANGEROUS_ADAPTERS.has(type)) {
       throw new ForbiddenException(`${type} adapters cannot be executed directly from this endpoint`);
     }
-  }
-
-  private isBlockedHostname(hostname: string): boolean {
-    const normalized = hostname.trim().toLowerCase();
-    return normalized === 'localhost'
-      || normalized === '0.0.0.0'
-      || normalized === '::1'
-      || normalized.startsWith('127.')
-      || normalized.startsWith('10.')
-      || normalized.startsWith('192.168.')
-      || /^172\.(1[6-9]|2\d|3[0-1])\./.test(normalized)
-      || normalized.startsWith('169.254.')
-      || normalized.endsWith('.local')
-      || normalized === 'metadata.google.internal';
-  }
-
-  private assertSafeHttpUrl(urlValue: string) {
-    let parsed: URL;
-    try {
-      parsed = new URL(urlValue);
-    } catch {
-      throw new BadRequestException('Invalid adapter URL');
-    }
-
-    if (!['http:', 'https:'].includes(parsed.protocol)) {
-      throw new BadRequestException('Only http/https adapter URLs are allowed');
-    }
-
-    if (this.isBlockedHostname(parsed.hostname)) {
-      throw new ForbiddenException('Connections to local or private network targets are blocked');
-    }
-
-    return parsed.toString();
   }
 
   async checkAllAvailability() {
@@ -94,8 +111,9 @@ export class AdaptersService {
     return results;
   }
 
-  async checkAvailability(type: string, config?: Record<string, any>) {
-    const adapter = await this.createAdapter(this.getAdapterType(type), config || {});
+  /** Caller config is never used here: an availability probe must not reach a caller-chosen URL or command. */
+  async checkAvailability(type: string) {
+    const adapter = await this.createAdapter(this.getAdapterType(type), {});
     return adapter.checkAvailability();
   }
 
@@ -112,8 +130,11 @@ export class AdaptersService {
   ) {
     const adapterType = this.getAdapterType(type);
     this.assertSafeAdapterType(adapterType);
-    const adapter = await this.createAdapter(adapterType, options.config || {});
-    const result = await adapter.execute({
+    assertPromptInput(prompt, options.context);
+    const config = options.config ?? {};
+    if (typeof config !== 'object' || Array.isArray(config)) throw new BadRequestException('config must be an object');
+    const adapter = await this.createAdapter(adapterType, config);
+    const result = await runAdapter(adapter, {
       prompt,
       taskId: options.taskId,
       context: options.context,
@@ -135,10 +156,11 @@ export class AdaptersService {
     if (!agent) throw new NotFoundException('Agent not found');
     if (agent.orgId !== options.orgId) throw new BadRequestException('Access denied');
     if (!agent.adapterType) throw new BadRequestException('Agent has no external adapter configured');
-    if (DANGEROUS_ADAPTERS.has(agent.adapterType as AdapterType)) {
+    if (!ADAPTER_META.some((item) => item.type === agent.adapterType) || DANGEROUS_ADAPTERS.has(agent.adapterType as AdapterType)) {
       throw new ForbiddenException('This agent uses a privileged adapter and cannot be executed from this endpoint');
     }
 
+    assertPromptInput(prompt, options.context);
     const adapter = await this.createAdapter(
       agent.adapterType as AdapterType,
       (agent.adapterConfig as Record<string, any>) || {},
@@ -169,7 +191,7 @@ export class AdaptersService {
         options.context || '',
       ].filter(Boolean).join('\n\n');
 
-      const result = await adapter.execute({
+      const result = await runAdapter(adapter, {
         prompt,
         taskId: options.taskId,
         context: fullContext,
@@ -206,105 +228,18 @@ export class AdaptersService {
   }
 
   private async createAdapter(type: AdapterType, config: Record<string, any>): Promise<any> {
-    // Dynamic import to avoid hard dependency on adapters package
+    // No inline fallback: a second copy of the spawn logic is how shell:true and the full process env came back.
+    let factory: { create(type: string, config: Record<string, any>): any };
     try {
-      const { AdapterFactory } = await import('@agems/adapters');
-      return AdapterFactory.create(type, config);
+      factory = (await import('@agems/adapters')).AdapterFactory;
     } catch {
-      // Fallback: inline adapter creation if package not linked
-      const { spawn } = await import('child_process');
-
-      const CLI_MAP: Record<string, string> = {
-        CLAUDE_CODE: 'claude',
-        CODEX: 'codex',
-        CURSOR: 'cursor',
-        GEMINI_CLI: 'gemini',
-        OPENCODE: 'opencode',
-        PI: 'pi',
-      };
-
-      if (type === 'HTTP') {
-        return {
-          checkAvailability: async () => {
-            if (!config.url) return { available: false, error: 'URL not configured' };
-            try {
-              const safeUrl = this.assertSafeHttpUrl(config.url);
-              await fetch(safeUrl, { method: 'HEAD', signal: AbortSignal.timeout(5000) });
-              return { available: true };
-            } catch (e: any) {
-              return { available: false, error: e.message };
-            }
-          },
-          execute: async (input: any) => {
-            const safeUrl = this.assertSafeHttpUrl(config.url);
-            const res = await fetch(safeUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', ...config.headers },
-              body: JSON.stringify({ prompt: input.prompt, context: input.context }),
-            });
-            const text = await res.text();
-            return { success: res.ok, output: text, durationMs: 0 };
-          },
-        };
-      }
-
-      if (type === 'PROCESS') {
-        return {
-          checkAvailability: async () => ({ available: !!config.command, error: config.command ? undefined : 'No command' }),
-          execute: async (input: any) => {
-            return new Promise<any>((resolve) => {
-              const proc = spawn(config.command, config.args || [], {
-                cwd: config.workingDir || process.cwd(),
-                shell: true,
-                env: { ...process.env, AGEMS_PROMPT: input.prompt },
-              });
-              let stdout = '';
-              proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
-              proc.on('close', (code: number | null) => {
-                resolve({ success: code === 0, output: stdout, durationMs: 0 });
-              });
-              if (proc.stdin) { proc.stdin.write(input.prompt); proc.stdin.end(); }
-            });
-          },
-        };
-      }
-
-      const cliName = CLI_MAP[type];
-      if (!cliName) {
-        throw new Error(`Adapter type ${type} not available. Install @agems/adapters package.`);
-      }
-
-      return {
-        checkAvailability: async () => {
-          return new Promise<any>((resolve) => {
-            const proc = spawn(cliName, ['--version'], { shell: true });
-            let out = '';
-            proc.stdout.on('data', (d: Buffer) => { out += d.toString(); });
-            proc.on('close', (code: number | null) => {
-              resolve(code === 0 ? { available: true, version: out.trim() } : { available: false, error: `${cliName} not found` });
-            });
-            proc.on('error', () => resolve({ available: false, error: `${cliName} not installed` }));
-          });
-        },
-        execute: async (input: any) => {
-          return new Promise<any>((resolve) => {
-            const args = ['--print', input.prompt];
-            const proc = spawn(cliName, args, {
-              cwd: config.workingDir || process.cwd(),
-              shell: true,
-              env: { ...process.env, ...config.env },
-            });
-            let stdout = '';
-            let stderr = '';
-            proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
-            proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
-            proc.on('close', (code: number | null) => {
-              resolve({ success: code === 0, output: stdout, error: code !== 0 ? stderr : undefined, durationMs: 0 });
-            });
-            proc.on('error', (e: Error) => resolve({ success: false, error: e.message, output: '', durationMs: 0 }));
-          });
-        },
-      };
+      throw new ServiceUnavailableException('External adapters are not installed on this server');
+    }
+    try {
+      return factory.create(type, config);
+    } catch (err: any) {
+      if (err?.name === 'AdapterConfigError') throw new BadRequestException(err.message);
+      throw err;
     }
   }
 }

@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import { BaseAdapter } from '../base-adapter';
+import { buildChildEnv, safeWorkingDir, AdapterConfigError } from '../safe-spawn';
 import { AdapterResult, ProcessConfig } from '../types';
 
 /**
@@ -43,7 +44,7 @@ export class ProcessAdapter extends BaseAdapter {
       const { cmd } = this.getCommandParts();
 
       return new Promise((resolve) => {
-        const proc = spawn('which', [cmd]);
+        const proc = spawn('which', [cmd], { shell: false, env: buildChildEnv() });
         let output = '';
 
         proc.stdout.on('data', (data) => {
@@ -92,18 +93,25 @@ export class ProcessAdapter extends BaseAdapter {
         return;
       }
 
-      const args = [...baseArgs, ...(this.config.args || [])];
+      const extraArgs = this.config.args || [];
+      if (!Array.isArray(extraArgs) || !extraArgs.every((a) => typeof a === 'string' && !a.includes('\0'))) {
+        this.setStatus('failed');
+        resolve(this.buildResult({ success: false, error: new AdapterConfigError('args must be an array of strings').message }));
+        return;
+      }
+      const args = [...baseArgs, ...extraArgs];
 
+      // No shell, and only allowlisted host variables: the API process environment holds platform secrets.
       const proc = spawn(cmd, args, {
-        cwd: this.config.workingDir || process.cwd(),
+        cwd: safeWorkingDir(this.config.workingDir),
         env: {
-          ...process.env,
-          ...this.config.env,
+          ...buildChildEnv(this.config.env),
           AGEMS_PROMPT: input.prompt,
           AGEMS_CONTEXT: input.context || '',
           AGEMS_TASK_ID: input.taskId || '',
           AGEMS_CHANNEL_ID: input.channelId || '',
         },
+        shell: false,
         signal: abort.signal,
       });
 

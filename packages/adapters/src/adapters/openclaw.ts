@@ -1,4 +1,5 @@
 import { BaseAdapter } from '../base-adapter';
+import { assertPublicHttpUrl } from '../safe-spawn';
 import { AdapterResult, OpenClawConfig } from '../types';
 
 /**
@@ -19,13 +20,23 @@ export class OpenClawAdapter extends BaseAdapter {
     return 'OpenClaw';
   }
 
+  /** Gateway endpoint on a public http(s) host; a query or fragment in gatewayUrl cannot redirect the path. */
+  private endpoint(pathName: 'health' | 'execute'): string {
+    const base = new URL(assertPublicHttpUrl(this.config.gatewayUrl, 'gatewayUrl'));
+    base.search = '';
+    base.hash = '';
+    base.pathname = `${base.pathname.replace(/\/+$/, '')}/${pathName}`;
+    return base.toString();
+  }
+
   async checkAvailability(): Promise<{ available: boolean; version?: string; error?: string }> {
     if (!this.config.gatewayUrl) {
       return { available: false, error: 'Gateway URL not configured' };
     }
 
     try {
-      const res = await fetch(`${this.config.gatewayUrl}/health`, {
+      const res = await fetch(this.endpoint('health'), {
+        redirect: 'error',
         signal: AbortSignal.timeout(5000),
       });
       if (res.ok) {
@@ -62,8 +73,9 @@ export class OpenClawAdapter extends BaseAdapter {
       }
 
       // Send task to OpenClaw gateway via SSE
-      const res = await fetch(`${this.config.gatewayUrl}/execute`, {
+      const res = await fetch(this.endpoint('execute'), {
         method: 'POST',
+        redirect: 'error',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt: fullPrompt,

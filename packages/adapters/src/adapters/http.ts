@@ -1,4 +1,5 @@
 import { BaseAdapter } from '../base-adapter';
+import { assertPublicHttpUrl } from '../safe-spawn';
 import { AdapterResult, HttpAdapterConfig } from '../types';
 
 /**
@@ -24,17 +25,26 @@ export class HttpAdapter extends BaseAdapter {
       return { available: false, error: 'Webhook URL not configured' };
     }
 
+    let url: string;
     try {
-      const res = await fetch(this.config.url, {
+      url = assertPublicHttpUrl(this.config.url);
+    } catch (err: any) {
+      return { available: false, error: err.message };
+    }
+
+    try {
+      const res = await fetch(url, {
         method: 'HEAD',
+        redirect: 'error',
         signal: AbortSignal.timeout(5000),
       });
       return { available: true, version: `HTTP ${res.status}` };
     } catch (err: any) {
       // HEAD might not be supported, try OPTIONS
       try {
-        const res = await fetch(this.config.url, {
+        const res = await fetch(url, {
           method: 'OPTIONS',
+          redirect: 'error',
           signal: AbortSignal.timeout(5000),
         });
         return { available: true, version: `HTTP ${res.status}` };
@@ -60,6 +70,7 @@ export class HttpAdapter extends BaseAdapter {
     }
 
     try {
+      const url = assertPublicHttpUrl(this.config.url);
       const abort = this.createAbortController();
 
       // Build headers
@@ -92,10 +103,11 @@ export class HttpAdapter extends BaseAdapter {
         skills: input.skills,
       });
 
-      const res = await fetch(this.config.url, {
+      const res = await fetch(url, {
         method: this.config.method || 'POST',
         headers,
         body,
+        redirect: 'error',
         signal: abort.signal,
       });
 

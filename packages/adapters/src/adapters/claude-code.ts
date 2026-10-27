@@ -1,5 +1,5 @@
-import { spawn } from 'child_process';
 import { BaseAdapter } from '../base-adapter';
+import { spawnCli, checkCliVersion, safePromptArg, safeOptionValue, safePositiveInt, safeToolList } from '../safe-spawn';
 import { AdapterResult, ClaudeCodeConfig } from '../types';
 
 /**
@@ -21,21 +21,7 @@ export class ClaudeCodeAdapter extends BaseAdapter {
   }
 
   async checkAvailability(): Promise<{ available: boolean; version?: string; error?: string }> {
-    return new Promise((resolve) => {
-      const proc = spawn('claude', ['--version'], { shell: true });
-      let output = '';
-      proc.stdout.on('data', (data) => { output += data.toString(); });
-      proc.on('close', (code) => {
-        if (code === 0) {
-          resolve({ available: true, version: output.trim() });
-        } else {
-          resolve({ available: false, error: 'Claude Code CLI not found. Install: npm install -g @anthropic-ai/claude-code' });
-        }
-      });
-      proc.on('error', () => {
-        resolve({ available: false, error: 'Claude Code CLI not installed' });
-      });
-    });
+    return checkCliVersion('claude', 'Claude Code CLI not found. Install: npm install -g @anthropic-ai/claude-code');
   }
 
   async execute(input: {
@@ -56,15 +42,15 @@ export class ClaudeCodeAdapter extends BaseAdapter {
       ];
 
       if (this.config.model) {
-        args.push('--model', this.config.model);
+        args.push('--model', safeOptionValue(this.config.model, 'model'));
       }
 
       if (this.config.maxTokens) {
-        args.push('--max-tokens', String(this.config.maxTokens));
+        args.push('--max-tokens', String(safePositiveInt(this.config.maxTokens, 'maxTokens')));
       }
 
       if (this.config.allowedTools?.length) {
-        args.push('--allowedTools', this.config.allowedTools.join(','));
+        args.push('--allowedTools', safeToolList(this.config.allowedTools).join(','));
       }
 
       // Build full prompt with context
@@ -76,12 +62,11 @@ export class ClaudeCodeAdapter extends BaseAdapter {
         fullPrompt = `Available skills: ${input.skills.join(', ')}\n\n${fullPrompt}`;
       }
 
-      args.push(fullPrompt);
+      args.push(safePromptArg(fullPrompt));
 
-      const proc = spawn('claude', args, {
+      const proc = spawnCli('claude', args, {
         cwd: this.config.workingDir || process.cwd(),
-        env: { ...process.env, ...this.config.env },
-        shell: true,
+        env: this.config.env,
         signal: abort.signal,
       });
 

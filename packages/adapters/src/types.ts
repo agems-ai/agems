@@ -28,7 +28,7 @@ export interface AdapterConfig {
 }
 
 export interface ClaudeCodeConfig extends AdapterConfig {
-  /** Claude model to use (default: claude-sonnet-4-20250514) */
+  /** Claude model to use (the CLI default when omitted), e.g. claude-sonnet-5-5 */
   model?: string;
   /** Max tokens for output */
   maxTokens?: number;

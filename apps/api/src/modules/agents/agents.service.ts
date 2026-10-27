@@ -16,7 +16,7 @@ export class AgentsService {
   async create(input: CreateAgentInput, ownerId: string, orgId: string) {
     // Apply org defaults if provider/model not specified
     const llmProvider = input.llmProvider || await this.settings.get('default_llm_provider', orgId) || 'ANTHROPIC';
-    const llmModel = input.llmModel || await this.settings.get('default_model', orgId) || 'claude-sonnet-4-5-20250929';
+    const llmModel = input.llmModel || await this.settings.get('default_model', orgId) || 'claude-sonnet-5-5';
 
     // Apply org defaults for llmConfig if not specified
     let llmConfig = (input.llmConfig ?? {}) as Record<string, any>;
@@ -449,7 +449,7 @@ export class AgentsService {
             avatar: item.avatar,
             type: item.type ?? 'AUTONOMOUS',
             llmProvider: item.llmProvider ?? 'ANTHROPIC',
-            llmModel: item.llmModel ?? 'claude-sonnet-4-20250514',
+            llmModel: item.llmModel ?? 'claude-sonnet-5-5',
             llmConfig: item.llmConfig ?? {},
             systemPrompt: item.systemPrompt ?? '',
             mission: item.mission,

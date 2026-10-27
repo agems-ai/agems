@@ -1,5 +1,5 @@
-import { spawn } from 'child_process';
 import { BaseAdapter } from '../base-adapter';
+import { spawnCli, checkCliVersion, safePromptArg, safeOptionValue } from '../safe-spawn';
 import { AdapterResult, OpenCodeConfig } from '../types';
 
 /**
@@ -20,21 +20,7 @@ export class OpenCodeAdapter extends BaseAdapter {
   }
 
   async checkAvailability(): Promise<{ available: boolean; version?: string; error?: string }> {
-    return new Promise((resolve) => {
-      const proc = spawn('opencode', ['--version'], { shell: true });
-      let output = '';
-      proc.stdout.on('data', (data) => { output += data.toString(); });
-      proc.on('close', (code) => {
-        if (code === 0) {
-          resolve({ available: true, version: output.trim() });
-        } else {
-          resolve({ available: false, error: 'OpenCode CLI not found' });
-        }
-      });
-      proc.on('error', () => {
-        resolve({ available: false, error: 'OpenCode CLI not installed' });
-      });
-    });
+    return checkCliVersion('opencode', 'OpenCode CLI not found');
   }
 
   async execute(input: {
@@ -52,22 +38,21 @@ export class OpenCodeAdapter extends BaseAdapter {
       const args: string[] = [];
 
       if (this.config.model) {
-        args.push('--model', this.config.model);
+        args.push('--model', safeOptionValue(this.config.model, 'model'));
       }
       if (this.config.provider) {
-        args.push('--provider', this.config.provider);
+        args.push('--provider', safeOptionValue(this.config.provider, 'provider'));
       }
 
       let fullPrompt = input.prompt;
       if (input.context) {
         fullPrompt = `Context:\n${input.context}\n\nTask:\n${fullPrompt}`;
       }
-      args.push(fullPrompt);
+      args.push(safePromptArg(fullPrompt));
 
-      const proc = spawn('opencode', args, {
+      const proc = spawnCli('opencode', args, {
         cwd: this.config.workingDir || process.cwd(),
-        env: { ...process.env, ...this.config.env },
-        shell: true,
+        env: this.config.env,
         signal: abort.signal,
       });
 

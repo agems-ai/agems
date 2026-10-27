@@ -1,5 +1,5 @@
-import { spawn } from 'child_process';
 import { BaseAdapter } from '../base-adapter';
+import { spawnCli, checkCliVersion, safePromptArg, safeOptionValue, safeEnum } from '../safe-spawn';
 import { AdapterResult, CodexConfig } from '../types';
 
 /**
@@ -20,21 +20,7 @@ export class CodexAdapter extends BaseAdapter {
   }
 
   async checkAvailability(): Promise<{ available: boolean; version?: string; error?: string }> {
-    return new Promise((resolve) => {
-      const proc = spawn('codex', ['--version'], { shell: true });
-      let output = '';
-      proc.stdout.on('data', (data) => { output += data.toString(); });
-      proc.on('close', (code) => {
-        if (code === 0) {
-          resolve({ available: true, version: output.trim() });
-        } else {
-          resolve({ available: false, error: 'Codex CLI not found. Install: npm install -g @openai/codex' });
-        }
-      });
-      proc.on('error', () => {
-        resolve({ available: false, error: 'Codex CLI not installed' });
-      });
-    });
+    return checkCliVersion('codex', 'Codex CLI not found. Install: npm install -g @openai/codex');
   }
 
   async execute(input: {
@@ -52,11 +38,11 @@ export class CodexAdapter extends BaseAdapter {
       const args: string[] = [];
 
       if (this.config.approvalMode) {
-        args.push(`--approval-mode`, this.config.approvalMode);
+        args.push('--approval-mode', safeEnum(this.config.approvalMode, ['suggest', 'auto-edit', 'full-auto'] as const, 'approvalMode'));
       }
 
       if (this.config.model) {
-        args.push('--model', this.config.model);
+        args.push('--model', safeOptionValue(this.config.model, 'model'));
       }
 
       let fullPrompt = input.prompt;
@@ -64,12 +50,11 @@ export class CodexAdapter extends BaseAdapter {
         fullPrompt = `Context:\n${input.context}\n\nTask:\n${fullPrompt}`;
       }
 
-      args.push(fullPrompt);
+      args.push(safePromptArg(fullPrompt));
 
-      const proc = spawn('codex', args, {
+      const proc = spawnCli('codex', args, {
         cwd: this.config.workingDir || process.cwd(),
-        env: { ...process.env, ...this.config.env },
-        shell: true,
+        env: this.config.env,
         signal: abort.signal,
       });
 
