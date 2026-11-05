@@ -1,6 +1,6 @@
 import { generateText, streamText, tool, jsonSchema, stepCountIs } from 'ai';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { createProvider, type AIProviderConfig } from './provider';
+import { createProvider, isOpenAiNoneEffortModel, OPENAI_NONE_EFFORT_OPTIONS, type AIProviderConfig } from './provider';
 import { mcpServersToTools } from './mcp-client';
 import type { ToolDefinition, ToolResult, UserMessage } from './types';
 
@@ -229,6 +229,13 @@ export class AgentRunner {
     if (this.config.provider.provider === 'DEEPSEEK' && /^deepseek-flash$/i.test(this.config.provider.model)) {
       providerOptions.deepseek = { thinking: { type: 'disabled' } };
     }
+    // OpenAI GPT-6 (gpt-6-luna and kin): function tools in Chat Completions need reasoning_effort 'none'
+    // (a 400 otherwise); no temperature and no reasoning headroom for them.
+    const isOpenAiNoneEffort = isOpenAiNoneEffortModel(this.config.provider.provider, this.config.provider.model, this.config.provider.baseUrl);
+    if (isOpenAiNoneEffort) {
+      providerOptions.openai = { ...(providerOptions.openai ?? {}), ...OPENAI_NONE_EFFORT_OPTIONS };
+      reasoningHeadroom = 0;
+    }
     // Zhipu GLM reasoning (glm-4.6, glm-5, glm-5.1). Uses OpenAI-compatible
     // endpoint so provider options land on the `openai` key. Zhipu accepts
     // `thinking: { type: "enabled" }` as a top-level body field.
@@ -283,7 +290,7 @@ export class AgentRunner {
       tools: toolsMap,
       stopWhen: stepCountIs(maxSteps),
       maxOutputTokens: outputTokenCap(this.config.maxTokens ?? 4096, reasoningHeadroom),
-      ...(isAnthropicThinking ? {} : { temperature: this.config.temperature ?? 0.7 }),
+      ...(isAnthropicThinking || isOpenAiNoneEffort ? {} : { temperature: this.config.temperature ?? 0.7 }),
       ...(Object.keys(providerOptions).length > 0 && { providerOptions }),
       repairToolCall: async ({ toolCall, error }: any) => {
         // Fix invalid tool_use input (e.g. string instead of object)
