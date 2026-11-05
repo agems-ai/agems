@@ -1,4 +1,4 @@
-export { createProvider, type AIProviderConfig } from './provider';
+export { createProvider, isOpenAiNoneEffortModel, modelCallProviderOptions, OPENAI_NONE_EFFORT_OPTIONS, type AIProviderConfig } from './provider';
 export { AgentRunner, isAdaptiveClaudeModel, outputTokenCap, type AgentRunnerConfig, type MCPServerConfig, type RunResult } from './runner';
 export { MCPClient, mcpServersToTools } from './mcp-client';
 export type { ToolDefinition, ToolResult, MessagePart, UserMessage } from './types';

@@ -31,6 +31,31 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
   OLLAMA: 'http://localhost:11434/v1',
 };
 
+/**
+ * OpenAI GPT-6 models (gpt-6-luna, gpt-6-sol, gpt-6.1-terra) in Chat Completions refuse function tools at
+ * their default reasoning ("use /v1/responses or set reasoning_effort to 'none'"), and without effort
+ * 'none' they accept only temperature 1. AGEMS agents always send tools, so these models run with
+ * reasoning_effort 'none' (verified live 2026-11-05). forceReasoning makes @ai-sdk/openai shape the request
+ * as for a reasoning model (max_completion_tokens instead of max_tokens, no sampling params) on SDK
+ * versions that do not know the model id yet; `stop` is never sent by AGEMS.
+ */
+const OPENAI_NONE_EFFORT_MODEL = /^gpt-6(?:\.\d+)?-(?:luna|sol|terra)(?:-|$)/;
+
+/** True for OpenAI models that need reasoning_effort 'none' to take function tools in Chat Completions. */
+export function isOpenAiNoneEffortModel(provider: string, model: string, baseUrl?: string): boolean {
+  if (provider !== 'OPENAI' || baseUrl) return false;
+  return OPENAI_NONE_EFFORT_MODEL.test(model || '');
+}
+
+/** OpenAI provider options of the GPT-6 models above. */
+export const OPENAI_NONE_EFFORT_OPTIONS = { reasoningEffort: 'none', forceReasoning: true } as const;
+
+/** Provider options a single call to this model needs whatever the caller (agent runs, onboarding). */
+export function modelCallProviderOptions(config: Pick<AIProviderConfig, 'provider' | 'model' | 'baseUrl'>): Record<string, any> | undefined {
+  if (isOpenAiNoneEffortModel(config.provider, config.model, config.baseUrl)) return { openai: { ...OPENAI_NONE_EFFORT_OPTIONS } };
+  return undefined;
+}
+
 // Default API format per provider (native format)
 const DEFAULT_API_FORMAT: Record<string, ApiFormat> = {
   ANTHROPIC: 'anthropic',
